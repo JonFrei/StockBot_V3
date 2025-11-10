@@ -6,22 +6,39 @@ current_date = datetime.today()
 
 
 def buy_signals(data, buy_signal_list):
-    result = []
-    for strategy_name in BUY_STRATEGIES.keys():
-        if strategy_name in buy_signal_list:
+    """
+    Check multiple buy strategies and return first valid signal
+    Returns dict or None
+    """
+    for strategy_name in buy_signal_list:
+        if strategy_name in BUY_STRATEGIES:
             strategy_func = BUY_STRATEGIES[strategy_name]
-            result.append(strategy_func(data))  # Builds the strategy function that we want to call
-    return result[-1]
+            signal = strategy_func(data)
+
+            # Return first valid buy signal
+            if signal and isinstance(signal, dict) and signal.get('side') == 'buy':
+                return signal
+
+    # No buy signal found
+    return None
 
 
 def sell_signals(data, sell_signal_list):
-    result = []
-    for strategy_name in BUY_STRATEGIES.keys():
-        if strategy_name in sell_signal_list:
-            strategy_func = BUY_STRATEGIES[strategy_name]
-            result.append(strategy_func(data))  # Builds the strategy function that we want to call
-    return result[-1]
+    """
+    Check multiple sell strategies and return first valid signal
+    Returns dict or None
+    """
+    for strategy_name in sell_signal_list:
+        if strategy_name in SELL_STRATEGIES:
+            strategy_func = SELL_STRATEGIES[strategy_name]
+            signal = strategy_func(data)
 
+            # Return first valid sell signal
+            if signal and isinstance(signal, dict) and signal.get('side') == 'sell':
+                return signal
+
+    # No sell signal found
+    return None
 
 def swing_trade_1(data):
     """
@@ -71,6 +88,7 @@ def swing_trade_1(data):
         'side': 'buy',
         'msg': f'Swing: Uptrend + RSI {rsi:.0f} + Vol {volume_ratio:.1f}x',
         'limit_price': close,
+        'stop_loss': None,
         'signal_type': 'swing_trade_1'
     }
 
@@ -123,6 +141,7 @@ def swing_trade_2(data):
         'side': 'buy',
         'msg': f'Pullback: {ema20_distance:.1f}% from EMA20, RSI {rsi:.0f}, Vol {volume_ratio:.1f}x',
         'limit_price': close,
+        'stop_loss': None,
         'signal_type': 'swing_trade_2'
     }
 
@@ -133,6 +152,7 @@ def _no_setup_message(reason):
         'side': 'hold',
         'msg': f'No swing setup: {reason}',
         'limit_price': None,
+        'stop_loss': None,
         'signal_type': 'swing_trade_2'
     }
 
@@ -199,6 +219,7 @@ def golden_cross(data, position_size='normal'):
             'side': 'buy',
             'msg': f'Golden cross SETUP: {abs(distance_pct):.1f}% from cross',
             'limit_price': close,
+            'stop_loss': None,
             'signal_type': 'golden_cross_pullback'
         }
 
@@ -230,6 +251,7 @@ def golden_cross(data, position_size='normal'):
             'side': 'buy',
             'msg': f'Golden cross CONFIRMED: {distance_pct:.1f}% above 200 SMA',
             'limit_price': close,
+            'stop_loss': None,
             'signal_type': 'golden_cross_pullback'
         }
 
@@ -243,6 +265,7 @@ def golden_cross(data, position_size='normal'):
                 'side': 'buy',
                 'msg': f'Golden cross pullback: {distance_pct:.1f}% above 200 SMA, near EMA50',
                 'limit_price': close,
+                'stop_loss': None,
                 'signal_type': 'golden_cross_pullback'
             }
 
@@ -255,6 +278,7 @@ def _no_signal(reason):
         'side': 'hold',
         'msg': f'No signal: {reason}',
         'limit_price': None,
+        'stop_loss': None,
         'signal_type': 'golden_cross_pullback'
     }
 
@@ -272,10 +296,11 @@ def bollinger_buy(data):
         return {
             'side': 'buy',
             'limit_price': close,
+            'stop_loss': None,
             'msg': 'Oversold + Volume + Above 200 SMA',
             'signal_type': 'bollinger_buy',
         }
-    return 0
+    return None
 
 
 def bollinger_sell(data):
@@ -289,14 +314,14 @@ def bollinger_sell(data):
         return {
             'side': 'sell',
             'limit_price': close,
+            'stop_loss': None,
             'msg': 'Overbought above upper band',
             'signal_type': 'bollinger_sell',
         }
-    return 0
-
+    return None
 
 def take_profit_method_1():
-    return 0
+    return None
 
 
 # =======================================================================================================================

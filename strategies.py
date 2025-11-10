@@ -1,5 +1,6 @@
 from lumibot.strategies import Strategy
 
+import position_sizing
 import signals
 from config import Config
 import stock_data
@@ -31,26 +32,41 @@ class SwingTradeStrategy(Strategy):
         orders = []
         for ticker in self.tickers:
             print('Ticker: ', ticker)
+
             data = all_stock_data[ticker]['indicators']
             print('\nStock data: ', data)
-            sell_signal = signals.sell_signals(data, sell_signal_list)
-            buy_signal = signals.buy_signals(data, buy_signal_list)
 
-            #Make sure we don't buy and sell at the same time
+            buy_signal = signals.buy_signals(data, buy_signal_list)
+            sell_signal = signals.sell_signals(data, sell_signal_list)
+
+            # stop_loss = 'stop_loss_atr'
+            sizing = position_sizing.calculate_position_with_stop(self.get_cash(), stock=data,
+                                                                  stop_type='stop_loss_atr')
+
+            # Make sure we don't buy and sell at the same time
             if sell_signal:
-                orders.append(self.process_sell(sell_signal))
+                # order_sig = self.process_sell(sell_signal)
+                order_sig = sell_signal
+                orders.append(order_sig)
             elif buy_signal:
-                orders.append(self.process_buy(buy_signal))
+                # order_sig = self.process_buy(buy_signal)
+                order_sig = buy_signal
+                order_sig['stop_loss'] = sizing['stop_loss']
+                order_sig['quantity'] = sizing['quantity']
+                orders.append(order_sig)
 
         for order in orders:
             order = self.create_order(order['symbol'], order['quantity'], order['side'])
-            self.submit_order(order)
+            print('Submitting order: ', order)
+            # self.submit_order(order)
 
         return 0
 
     def on_strategy_end(self):
         return 0
 
+
+'''
     def process_buy(self, buy_list):
         for item in buy_list:
             ticker = item['ticker']
@@ -69,3 +85,4 @@ class SwingTradeStrategy(Strategy):
                     'ticker': ticker,
                     'qty': qty,
                     'limit_price': 100.0}
+'''

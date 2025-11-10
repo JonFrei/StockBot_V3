@@ -25,10 +25,61 @@ def process_data(symbols, current_date):
             'raw': df
         }
 
-        # Calculate indicators
-        temp_data['indicators']['sma20'] = indicators.get_sma(df, period=20)
-        temp_data['indicators']['sma50'] = indicators.get_sma(df, period=50)
-        temp_data['indicators']['sma200'] = indicators.get_sma(df, period=200)
+        # Calculate SMAs (14, 20, 50, 200 day)
+        sma14 = indicators.get_sma(df, period=14)
+        sma20 = indicators.get_sma(df, period=20)
+        sma50 = indicators.get_sma(df, period=50)
+        sma200 = indicators.get_sma(df, period=200)
+
+        temp_data['indicators']['sma14'] = sma14['sma']
+        temp_data['indicators']['sma20'] = sma20['sma']
+        temp_data['indicators']['sma50'] = sma50['sma']
+        temp_data['indicators']['sma200'] = sma200['sma']
+
+        # Calculate EMAs (8, 12, 14, 20, 50 day)
+        temp_data['indicators']['ema8'] = indicators.get_ema(df, period=8)
+        temp_data['indicators']['ema12'] = indicators.get_ema(df, period=12)
+        temp_data['indicators']['ema14'] = indicators.get_ema(df, period=14)
+        temp_data['indicators']['ema20'] = indicators.get_ema(df, period=20)
+        temp_data['indicators']['ema50'] = indicators.get_ema(df, period=50)
+
+        # Calculate RSI (14 period)
+        def rolling_fn(series):
+            return series.rolling(window=14).mean()
+
+        temp_data['indicators']['rsi'] = indicators.get_rsi(df['close'], rolling_fn)
+
+        # Calculate Bollinger Bands (20 period, 2 stdev)
+        bollinger = indicators.get_bollinger(df, stdev=2, period=20)
+        temp_data['indicators']['bollinger_mean'] = bollinger['bollinger_mean']
+        temp_data['indicators']['bollinger_upper'] = bollinger['bollinger_upper']
+        temp_data['indicators']['bollinger_lower'] = bollinger['bollinger_lower']
+
+        # Calculate Average Volume (20 period)
+        avg_volume = indicators.get_avg_volume(df, period=20)
+        temp_data['indicators']['avg_volume'] = avg_volume
+
+        # Calculate current volume ratio
+        current_volume = df['volume'].iloc[-1]
+        temp_data['indicators']['volume_ratio'] = current_volume / avg_volume if avg_volume > 0 else 0
+
+        # Calculate ATR (14 period)
+        temp_data['indicators']['atr_14'] = indicators.get_atr(df, period=14)
+
+        # Add current price data
+        temp_data['indicators']['close'] = df['close'].iloc[-1]
+        temp_data['indicators']['open'] = df['open'].iloc[-1]
+        temp_data['indicators']['high'] = df['high'].iloc[-1]
+        temp_data['indicators']['low'] = df['low'].iloc[-1]
+        temp_data['indicators']['prev_low'] = df['low'].iloc[-2] if len(df) > 1 else df['low'].iloc[-1]
+
+        # Calculate daily change percentage
+        if len(df) > 1:
+            prev_close = df['close'].iloc[-2]
+            current_close = df['close'].iloc[-1]
+            temp_data['indicators']['daily_change_pct'] = ((current_close - prev_close) / prev_close * 100)
+        else:
+            temp_data['indicators']['daily_change_pct'] = 0
 
         processed_data[ticker] = temp_data
 
