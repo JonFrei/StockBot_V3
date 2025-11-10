@@ -9,7 +9,7 @@ import stock_data
 class SwingTradeStrategy(Strategy):
     def initialize(self, send_emails=True):
         """Initialize strategy with position tracking"""
-        self.sleeptime = "10M"
+        self.sleeptime = "1D"
         self.tickers = self.parameters.get("tickers", [])
 
     def before_starting_trading(self):
@@ -20,7 +20,7 @@ class SwingTradeStrategy(Strategy):
 
     def on_trading_iteration(self):
 
-        current_date = self.get_datetime().today()
+        current_date = self.get_datetime()
         print('\n' + 30 * '=' + ' Date: ' + str(current_date) + ' ' + 30 * '=')
 
         all_stock_data = stock_data.process_data(self.tickers, current_date)
@@ -34,7 +34,8 @@ class SwingTradeStrategy(Strategy):
             print('Ticker: ', ticker)
 
             data = all_stock_data[ticker]['indicators']
-            print('\nStock data: ', data)
+            print('Stock data: ', data)
+            print('\n')
 
             buy_signal = signals.buy_signals(data, buy_signal_list)
             sell_signal = signals.sell_signals(data, sell_signal_list)
@@ -47,18 +48,21 @@ class SwingTradeStrategy(Strategy):
             if sell_signal:
                 # order_sig = self.process_sell(sell_signal)
                 order_sig = sell_signal
+                order_sig['ticker'] = ticker
+                order_sig['quantity'] = 5
                 orders.append(order_sig)
             elif buy_signal:
                 # order_sig = self.process_buy(buy_signal)
                 order_sig = buy_signal
+                order_sig['ticker'] = ticker
                 order_sig['stop_loss'] = sizing['stop_loss']
                 order_sig['quantity'] = sizing['quantity']
                 orders.append(order_sig)
 
         for order in orders:
-            order = self.create_order(order['symbol'], order['quantity'], order['side'])
+            order = self.create_order(order['ticker'], order['quantity'], order['side'])
             print('Submitting order: ', order)
-            # self.submit_order(order)
+            self.submit_order(order)
 
         return 0
 

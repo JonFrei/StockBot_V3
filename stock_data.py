@@ -31,53 +31,53 @@ def process_data(symbols, current_date):
         sma50 = indicators.get_sma(df, period=50)
         sma200 = indicators.get_sma(df, period=200)
 
-        temp_data['indicators']['sma14'] = sma14['sma']
-        temp_data['indicators']['sma20'] = sma20['sma']
-        temp_data['indicators']['sma50'] = sma50['sma']
-        temp_data['indicators']['sma200'] = sma200['sma']
+        temp_data['indicators']['sma14'] = round(sma14['sma'], 2)
+        temp_data['indicators']['sma20'] = round(sma20['sma'], 2)
+        temp_data['indicators']['sma50'] = round(sma50['sma'], 2)
+        temp_data['indicators']['sma200'] = round(sma200['sma'], 2)
 
         # Calculate EMAs (8, 12, 14, 20, 50 day)
-        temp_data['indicators']['ema8'] = indicators.get_ema(df, period=8)
-        temp_data['indicators']['ema12'] = indicators.get_ema(df, period=12)
-        temp_data['indicators']['ema14'] = indicators.get_ema(df, period=14)
-        temp_data['indicators']['ema20'] = indicators.get_ema(df, period=20)
-        temp_data['indicators']['ema50'] = indicators.get_ema(df, period=50)
+        temp_data['indicators']['ema8'] = round(float(indicators.get_ema(df, period=8)), 2)
+        temp_data['indicators']['ema12'] = round(float(indicators.get_ema(df, period=12)), 2)
+        temp_data['indicators']['ema14'] = round(float(indicators.get_ema(df, period=14)), 2)
+        temp_data['indicators']['ema20'] = round(float(indicators.get_ema(df, period=20)), 2)
+        temp_data['indicators']['ema50'] = round(float(indicators.get_ema(df, period=50)), 2)
 
         # Calculate RSI (14 period)
         def rolling_fn(series):
             return series.rolling(window=14).mean()
 
-        temp_data['indicators']['rsi'] = indicators.get_rsi(df['close'], rolling_fn)
+        temp_data['indicators']['rsi'] = round(float(indicators.get_rsi(df['close'], rolling_fn)), 2)
 
         # Calculate Bollinger Bands (20 period, 2 stdev)
         bollinger = indicators.get_bollinger(df, stdev=2, period=20)
-        temp_data['indicators']['bollinger_mean'] = bollinger['bollinger_mean']
-        temp_data['indicators']['bollinger_upper'] = bollinger['bollinger_upper']
-        temp_data['indicators']['bollinger_lower'] = bollinger['bollinger_lower']
+        temp_data['indicators']['bollinger_mean'] = round(bollinger['bollinger_mean'], 2)
+        temp_data['indicators']['bollinger_upper'] = round(bollinger['bollinger_upper'], 2)
+        temp_data['indicators']['bollinger_lower'] = round(bollinger['bollinger_lower'], 2)
 
         # Calculate Average Volume (20 period)
         avg_volume = indicators.get_avg_volume(df, period=20)
-        temp_data['indicators']['avg_volume'] = avg_volume
+        temp_data['indicators']['avg_volume'] = round(avg_volume, 2)
 
         # Calculate current volume ratio
         current_volume = df['volume'].iloc[-1]
-        temp_data['indicators']['volume_ratio'] = current_volume / avg_volume if avg_volume > 0 else 0
+        temp_data['indicators']['volume_ratio'] = round(current_volume / avg_volume, 2) if avg_volume > 0 else 0
 
         # Calculate ATR (14 period)
-        temp_data['indicators']['atr_14'] = indicators.get_atr(df, period=14)
+        temp_data['indicators']['atr_14'] = round(float(indicators.get_atr(df, period=14)), 2)
 
         # Add current price data
-        temp_data['indicators']['close'] = df['close'].iloc[-1]
-        temp_data['indicators']['open'] = df['open'].iloc[-1]
-        temp_data['indicators']['high'] = df['high'].iloc[-1]
-        temp_data['indicators']['low'] = df['low'].iloc[-1]
-        temp_data['indicators']['prev_low'] = df['low'].iloc[-2] if len(df) > 1 else df['low'].iloc[-1]
+        temp_data['indicators']['close'] = round(float(df['close'].iloc[-1]), 2)
+        temp_data['indicators']['open'] = round(float(df['open'].iloc[-1]), 2)
+        temp_data['indicators']['high'] = round(float(df['high'].iloc[-1]), 2)
+        temp_data['indicators']['low'] = round(float(df['low'].iloc[-1]), 2)
+        temp_data['indicators']['prev_low'] = round(float(df['low'].iloc[-2]), 2) if len(df) > 1 else round(float(df['low'].iloc[-1]), 2)
 
         # Calculate daily change percentage
         if len(df) > 1:
             prev_close = df['close'].iloc[-2]
             current_close = df['close'].iloc[-1]
-            temp_data['indicators']['daily_change_pct'] = ((current_close - prev_close) / prev_close * 100)
+            temp_data['indicators']['daily_change_pct'] = round(((current_close - prev_close) / prev_close * 100), 2)
         else:
             temp_data['indicators']['daily_change_pct'] = 0
 

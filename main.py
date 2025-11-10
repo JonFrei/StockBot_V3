@@ -2,6 +2,7 @@
 Basic Lumibot Template - Inject Your Code Here
 """
 import sys
+import logging
 
 import os
 import json

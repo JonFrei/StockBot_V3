@@ -205,7 +205,7 @@ def calculate_position_with_stop(cash_balance, stock, stop_type='stop_loss_hard'
     for strategies in  STOP_LOSS_STRATEGIES:
         if stop_type in strategies:
             stop_loss_func = STOP_LOSS_STRATEGIES[stop_type]
-            stop_loss = stop_loss_func[stock]
+            stop_loss = stop_loss_func(stock)
             stop_loss_value = stop_loss['stop_loss']
             stop_loss_pct = stop_loss['stop_pct']
 

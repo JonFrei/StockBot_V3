@@ -40,6 +40,7 @@ def sell_signals(data, sell_signal_list):
     # No sell signal found
     return None
 
+
 def swing_trade_1(data):
     """
     Swing trading strategy using EMA crossovers, RSI, and volume
@@ -320,7 +321,32 @@ def bollinger_sell(data):
         }
     return None
 
-def take_profit_method_1():
+
+def take_profit_method_1(data):
+    """
+    Simple ATR-based take profit signal
+
+    Exits when price reaches 2x ATR above EMA20 (proxy for entry level)
+    """
+    close = data.get('close', 0)
+    ema20 = data.get('ema20', 0)
+    atr = data.get('atr_14', 0)
+
+    if atr == 0 or ema20 == 0:
+        return None
+
+    # Take profit target: 2x ATR above EMA20
+    take_profit_level = ema20 + (atr * 2.0)
+
+    if close >= take_profit_level:
+        profit_pct = ((close - ema20) / ema20 * 100)
+        return {
+            'side': 'sell',
+            'limit_price': close,
+            'msg': f'ATR Take Profit: +{profit_pct:.1f}% (2x ATR hit)',
+            'signal_type': 'take_profit_atr'
+        }
+
     return None
 
 
