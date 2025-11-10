@@ -1,9 +1,11 @@
 from lumibot.strategies import Strategy
 
-import position_sizing
-import signals
 from config import Config
+
 import stock_data
+import signals
+import position_sizing
+import stops
 
 
 class SwingTradeStrategy(Strategy):
@@ -33,21 +35,30 @@ class SwingTradeStrategy(Strategy):
         for ticker in self.tickers:
             print('Ticker: ', ticker)
 
+            # Get stocks and indicators
             data = all_stock_data[ticker]['indicators']
             print('Stock data: ', data)
             print('\n')
 
+            # Get buy/sell signal
             buy_signal = signals.buy_signals(data, buy_signal_list)
             sell_signal = signals.sell_signals(data, sell_signal_list)
 
-            # stop_loss = 'stop_loss_atr'
+            # Size position to sell
+            sizing = position_sizing.calculate_position_size(self.get_cash(), data['close'])
+
+            # Set stop losses
             # Stop Loss Options:
             # stop_loss_atr
             # stop_loss_hard
-            sizing = position_sizing.calculate_position_with_stop(self.get_cash(), stock=data,
-                                                                  stop_type='stop_loss_atr')
+            stop_loss = stops.stop_loss_atr(ticker)
 
-            # Make sure we don't buy and sell at the same time
+            # Check if we are able to trade based on sizing and cash
+            if not sizing.get('can_trade', False):
+                print(f"[SKIP] {ticker}: {sizing.get('message', 'Cannot trade')}")
+                continue  # Skip this ticker
+
+            # Take a sell signal over a buy signal
             if sell_signal:
                 # order_sig = self.process_sell(sell_signal)
                 order_sig = sell_signal
@@ -58,7 +69,7 @@ class SwingTradeStrategy(Strategy):
                 # order_sig = self.process_buy(buy_signal)
                 order_sig = buy_signal
                 order_sig['ticker'] = ticker
-                order_sig['stop_loss'] = sizing['stop_loss']
+                order_sig['stop_loss'] = stop_loss['stop_loss']
                 order_sig['quantity'] = sizing['quantity']
                 orders.append(order_sig)
 
@@ -72,24 +83,3 @@ class SwingTradeStrategy(Strategy):
     def on_strategy_end(self):
         return 0
 
-
-'''
-    def process_buy(self, buy_list):
-        for item in buy_list:
-            ticker = item['ticker']
-            qty = item['qty']
-            return {'side': 'buy',
-                    'ticker': ticker,
-                    'qty': qty,
-                    'limit_price': 100.0,
-                    'stop_loss': 95.0}
-
-    def process_sell(self, sell_list):
-        for item in sell_list:
-            ticker = item['ticker']
-            qty = item['qty']
-            return {'side': 'sell',
-                    'ticker': ticker,
-                    'qty': qty,
-                    'limit_price': 100.0}
-'''

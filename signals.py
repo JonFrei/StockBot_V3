@@ -5,6 +5,7 @@ tickers = ""
 current_date = datetime.today()
 
 
+# Process which signals we want to use based on the list provided
 def buy_signals(data, buy_signal_list):
     """
     Check multiple buy strategies and return first valid signal
@@ -40,6 +41,10 @@ def sell_signals(data, sell_signal_list):
     # No sell signal found
     return None
 
+
+# ===================================================================================
+# BUY SIGNALS
+# ===================================================================================
 
 def swing_trade_1(data):
     """
@@ -304,6 +309,9 @@ def bollinger_buy(data):
     return None
 
 
+# ===================================================================================
+# SELL SIGNALS
+# ===================================================================================
 def bollinger_sell(data):
     rsi = data.get('rsi', 50)
     volume_ratio = data.get('volume_ratio', 0)
@@ -343,6 +351,7 @@ def take_profit_method_1(data):
         return {
             'side': 'sell',
             'limit_price': close,
+            'stop_loss': None,
             'msg': f'ATR Take Profit: +{profit_pct:.1f}% (2x ATR hit)',
             'signal_type': 'take_profit_atr'
         }
