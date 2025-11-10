@@ -41,6 +41,9 @@ class SwingTradeStrategy(Strategy):
             sell_signal = signals.sell_signals(data, sell_signal_list)
 
             # stop_loss = 'stop_loss_atr'
+            # Stop Loss Options:
+            # stop_loss_atr
+            # stop_loss_hard
             sizing = position_sizing.calculate_position_with_stop(self.get_cash(), stock=data,
                                                                   stop_type='stop_loss_atr')
 

@@ -144,9 +144,9 @@ def stop_loss_atr(stock, multiplier=2.0):
 
 
 def stop_loss_hard(stock, stop_loss_percent=0.05):
-    entry_price = stock[('close'
-                         '')]
-    if entry_price:
+
+    entry_price = stock['close']
+    if not entry_price or entry_price <= 0:
         return {
             'stop_loss': 0,
             'stop_distance': 0,
@@ -202,13 +202,13 @@ def calculate_position_with_stop(cash_balance, stock, stop_type='stop_loss_hard'
 
     stop_loss_value = 0
     stop_loss_pct = 0
-    for strategies in  STOP_LOSS_STRATEGIES:
-        if stop_type in strategies:
-            stop_loss_func = STOP_LOSS_STRATEGIES[stop_type]
-            stop_loss = stop_loss_func(stock)
-            stop_loss_value = stop_loss['stop_loss']
-            stop_loss_pct = stop_loss['stop_pct']
-
+    if stop_type in STOP_LOSS_STRATEGIES:
+        stop_loss_func = STOP_LOSS_STRATEGIES[stop_type]
+        stop_loss = stop_loss_func(stock)
+        stop_loss_value = stop_loss['stop_loss']
+        stop_loss_pct = stop_loss['stop_pct']
+    else:
+        return "NO STOP LOSS FOUND"
     # Combine results
     position.update({
         'entry_price': stock['close'],
