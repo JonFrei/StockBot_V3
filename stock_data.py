@@ -1,7 +1,7 @@
 import pandas as pd
 from datetime import timedelta
-from config import Config
 
+from config import Config
 import indicators
 
 from alpaca.data.historical import StockHistoricalDataClient
@@ -71,7 +71,8 @@ def process_data(symbols, current_date):
         temp_data['indicators']['open'] = round(float(df['open'].iloc[-1]), 2)
         temp_data['indicators']['high'] = round(float(df['high'].iloc[-1]), 2)
         temp_data['indicators']['low'] = round(float(df['low'].iloc[-1]), 2)
-        temp_data['indicators']['prev_low'] = round(float(df['low'].iloc[-2]), 2) if len(df) > 1 else round(float(df['low'].iloc[-1]), 2)
+        temp_data['indicators']['prev_low'] = round(float(df['low'].iloc[-2]), 2) if len(df) > 1 else round(
+            float(df['low'].iloc[-1]), 2)
 
         # Calculate daily change percentage
         if len(df) > 1:
@@ -86,7 +87,7 @@ def process_data(symbols, current_date):
     return processed_data
 
 
-def _fetch_alpaca_batch_data(symbols, current_date, days=500):
+def _fetch_alpaca_batch_data(symbols, current_date, days=250):
     """
     Fetch historical data for multiple symbols using Alpaca API
     Similar interface to Twelve Data batch fetching
@@ -122,7 +123,8 @@ def _fetch_alpaca_batch_data(symbols, current_date, days=500):
             timeframe=TimeFrame.Day,
             start=start_date,
             end=current_date,
-            adjustment='split'
+            adjustment='split',
+
         )
 
         bars = client.get_stock_bars(request)

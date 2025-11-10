@@ -17,8 +17,18 @@ import server_health_check
 # from check_core_transaction import CoreHoldingsStrategy
 from strategies import SwingTradeStrategy
 
+import logging
+
+# Set the logging level for the root logger to WARNING or ERROR
+# Alternatively, set the level for specific loggers if known (e.g., 'lumibot.brokers.alpaca')
+# You might need to experiment with the exact logger name
+logging.getLogger('lumibot.brokers.alpaca').setLevel(logging.INFO)
+logging.getLogger().setLevel(logging.INFO)
+# logging.getLogger('Alpaca').setLevel(logging.WARNING)
+
+
 # ==================== Settings ====================== #
-TESTING = os.getenv('TESTING', 'False').lower() == 'true'
+TESTING = os.getenv('BACKTESTING', 'False').lower() == 'true'
 DATA_DIR = os.getenv('DATA_DIR', '/app/data')  # Railway volume mount point
 
 core_tickers = []
@@ -77,8 +87,6 @@ def main():
         server_health_check.start_healthcheck_server()
 
     if Config.BACKTESTING:
-
-
         # BACKTESTING
         from lumibot.backtesting import YahooDataBacktesting
         start = datetime(2024, 1, 8)
@@ -94,9 +102,9 @@ def main():
         )'''
 
         SwingTradeStrategy.backtest(
-            YahooDataBacktesting,
-            start,
-            end,
+            datasource_class=YahooDataBacktesting,
+            backtesting_start=start,
+            backtesting_end=end,
             parameters={
                 "tickers": swing_tickers,
                 "send_emails": False

@@ -7,11 +7,18 @@ import signals
 import position_sizing
 import stops
 
+from lumibot.brokers import Alpaca
+
+broker = Alpaca(Config.get_alpaca_config())
+
 
 class SwingTradeStrategy(Strategy):
     def initialize(self, send_emails=True):
         """Initialize strategy with position tracking"""
-        self.sleeptime = "1D"
+        if Config.BACKTESTING:
+            self.sleeptime = "1D"
+        else:
+            self.sleeptime = "10M"
         self.tickers = self.parameters.get("tickers", [])
 
     def before_starting_trading(self):
@@ -22,8 +29,12 @@ class SwingTradeStrategy(Strategy):
 
     def on_trading_iteration(self):
 
+        if not broker.is_market_open() and Config.BACKTESTING == 'False':
+            return
+
         current_date = self.get_datetime()
-        print('\n' + 30 * '=' + ' Date: ' + str(current_date) + ' ' + 30 * '=')
+        # print('\n')
+        print(30 * '=' + ' Date: ' + str(current_date) + ' ' + 30 * '=')
 
         all_stock_data = stock_data.process_data(self.tickers, current_date)
 
@@ -33,44 +44,44 @@ class SwingTradeStrategy(Strategy):
 
         orders = []
         for ticker in self.tickers:
-            print('Ticker: ', ticker)
+            # print('Ticker: ', ticker)
+
+            if ticker not in all_stock_data:
+                self.log_message(f"No data for {ticker}, skipping")
+                continue
 
             # Get stocks and indicators
             data = all_stock_data[ticker]['indicators']
-            print('Stock data: ', data)
-            print('\n')
+            # print('Stock data: ', data)
+            # print('\n')
 
             # Get buy/sell signal
             buy_signal = signals.buy_signals(data, buy_signal_list)
             sell_signal = signals.sell_signals(data, sell_signal_list)
 
             # Size position to sell
-            sizing = position_sizing.calculate_position_size(self.get_cash(), data['close'])
+            buy_position = position_sizing.calculate_buy_size(self, ticker, data['close'])
+            sell_position = position_sizing.calculate_sell_size_1(self, ticker)
 
             # Set stop losses
             # Stop Loss Options:
             # stop_loss_atr
             # stop_loss_hard
-            stop_loss = stops.stop_loss_atr(ticker)
-
-            # Check if we are able to trade based on sizing and cash
-            if not sizing.get('can_trade', False):
-                print(f"[SKIP] {ticker}: {sizing.get('message', 'Cannot trade')}")
-                continue  # Skip this ticker
+            stop_loss = stops.stop_loss_atr(data)
 
             # Take a sell signal over a buy signal
             if sell_signal:
                 # order_sig = self.process_sell(sell_signal)
                 order_sig = sell_signal
                 order_sig['ticker'] = ticker
-                order_sig['quantity'] = 5
+                order_sig['quantity'] = sell_position['quantity']
                 orders.append(order_sig)
-            elif buy_signal:
+            elif buy_signal and buy_position.get('can_trade', False):
                 # order_sig = self.process_buy(buy_signal)
                 order_sig = buy_signal
                 order_sig['ticker'] = ticker
                 order_sig['stop_loss'] = stop_loss['stop_loss']
-                order_sig['quantity'] = sizing['quantity']
+                order_sig['quantity'] = buy_position['quantity']
                 orders.append(order_sig)
 
         for order in orders:
@@ -82,4 +93,3 @@ class SwingTradeStrategy(Strategy):
 
     def on_strategy_end(self):
         return 0
-

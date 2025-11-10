@@ -34,5 +34,5 @@ class Config:
         return {
             "API_KEY": cls.ALPACA_API_KEY,
             "API_SECRET": cls.ALPACA_API_SECRET,
-            "PAPER": cls.ALPACA_PAPER
+            "PAPER": cls.ALPACA_PAPER,
         }
