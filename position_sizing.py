@@ -1,6 +1,64 @@
 import indicators
 
 
+def check_position_concentration(strategy, ticker, new_position_value, max_concentration_pct=20.0):
+    """
+    Check if adding a new position would exceed concentration limits
+
+    Args:
+        strategy: Lumibot Strategy object
+        ticker: Stock symbol
+        new_position_value: Value of new position to add
+        max_concentration_pct: Max % of portfolio per ticker (default 20%)
+
+    Returns:
+        dict: {
+            'allowed': bool,
+            'current_value': float,
+            'new_total_value': float,
+            'concentration_pct': float,
+            'max_allowed_value': float,
+            'message': str
+        }
+    """
+    portfolio_value = strategy.portfolio_value
+
+    # Get existing position value for this ticker
+    existing_position = strategy.get_position(ticker)
+    existing_value = 0
+
+    if existing_position and existing_position.quantity > 0:
+        current_price = strategy.get_last_price(ticker)
+        existing_value = existing_position.quantity * current_price
+
+    # Calculate new total if we add this position
+    new_total_value = existing_value + new_position_value
+    concentration_pct = (new_total_value / portfolio_value * 100) if portfolio_value > 0 else 0
+
+    # Calculate max allowed value for this ticker
+    max_allowed_value = portfolio_value * (max_concentration_pct / 100)
+
+    # Check if within limits
+    allowed = new_total_value <= max_allowed_value
+
+    if not allowed:
+        # Calculate how much we CAN add
+        room_left = max(0, max_allowed_value - existing_value)
+        message = f'Would exceed {max_concentration_pct}% limit. Current: ${existing_value:,.0f}, Room: ${room_left:,.0f}'
+    else:
+        message = f'OK - {concentration_pct:.1f}% of portfolio'
+
+    return {
+        'allowed': allowed,
+        'current_value': round(existing_value, 2),
+        'new_total_value': round(new_total_value, 2),
+        'concentration_pct': round(concentration_pct, 2),
+        'max_allowed_value': round(max_allowed_value, 2),
+        'room_left': round(max(0, max_allowed_value - existing_value), 2),
+        'message': message
+    }
+
+
 def calculate_buy_size(strategy, ticker, entry_price, account_threshold=40000, max_position_pct=12.0, pending_commitments=0):
     """
     Calculate position size based on available cash
@@ -63,7 +121,6 @@ def calculate_buy_size(strategy, ticker, entry_price, account_threshold=40000, m
             'can_trade': False,
             'message': f'No available cash after threshold'
         }
-
 
     # Calculate max position value (12% of ORIGINAL cash balance, not effective)
     # This ensures position sizes are consistent regardless of order sequence

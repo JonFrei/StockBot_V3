@@ -11,6 +11,15 @@ def buy_signals(data, buy_signal_list):
     Check multiple buy strategies and return first valid signal
     Returns dict or None
     """
+    if data['close'] < data['sma200']:
+        return {
+            'side': 'hold',
+            'msg': f'🔴 Bear Market Protection Active - No new positions',
+            'limit_price': None,
+            'stop_loss': None,
+            'signal_type': 'regime_filter'
+        }
+
     for strategy_name in buy_signal_list:
         if strategy_name in BUY_STRATEGIES:
             strategy_func = BUY_STRATEGIES[strategy_name]
