@@ -142,8 +142,13 @@ class SwingTradeStrategy(Strategy):
                 exit_price = data['close']
 
                 # Record and display realized P&L
-                self.position_tracking.close_position(ticker, exit_price, current_date, sell_signal)
-
+                self.position_tracking.close_position(
+                    ticker=ticker,
+                    exit_price=exit_price,
+                    exit_date=current_date,
+                    exit_signal=sell_signal,
+                    quantity_sold=sell_position['quantity']  # Pass actual sold quantity
+                )
                 # Clean monitoring metadata
                 self.position_monitor.clean_position_metadata(ticker)
 

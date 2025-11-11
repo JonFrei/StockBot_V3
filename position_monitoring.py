@@ -23,15 +23,20 @@ from datetime import datetime
 class ExitConfig:
     """Centralized configuration for all exit strategies"""
 
-    # Emergency Stop Settings
-    EMERGENCY_STOP_PCT = -10.0  # Stop out at -10% loss
+    EMERGENCY_STOP_PCT = -5.0  # Quick exit on losers (tight for swing trading)
 
-    # Profit Taking Settings
-    PROFIT_TARGET_PCT = 33.0  # Take profit at +33%
-    PROFIT_SELL_PCT = 75.0  # Sell 75% at profit target
+    # Profit Taking Settings - 80/20 Rule
+    PROFIT_TARGET_1_PCT = 12.0  # First target: +12% gain
+    PROFIT_TARGET_1_SELL = 40.0  # Sell 40% at first target
 
-    # Trailing Stop Settings
-    TRAILING_STOP_PCT = 15.0  # Trail remaining position by 15%
+    PROFIT_TARGET_2_PCT = 25.0  # Second target: +25% gain
+    PROFIT_TARGET_2_SELL = 40.0  # Sell another 40% at second target
+
+    # Total locked in: 80% by +25%
+    # Remaining: 20% trails with tight stop
+
+    # Trailing Stop Settings (for remaining 20%)
+    TRAILING_STOP_PCT = 8.0  # Tight trail on remaining 20%
 
 
 # =============================================================================
@@ -64,10 +69,16 @@ class PositionMonitor:
                 current_price
             )
 
-    def mark_profit_locked(self, ticker, remaining_pct):
-        """Mark that we took profit and are trailing the remainder"""
+    def mark_profit_level_1_locked(self, ticker, remaining_pct):
+        """Mark that we took profit at level 1 (sold 40%)"""
         if ticker in self.positions_metadata:
-            self.positions_metadata[ticker]['profit_locked'] = True
+            self.positions_metadata[ticker]['profit_level_1_locked'] = True
+            self.positions_metadata[ticker]['remaining_pct'] = remaining_pct
+
+    def mark_profit_level_2_locked(self, ticker, remaining_pct):
+        """Mark that we took profit at level 2 (sold another 40%)"""
+        if ticker in self.positions_metadata:
+            self.positions_metadata[ticker]['profit_level_2_locked'] = True
             self.positions_metadata[ticker]['remaining_pct'] = remaining_pct
 
     def clean_position_metadata(self, ticker):
@@ -107,45 +118,64 @@ def check_emergency_stop(pnl_pct, current_price, entry_price, stop_pct=-10.0):
     return None
 
 
-def check_profit_taking(pnl_pct, profit_locked, profit_target=33.0, profit_sell_pct=75.0):
+def check_profit_taking_80_20(pnl_pct, profit_level_1_locked, profit_level_2_locked):
     """
-    Profit taking strategy - sells portion at profit target to recover capital
+    80/20 Rule Profit Taking - Two profit levels
+
+    Level 1: Sell 40% at +12%
+    Level 2: Sell 40% at +25%
+    Remaining 20% trails with tight stop
 
     Args:
         pnl_pct: Current profit/loss percentage
-        profit_locked: Whether we've already taken profit
-        profit_target: Profit % to trigger taking (default 33%)
-        profit_sell_pct: % of position to sell (default 75%)
+        profit_level_1_locked: Whether we've already taken level 1 profit
+        profit_level_2_locked: Whether we've already taken level 2 profit
 
     Returns:
         dict with exit signal or None
     """
-    if not profit_locked and pnl_pct >= profit_target:
-        remaining_pct = 100.0 - profit_sell_pct
+    # Level 1: First profit target (+12%)
+    if not profit_level_1_locked and pnl_pct >= ExitConfig.PROFIT_TARGET_1_PCT:
+        remaining_pct = 100.0 - ExitConfig.PROFIT_TARGET_1_SELL
         return {
             'type': 'partial_exit',
-            'reason': 'profit_taking',
-            'sell_pct': profit_sell_pct,
-            'message': f'💰 Profit Taking +{profit_target}%: Selling {profit_sell_pct}%, trailing {remaining_pct}%'
+            'reason': 'profit_level_1',
+            'sell_pct': ExitConfig.PROFIT_TARGET_1_SELL,
+            'profit_level': 1,
+            'message': f'💰 Level 1 Profit +{ExitConfig.PROFIT_TARGET_1_PCT:.0f}%: Selling {ExitConfig.PROFIT_TARGET_1_SELL:.0f}%, keeping {remaining_pct:.0f}%'
         }
+
+    # Level 2: Second profit target (+25%)
+    if profit_level_1_locked and not profit_level_2_locked and pnl_pct >= ExitConfig.PROFIT_TARGET_2_PCT:
+        remaining_pct = 100.0 - ExitConfig.PROFIT_TARGET_1_SELL - ExitConfig.PROFIT_TARGET_2_SELL
+        return {
+            'type': 'partial_exit',
+            'reason': 'profit_level_2',
+            'sell_pct': ExitConfig.PROFIT_TARGET_2_SELL,
+            'profit_level': 2,
+            'message': f'💰 Level 2 Profit +{ExitConfig.PROFIT_TARGET_2_PCT:.0f}%: Selling {ExitConfig.PROFIT_TARGET_2_SELL:.0f}%, trailing {remaining_pct:.0f}%'
+        }
+
     return None
 
 
-def check_trailing_stop(profit_locked, highest_price, current_price, trail_pct=15.0):
+def check_trailing_stop(profit_level_2_locked, highest_price, current_price, trail_pct=8.0):
     """
     Trailing stop - exits remaining position if drops from peak
 
+    Only activates after BOTH profit levels are locked (remaining 20%)
+
     Args:
-        profit_locked: Whether profit was already taken (trailing only after profit-taking)
+        profit_level_2_locked: Whether both profit levels were taken
         highest_price: Highest price since entry
         current_price: Current stock price
-        trail_pct: Trailing stop percentage from peak (default 15%)
+        trail_pct: Trailing stop percentage from peak (default 8%)
 
     Returns:
         dict with exit signal or None
     """
-    if not profit_locked:
-        return None  # Only trail after profit-taking
+    if not profit_level_2_locked:
+        return None  # Only trail after both profit levels taken
 
     drawdown_from_peak = ((current_price - highest_price) / highest_price * 100)
 
@@ -154,7 +184,7 @@ def check_trailing_stop(profit_locked, highest_price, current_price, trail_pct=1
             'type': 'full_exit',
             'reason': 'trailing_stop',
             'sell_pct': 100.0,
-            'message': f'📉 Trailing Stop ({trail_pct}% from peak ${highest_price:.2f}): Exiting remaining position'
+            'message': f'📉 Trailing Stop ({trail_pct}% from peak ${highest_price:.2f}): Exiting remaining 20%'
         }
     return None
 
@@ -165,22 +195,23 @@ def check_trailing_stop(profit_locked, highest_price, current_price, trail_pct=1
 
 def check_positions_for_exits(strategy, current_date, all_stock_data, position_monitor):
     """
-    Check all positions for exit conditions using modular exit strategies
+       Check all positions for exit conditions using 80/20 rule
 
-    Exit Priority Order:
-    1. Emergency stops (highest priority - protect capital)
-    2. Profit taking (lock in gains)
-    3. Trailing stops (protect profits)
+       Exit Priority Order:
+       1. Emergency stops (highest priority - protect capital)
+       2. Profit taking level 1 (+12%, sell 40%)
+       3. Profit taking level 2 (+25%, sell 40%)
+       4. Trailing stops (8% from peak on remaining 20%)
 
-    Args:
-        strategy: Strategy instance
-        current_date: Current date
-        all_stock_data: Dict of stock data
-        position_monitor: PositionMonitor instance
+       Args:
+           strategy: Strategy instance
+           current_date: Current date
+           all_stock_data: Dict of stock data
+           position_monitor: PositionMonitor instance
 
-    Returns:
-        List of exit order dicts
-    """
+       Returns:
+           List of exit order dicts
+       """
     exit_orders = []
 
     positions = strategy.get_positions()
@@ -227,17 +258,16 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
 
         # 2. Profit taking (if no emergency)
         if not exit_signal:
-            exit_signal = check_profit_taking(
+            exit_signal = check_profit_taking_80_20(
                 pnl_pct=pnl_pct,
-                profit_locked=metadata['profit_locked'],
-                profit_target=ExitConfig.PROFIT_TARGET_PCT,
-                profit_sell_pct=ExitConfig.PROFIT_SELL_PCT
+                profit_level_1_locked=metadata['profit_level_1_locked'],
+                profit_level_2_locked=metadata['profit_level_2_locked']
             )
 
         # 3. Trailing stop (if no emergency or profit-taking)
         if not exit_signal:
             exit_signal = check_trailing_stop(
-                profit_locked=metadata['profit_locked'],
+                profit_level_2_locked=metadata['profit_level_2_locked'],
                 highest_price=metadata['highest_price'],
                 current_price=current_price,
                 trail_pct=ExitConfig.TRAILING_STOP_PCT
@@ -289,6 +319,8 @@ def execute_exit_orders(strategy, exit_orders, current_date, all_stock_data, pos
 
         # === PARTIAL EXIT (Profit Taking) ===
         if exit_type == 'partial_exit':
+            profit_level = order.get('profit_level', 0)
+
             print(f"\n{'=' * 60}")
             print(f"📊 PARTIAL EXIT - {ticker}")
             print(f"{'=' * 60}")
@@ -299,7 +331,18 @@ def execute_exit_orders(strategy, exit_orders, current_date, all_stock_data, pos
 
             # Mark that we've locked profit
             remaining_pct = 100.0 - sell_pct
-            position_monitor.mark_profit_locked(ticker, remaining_pct)
+            if profit_level == 1:
+                position_monitor.mark_profit_level_1_locked(ticker, remaining_pct)
+            elif profit_level == 2:
+                position_monitor.mark_profit_level_2_locked(ticker, remaining_pct)
+
+            position_tracking.record_partial_exit(
+                ticker=ticker,
+                sell_quantity=sell_quantity,  # Actual shares sold
+                exit_price=current_price,
+                exit_date=current_date,
+                exit_signal={'msg': message, 'signal_type': reason}
+            )
 
             # Create and submit sell order
             sell_order = strategy.create_order(ticker, sell_quantity, 'sell')
@@ -317,7 +360,13 @@ def execute_exit_orders(strategy, exit_orders, current_date, all_stock_data, pos
             print(f"{'=' * 60}\n")
 
             # Record realized P&L
-            position_tracking.close_position(ticker, current_price, current_date, {'msg': message})
+            position_tracking.close_position(
+                ticker=ticker,
+                exit_price=current_price,
+                exit_date=current_date,
+                exit_signal={'msg': message, 'signal_type': reason},
+                quantity_sold=sell_quantity  # Pass the actual quantity
+            )
 
             # Clean up metadata
             position_monitor.clean_position_metadata(ticker)

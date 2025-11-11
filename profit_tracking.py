@@ -36,28 +36,41 @@ class ProfitTracker:
                 'entry_date': existing['entry_date']
             }
 
-    def close_position(self, ticker, exit_price, exit_date, exit_signal):
-        """Record position close and calculate realized P&L"""
+    def close_position(self, ticker, exit_price, exit_date, exit_signal, quantity_sold=None):
+        """
+        Record position close and calculate realized P&L
+
+        Args:
+            ticker: Stock symbol
+            exit_price: Exit price per share
+            exit_date: Exit date
+            exit_signal: Dict with signal info
+            quantity_sold: Number of shares sold (None = sell entire position)
+        """
         if ticker not in self.positions:
             return
 
         position = self.positions[ticker]
 
-        # Calculate P&L
+        # If no quantity specified, assume selling entire position
+        if quantity_sold is None:
+            quantity_sold = position['quantity']
+
+        # Calculate P&L only on shares actually sold
         pnl_per_share = exit_price - position['entry_price']
-        total_pnl = pnl_per_share * position['quantity']
+        total_pnl = pnl_per_share * quantity_sold
         pnl_pct = (pnl_per_share / position['entry_price'] * 100)
 
         # Record closed position
         closed_position = {
             'ticker': ticker,
-            'quantity': position['quantity'],
+            'quantity': quantity_sold,
             'entry_price': position['entry_price'],
             'exit_price': exit_price,
             'pnl_dollars': total_pnl,
             'pnl_pct': pnl_pct,
             'entry_signal': position['signal_type'],
-            'exit_signal': exit_signal.get('signal_type', 'unknown'),
+            'exit_signal': exit_signal.get('signal_type', exit_signal.get('msg', 'unknown')),
             'entry_date': position['entry_date'],
             'exit_date': exit_date
         }
@@ -66,11 +79,19 @@ class ProfitTracker:
 
         # Display immediate P&L
         emoji = "✅" if total_pnl > 0 else "❌"
-        print(
-            f"\n{emoji} CLOSED: {ticker} | ${total_pnl:+,.2f} ({pnl_pct:+.1f}%) | {position['quantity']} shares @ ${position['entry_price']:.2f} → ${exit_price:.2f}")
 
-        # Remove from active positions
-        del self.positions[ticker]
+        # Check if this is a partial or full exit
+        if quantity_sold < position['quantity']:
+            remaining = position['quantity'] - quantity_sold
+            print(
+                f"\n{emoji} PARTIAL EXIT: {ticker} | ${total_pnl:+,.2f} ({pnl_pct:+.1f}%) | Sold {quantity_sold}/{position['quantity']} shares @ ${exit_price:.2f} | Remaining: {remaining}")
+            # Update position with remaining shares
+            position['quantity'] = remaining
+        else:
+            print(
+                f"\n{emoji} CLOSED: {ticker} | ${total_pnl:+,.2f} ({pnl_pct:+.1f}%) | {quantity_sold} shares @ ${position['entry_price']:.2f} → ${exit_price:.2f}")
+            # Remove from active positions
+            del self.positions[ticker]
 
     def record_partial_exit(self, ticker, sell_quantity, exit_price, exit_date, exit_signal):
         """
