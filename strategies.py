@@ -189,18 +189,20 @@ class SwingTradeStrategy(Strategy):
         # Submit sell orders first
         if len(signal_sell_orders) > 0:
             for order in signal_sell_orders:
-                submit_order = self.create_order(order['ticker'], order['quantity'], order['side'])
-                print(' * SIGNAL SELL: ' + str(submit_order) + ' | Signal: ' + str(order['signal_type']))
-                print(10 * ' ' + '--> | Price: ' + str(order['limit_price']) + ' | ')
-                self.submit_order(submit_order)
+                if order['side'] == 'sell':
+                    submit_order = self.create_order(order['ticker'], order['quantity'], order['side'])
+                    print(' * SIGNAL SELL: ' + str(submit_order) + ' | Signal: ' + str(order['signal_type']))
+                    print(10 * ' ' + '--> | Price: ' + str(order['limit_price']) + ' | ')
+                    self.submit_order(submit_order)
 
         # Then submit buy orders
         if len(buy_orders) > 0:
             for order in buy_orders:
-                submit_order = self.create_order(order['ticker'], order['quantity'], order['side'])
-                print(' * BUY ORDER: ' + str(submit_order) + ' | Signal: ' + str(order['signal_type']))
-                print(10 * ' ' + '--> | Price: ' + str(order['limit_price']) + ' | ')
-                self.submit_order(submit_order)
+                if order['side'] == 'buy':
+                    submit_order = self.create_order(order['ticker'], order['quantity'], order['side'])
+                    print(' * BUY ORDER: ' + str(submit_order) + ' | Signal: ' + str(order['signal_type']))
+                    print(10 * ' ' + '--> | Price: ' + str(order['limit_price']) + ' | ')
+                    self.submit_order(submit_order)
 
     def on_strategy_end(self):
         self.position_tracking.display_final_summary()
