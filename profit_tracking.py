@@ -72,6 +72,58 @@ class ProfitTracker:
         # Remove from active positions
         del self.positions[ticker]
 
+    def record_partial_exit(self, ticker, sell_quantity, exit_price, exit_date, exit_signal):
+        """
+        Record partial position exit (e.g., selling 75% at profit target)
+
+        Args:
+            ticker: Stock symbol
+            sell_quantity: Number of shares sold
+            exit_price: Exit price per share
+            exit_date: Exit date
+            exit_signal: Dict with signal info
+        """
+        if ticker not in self.positions:
+            print(f"⚠️ WARNING: Attempted to record partial exit for {ticker} but no position found")
+            return
+
+        position = self.positions[ticker]
+
+        # Calculate P&L for sold portion
+        pnl_per_share = exit_price - position['entry_price']
+        total_pnl = pnl_per_share * sell_quantity
+        pnl_pct = (pnl_per_share / position['entry_price'] * 100)
+
+        # Record as closed position
+        closed_position = {
+            'ticker': ticker,
+            'quantity': sell_quantity,
+            'entry_price': position['entry_price'],
+            'exit_price': exit_price,
+            'pnl_dollars': total_pnl,
+            'pnl_pct': pnl_pct,
+            'entry_signal': position['signal_type'],
+            'exit_signal': exit_signal.get('signal_type', exit_signal.get('msg', 'partial_exit')),
+            'entry_date': position['entry_date'],
+            'exit_date': exit_date,
+            'partial': True  # Flag to indicate this was a partial exit
+        }
+
+        self.closed_positions.append(closed_position)
+
+        # Display immediate P&L
+        emoji = "✅" if total_pnl > 0 else "❌"
+        remaining_qty = position['quantity'] - sell_quantity
+        print(
+            f"\n{emoji} PARTIAL EXIT: {ticker} | ${total_pnl:+,.2f} ({pnl_pct:+.1f}%) | Sold {sell_quantity}/{position['quantity']} shares @ ${exit_price:.2f} | Remaining: {remaining_qty}")
+
+        # Update position (reduce quantity, keep entry price)
+        self.positions[ticker]['quantity'] -= sell_quantity
+
+        # If position is now zero, remove it
+        if self.positions[ticker]['quantity'] <= 0:
+            del self.positions[ticker]
+
     def display_final_summary(self):
         """Display comprehensive P&L summary at end of backtest"""
         if not self.closed_positions:
