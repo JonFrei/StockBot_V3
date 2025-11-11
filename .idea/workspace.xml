@@ -5,9 +5,7 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="d6df019d-759f-4aef-8455-f63cac562958" name="Changes" comment="First Com">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/position_monitoring.py" beforeDir="false" afterPath="$PROJECT_DIR$/position_monitoring.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/profit_tracking.py" beforeDir="false" afterPath="$PROJECT_DIR$/profit_tracking.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stops.py" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/strategies.py" beforeDir="false" afterPath="$PROJECT_DIR$/strategies.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -206,7 +204,15 @@
       <option name="project" value="LOCAL" />
       <updated>1762894213317</updated>
     </task>
-    <option name="localTasksCounter" value="13" />
+    <task id="LOCAL-00013" summary="First Com">
+      <option name="closed" value="true" />
+      <created>1762900810361</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1762900810361</updated>
+    </task>
+    <option name="localTasksCounter" value="14" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -229,7 +235,7 @@
       <breakpoints>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/strategies.py</url>
-          <line>55</line>
+          <line>54</line>
           <option name="timeStamp" value="15" />
         </line-breakpoint>
       </breakpoints>

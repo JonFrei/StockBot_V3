@@ -5,7 +5,6 @@ from config import Config
 import stock_data
 import signals
 import position_sizing
-import stops
 import profit_tracking
 import position_monitoring
 
@@ -131,12 +130,6 @@ class SwingTradeStrategy(Strategy):
             # For signal-based sells, sell 100% of position
             sell_position = position_sizing.calculate_sell_size(self, ticker, sell_percentage=100.0)
 
-            # Set stop losses
-            # Stop Loss Options:
-            # stop_loss_atr
-            # stop_loss_hard
-            stop_loss = stops.stop_loss_atr(data)
-
             # === SELL SIGNAL LOGIC (overrides buy) ===
             if not sell_signal == None and sell_position['can_trade'] == True and has_position:
                 exit_price = data['close']
@@ -170,7 +163,7 @@ class SwingTradeStrategy(Strategy):
 
                 order_sig = buy_signal
                 order_sig['ticker'] = ticker
-                order_sig['stop_loss'] = stop_loss['stop_loss']
+                order_sig['stop_loss'] = 0.90 * data['close']
                 order_sig['quantity'] = buy_position['quantity']
                 order_sig['position_value'] = buy_position['position_value']  # Track value
                 buy_orders.append(order_sig)
