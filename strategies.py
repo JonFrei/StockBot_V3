@@ -6,7 +6,8 @@ import stock_data
 import signals
 import position_sizing
 import stops
-import position_tracking
+import profit_tracking
+import position_monitoring
 
 from lumibot.brokers import Alpaca
 
@@ -22,7 +23,11 @@ class SwingTradeStrategy(Strategy):
             self.sleeptime = "10M"
         self.tickers = self.parameters.get("tickers", [])
 
-        self.position_tracking = position_tracking.ProfitTracker(self)
+        # Initialize position tracking (for P&L reporting)
+        self.position_tracking = profit_tracking.ProfitTracker(self)
+
+        # Initialize position monitoring (for exits)
+        self.position_monitor = position_monitoring.PositionMonitor(self)
 
     def before_starting_trading(self):
         """Runs once before trading starts - sync existing positions from Alpaca"""
@@ -57,13 +62,45 @@ class SwingTradeStrategy(Strategy):
         print('Cash Balance:', self.get_cash())
         # print('\n')
 
+        all_tickers = list(set(self.tickers + [p.symbol for p in self.get_positions()]))
         all_stock_data = stock_data.process_data(self.tickers, current_date)
+
+        # =====================================================================
+        # STEP 1: CHECK ALL EXISTING POSITIONS FOR EXITS (HIGHEST PRIORITY)
+        # =====================================================================
+
+        # Check positions and get exit orders (pure calculation)
+        exit_orders = position_monitoring.check_positions_for_exits(
+            strategy=self,
+            current_date=current_date,
+            all_stock_data=all_stock_data,
+            position_monitor=self.position_monitor
+        )
+
+        # Execute all exit orders (handles orders, tracking, cleanup)
+        position_monitoring.execute_exit_orders(
+            strategy=self,
+            exit_orders=exit_orders,
+            current_date=current_date,
+            all_stock_data=all_stock_data,
+            position_tracking=self.position_tracking,
+            position_monitor=self.position_monitor
+        )
+
+        # =====================================================================
+        # STEP 2: LOOK FOR NEW BUY SIGNALS (only if we have cash)
+        # =====================================================================
 
         # Help to customize strategies
         buy_signal_list = ['swing_trade_1', 'swing_trade_2']
         sell_signal_list = ['take_profit_method_1', 'bollinger_sell']
 
-        orders = []
+        buy_orders = []
+        signal_sell_orders = []
+
+        # Track cash commitments to prevent over-purchasing
+        pending_cash_commitment = 0
+
         for ticker in self.tickers:
             # print('Ticker: ', ticker)
 
@@ -83,8 +120,16 @@ class SwingTradeStrategy(Strategy):
             has_position = ticker in self.positions
 
             # Size position to sell
-            buy_position = position_sizing.calculate_buy_size(self, ticker, data['close'])
-            sell_position = position_sizing.calculate_sell_size_1(self, ticker)
+            # Size position to buy/sell - PASS PENDING COMMITMENTS
+            buy_position = position_sizing.calculate_buy_size(
+                self,
+                ticker,
+                data['close'],
+                pending_commitments=pending_cash_commitment
+            )
+
+            # For signal-based sells, sell 100% of position
+            sell_position = position_sizing.calculate_sell_size(self, ticker, sell_percentage=100.0)
 
             # Set stop losses
             # Stop Loss Options:
@@ -92,18 +137,23 @@ class SwingTradeStrategy(Strategy):
             # stop_loss_hard
             stop_loss = stops.stop_loss_atr(data)
 
-            # Take a sell signal over a buy signal
+            # === SELL SIGNAL LOGIC (overrides buy) ===
             if not sell_signal == None and sell_position['can_trade'] == True and has_position:
                 exit_price = data['close']
 
                 # Record and display realized P&L
                 self.position_tracking.close_position(ticker, exit_price, current_date, sell_signal)
 
+                # Clean monitoring metadata
+                self.position_monitor.clean_position_metadata(ticker)
+
                 order_sig = sell_signal
                 order_sig['ticker'] = ticker
                 order_sig['quantity'] = sell_position['quantity']
-                orders.append(order_sig)
-            elif not buy_signal == None and buy_position['can_trade'] == True:
+                signal_sell_orders.append(order_sig)
+
+            # === BUY SIGNAL LOGIC ===
+            elif buy_signal is not None and buy_position['can_trade'] is True:
 
                 # Record position
                 self.position_tracking.record_position(
@@ -117,14 +167,39 @@ class SwingTradeStrategy(Strategy):
                 order_sig['ticker'] = ticker
                 order_sig['stop_loss'] = stop_loss['stop_loss']
                 order_sig['quantity'] = buy_position['quantity']
-                orders.append(order_sig)
+                order_sig['position_value'] = buy_position['position_value']  # Track value
+                buy_orders.append(order_sig)
 
-        if len(orders) > 1:
-            for order in orders:
+                # ADD COMMITMENT to prevent over-purchasing
+                pending_cash_commitment += buy_position['position_value']
+                print(f" * PENDING BUY: {ticker} x{buy_position['quantity']} = ${buy_position['position_value']:,.2f} | Total pending: ${pending_cash_commitment:,.2f}")
+
+        # Summary of pending orders
+        '''
+        if len(buy_orders) > 0:
+            print(f"\n{'='*60}")
+            print(f"📊 ORDER SUMMARY - {len(buy_orders)} buy order(s)")
+            print(f"{'='*60}")
+            print(f"Total Cash Commitment: ${pending_cash_commitment:,.2f}")
+            print(f"Cash Before Orders: ${self.get_cash():,.2f}")
+            print(f"Cash After Orders: ${self.get_cash() - pending_cash_commitment:,.2f}")
+            print(f"{'='*60}\n")
+        '''
+
+        # Submit sell orders first
+        if len(signal_sell_orders) > 0:
+            for order in signal_sell_orders:
                 submit_order = self.create_order(order['ticker'], order['quantity'], order['side'])
-                print(' * Submitting order: ' + str(submit_order) + ' | Signal: ' + str(order['signal_type']))
+                print(' * SIGNAL SELL: ' + str(submit_order) + ' | Signal: ' + str(order['signal_type']))
                 print(10 * ' ' + '--> | Price: ' + str(order['limit_price']) + ' | ')
-                # print('\n')
+                self.submit_order(submit_order)
+
+        # Then submit buy orders
+        if len(buy_orders) > 0:
+            for order in buy_orders:
+                submit_order = self.create_order(order['ticker'], order['quantity'], order['side'])
+                print(' * BUY ORDER: ' + str(submit_order) + ' | Signal: ' + str(order['signal_type']))
+                print(10 * ' ' + '--> | Price: ' + str(order['limit_price']) + ' | ')
                 self.submit_order(submit_order)
 
     def on_strategy_end(self):

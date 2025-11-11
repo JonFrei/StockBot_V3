@@ -1,7 +1,7 @@
 import indicators
 
 
-def calculate_buy_size(strategy, ticker, entry_price, account_threshold=20000, max_position_pct=15.0):
+def calculate_buy_size(strategy, ticker, entry_price, account_threshold=40000, max_position_pct=12.0, pending_commitments=0):
     """
     Calculate position size based on available cash
 
@@ -30,8 +30,11 @@ def calculate_buy_size(strategy, ticker, entry_price, account_threshold=20000, m
     # Get cash balance from strategy
     cash_balance = strategy.get_cash()
 
+    # Deduct pending commitments to get TRUE available cash
+    effective_cash = cash_balance - pending_commitments
+
     # Check if we have enough cash to trade
-    if cash_balance < account_threshold:
+    if effective_cash < account_threshold:
         return {
             'quantity': 0,
             'position_value': 0,
@@ -50,7 +53,7 @@ def calculate_buy_size(strategy, ticker, entry_price, account_threshold=20000, m
         }
 
     # Calculate available cash (keep threshold protected)
-    available_cash = cash_balance - account_threshold
+    available_cash = effective_cash - account_threshold
 
     if available_cash <= 0:
         return {
@@ -61,7 +64,9 @@ def calculate_buy_size(strategy, ticker, entry_price, account_threshold=20000, m
             'message': f'No available cash after threshold'
         }
 
-    # Calculate max position value (15% of cash balance)
+
+    # Calculate max position value (12% of ORIGINAL cash balance, not effective)
+    # This ensures position sizes are consistent regardless of order sequence
     max_position_value = cash_balance * (max_position_pct / 100)
 
     # Can't use more than available cash
@@ -89,18 +94,18 @@ def calculate_buy_size(strategy, ticker, entry_price, account_threshold=20000, m
             'message': f'Position too small. Entry ${entry_price:.2f} vs available ${available_cash:,.2f}'
         }
 
-    remaining_cash = cash_balance - actual_position_value
+    remaining_cash = cash_balance - actual_position_value - pending_commitments
 
     return {
         'quantity': quantity,
         'position_value': round(actual_position_value, 2),
         'remaining_cash': round(remaining_cash, 2),
         'can_trade': True,
-        'message': f'{quantity} shares @ ${entry_price:.2f}'
+        'message': f'{quantity} shares @ ${entry_price:.2f} (pending: ${pending_commitments:,.2f})'
     }
 
 
-def calculate_sell_size_1(strategy, ticker, sell_percentage=50.0):
+def calculate_sell_size(strategy, ticker, sell_percentage=50.0):
     """
     Calculate sell quantity based on current position
 
