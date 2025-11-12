@@ -6,6 +6,8 @@ Combines:
 - Simplified tracking (broker is source of truth for qty/price)
 - Daily caching of market conditions
 - 80/20 rule exits with adaptive thresholds
+- Max holding period (60 days)
+- Tighter trailing stops for large gains (>50%)
 
 Key Fix: Uses broker data for all quantity and entry price calculations
 """
@@ -379,10 +381,22 @@ def check_profit_taking_adaptive(pnl_pct, profit_target_1, profit_target_2,
     return None
 
 
-def check_trailing_stop(profit_level_2_locked, highest_price, current_price, trail_pct):
-    """Adaptive trailing stop"""
+def check_trailing_stop(profit_level_2_locked, highest_price, current_price, trail_pct, pnl_pct):
+    """
+    Adaptive trailing stop with tighter stops for large gains
+
+    NEW: For gains > 50%, widen the trailing stop by 50% to let big winners run
+    Example: 8% trail becomes 12% trail for gains above 50%
+    """
     if not profit_level_2_locked:
         return None
+
+    # NEW: Widen trail for huge winners (gains > 50%)
+    if pnl_pct > 50.0:
+        trail_pct = trail_pct * 1.5  # 50% wider trail for huge winners
+        label = f"WIDE trail {trail_pct:.0f}% (big winner)"
+    else:
+        label = f"trail {trail_pct:.0f}%"
 
     drawdown_from_peak = ((current_price - highest_price) / highest_price * 100)
 
@@ -391,7 +405,31 @@ def check_trailing_stop(profit_level_2_locked, highest_price, current_price, tra
             'type': 'full_exit',
             'reason': 'trailing_stop',
             'sell_pct': 100.0,
-            'message': f'📉 Trail Stop ({trail_pct:.0f}% from ${highest_price:.2f}): Exiting remaining position'
+            'message': f'📉 Trail Stop ({label} from ${highest_price:.2f}): Exiting remaining position'
+        }
+    return None
+
+
+def check_max_holding_period(position_monitor, ticker, current_date, max_days=60):
+    """
+    NEW: Exit positions held longer than max_days
+
+    Prevents holding losing or stagnant positions indefinitely
+    Default: 60 days
+    """
+    metadata = position_monitor.get_position_metadata(ticker)
+    if not metadata:
+        return None
+
+    entry_date = metadata['entry_date']
+    days_held = (current_date - entry_date).days
+
+    if days_held >= max_days:
+        return {
+            'type': 'full_exit',
+            'reason': 'max_holding_period',
+            'sell_pct': 100.0,
+            'message': f'⏰ Max Hold Period ({days_held} days) - Taking profits/cutting losses'
         }
     return None
 
@@ -405,11 +443,13 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
     Adaptive exit checking - uses market conditions AND broker data
 
     SIMPLIFIED: Gets quantity and entry price from broker (source of truth)
+
     Exit Priority Order:
-    1. Emergency stops (adaptive based on conditions)
-    2. Profit taking level 1 (adaptive targets)
-    3. Profit taking level 2 (adaptive targets)
-    4. Trailing stops (adaptive distance)
+    1. Max holding period (60 days)
+    2. Emergency stops (adaptive based on conditions)
+    3. Profit taking level 1 (adaptive targets)
+    4. Profit taking level 2 (adaptive targets)
+    5. Trailing stops (adaptive distance, wider for gains > 50%)
     """
     exit_orders = []
 
@@ -456,15 +496,24 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         # === CHECK EXIT CONDITIONS (Using Adaptive Parameters) ===
         exit_signal = None
 
-        # 1. Emergency stop (adaptive)
-        exit_signal = check_emergency_stop(
-            pnl_pct=pnl_pct,
-            current_price=current_price,
-            entry_price=broker_entry_price,
-            stop_pct=adaptive_params['emergency_stop_pct']
+        # 1. NEW: Max holding period (60 days)
+        exit_signal = check_max_holding_period(
+            position_monitor=position_monitor,
+            ticker=ticker,
+            current_date=current_date,
+            max_days=60
         )
 
-        # 2. Profit taking (adaptive targets)
+        # 2. Emergency stop (adaptive)
+        if not exit_signal:
+            exit_signal = check_emergency_stop(
+                pnl_pct=pnl_pct,
+                current_price=current_price,
+                entry_price=broker_entry_price,
+                stop_pct=adaptive_params['emergency_stop_pct']
+            )
+
+        # 3. Profit taking (adaptive targets)
         if not exit_signal:
             exit_signal = check_profit_taking_adaptive(
                 pnl_pct=pnl_pct,
@@ -476,13 +525,14 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
                 profit_level_2_locked=metadata.get('profit_level_2_locked', False)
             )
 
-        # 3. Trailing stop (adaptive distance)
+        # 4. Trailing stop (adaptive distance, NEW: wider for gains > 50%)
         if not exit_signal:
             exit_signal = check_trailing_stop(
                 profit_level_2_locked=metadata.get('profit_level_2_locked', False),
                 highest_price=metadata.get('highest_price', broker_entry_price),
                 current_price=current_price,
-                trail_pct=adaptive_params['trailing_stop_pct']
+                trail_pct=adaptive_params['trailing_stop_pct'],
+                pnl_pct=pnl_pct  # NEW: Pass P&L to adjust trail width
             )
 
         # Add to exit orders

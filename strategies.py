@@ -172,7 +172,7 @@ class SwingTradeStrategy(Strategy):
                 signal_sell_orders.append(order_sig)
 
             # === BUY SIGNAL LOGIC ===
-            elif buy_signal is not None and buy_position['can_trade'] is True:
+            elif buy_signal is not None and buy_signal.get('side') == 'buy' and buy_position['can_trade'] is True:
 
                 # SIMPLIFIED: Just track that we have a position with entry signal
                 # Broker will track quantity and entry price

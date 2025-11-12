@@ -11,10 +11,17 @@ def buy_signals(data, buy_signal_list):
     Check multiple buy strategies and return first valid signal
     Returns dict or None
     """
-    if data['close'] < data['sma200']:
+    close = data['close']
+    sma200 = data['sma200']
+
+    # Calculate distance from 200 SMA
+    distance_from_200 = ((close - sma200) / sma200 * 100) if sma200 > 0 else -100
+
+    # Only block if MORE than 5% below 200 SMA (was: if close < sma200)
+    if distance_from_200 < -5.0:
         return {
             'side': 'hold',
-            'msg': f'🔴 Bear Market Protection Active - No new positions',
+            'msg': f'🔴 Bear Market Protection Active ({distance_from_200:.1f}% below 200 SMA)',
             'limit_price': None,
             'stop_loss': None,
             'signal_type': 'regime_filter'
@@ -60,7 +67,7 @@ def swing_trade_1(data):
     Swing trading strategy using EMA crossovers, RSI, and volume
 
     Entry Rules:
-    - long: Price above EMA20 > EMA50, RSI 40-70, above 200 SMA
+    - long: Price above EMA20 > EMA50, RSI 48-72, above 200 SMA
     - short: Price below EMA20 < EMA50, RSI 30-60, below 200 SMA
     - Exit: 1% stop loss, 2:1 reward/risk target
 
@@ -86,22 +93,26 @@ def swing_trade_1(data):
     if not (close > ema20 and close > sma200):
         return _no_setup_message('Price below key levels')
 
-    # TIGHTENED: RSI sweet spot (was 40-70, now 50-68)
-    if not (52 <= rsi <= 68):
-        return _no_setup_message(f'RSI {rsi:.0f} not in 50-68 range')
+    # WIDENED: RSI sweet spot (was 52-68, now 48-72 for more entries)
+    if not (48 <= rsi <= 72):
+        return _no_setup_message(f'RSI {rsi:.0f} not in 48-72 range')
 
     # Volume confirmation (keep at 1.2x)
     if volume_ratio < 1.2:
         return _no_setup_message(f'Volume {volume_ratio:.1f}x too low')
 
-    # NEW: Not too far from EMA20 (avoid chasing)
-    distance_to_ema20 = abs((close - ema20) / ema20 * 100) if ema20 > 0 else 100
-    if distance_to_ema20 > 8.0:
-        return _no_setup_message(f'Too far from EMA20 ({distance_to_ema20:.1f}%)')
+    # NEW: MACD confirmation (momentum must be bullish)
+    macd = data.get('macd', 0)
+    macd_signal = data.get('macd_signal', 0)
+    if macd <= macd_signal:
+        return _no_setup_message('MACD not bullish')
+
+    # REMOVED: Distance check from EMA20 - too restrictive
+    # The EMA alignment check (close > ema20) is sufficient
 
     return {
         'side': 'buy',
-        'msg': f'Swing: Uptrend + RSI {rsi:.0f} + Vol {volume_ratio:.1f}x',
+        'msg': f'Swing: Uptrend + RSI {rsi:.0f} + Vol {volume_ratio:.1f}x + MACD bullish',
         'limit_price': close,
         'stop_loss': None,
         'signal_type': 'swing_trade_1'

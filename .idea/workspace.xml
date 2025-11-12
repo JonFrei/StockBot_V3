@@ -6,11 +6,8 @@
   <component name="ChangeListManager">
     <list default="true" id="d6df019d-759f-4aef-8455-f63cac562958" name="Changes" comment="First Com">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/indicators.py" beforeDir="false" afterPath="$PROJECT_DIR$/indicators.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/position_monitoring.py" beforeDir="false" afterPath="$PROJECT_DIR$/position_monitoring.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/position_sizing.py" beforeDir="false" afterPath="$PROJECT_DIR$/position_sizing.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/profit_tracking.py" beforeDir="false" afterPath="$PROJECT_DIR$/profit_tracking.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_data.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_data.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/signals.py" beforeDir="false" afterPath="$PROJECT_DIR$/signals.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/strategies.py" beforeDir="false" afterPath="$PROJECT_DIR$/strategies.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -28,38 +25,38 @@
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
-  <component name="GitHubPullRequestSearchHistory"><![CDATA[{
-  "lastFilter": {
-    "state": "OPEN",
-    "assignee": "JonFrei"
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;JonFrei&quot;
   }
-}]]></component>
-  <component name="GithubPullRequestsUISettings"><![CDATA[{
-  "selectedUrlAndAccountId": {
-    "url": "https://github.com/JonFrei/StockBot_V3",
-    "accountId": "51687bbe-1a7c-43b3-83ca-c3c7b1a1ca87"
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/JonFrei/StockBot_V3&quot;,
+    &quot;accountId&quot;: &quot;51687bbe-1a7c-43b3-83ca-c3c7b1a1ca87&quot;
   }
-}]]></component>
+}</component>
   <component name="ProblemsViewState">
     <option name="selectedTabId" value="CurrentFile" />
   </component>
-  <component name="ProjectColorInfo"><![CDATA[{
-  "associatedIndex": 8
-}]]></component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 8
+}</component>
   <component name="ProjectId" id="35Hlt3WhoCGQm9b7tLi6cO9TPir" />
   <component name="ProjectLevelVcsManager" settingsEditedManually="true" />
   <component name="ProjectViewState">
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "Python.main.executor": "Run",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "git-widget-placeholder": "master",
-    "last_opened_file_path": "C:/Users/freie/PycharmProjects/StockBot_V3"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;Python.main.executor&quot;: &quot;Run&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
+    &quot;last_opened_file_path&quot;: &quot;C:/Users/freie/PycharmProjects/StockBot_V3&quot;
   }
-}]]></component>
+}</component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="C:\Users\freie\PycharmProjects\StockBot_V3" />
@@ -233,7 +230,15 @@
       <option name="project" value="LOCAL" />
       <updated>1762913813097</updated>
     </task>
-    <option name="localTasksCounter" value="16" />
+    <task id="LOCAL-00016" summary="First Com">
+      <option name="closed" value="true" />
+      <created>1762915929683</created>
+      <option name="number" value="00016" />
+      <option name="presentableId" value="LOCAL-00016" />
+      <option name="project" value="LOCAL" />
+      <updated>1762915929683</updated>
+    </task>
+    <option name="localTasksCounter" value="17" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
