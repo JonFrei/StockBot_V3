@@ -3,7 +3,6 @@ from lumibot.strategies import Strategy
 from config import Config
 
 import stock_data
-import signals
 import position_sizing
 import profit_tracking
 import position_monitoring
@@ -103,7 +102,7 @@ class SwingTradeStrategy(Strategy):
         print('\n')
 
         all_tickers = list(set(self.tickers + [p.symbol for p in self.get_positions()]))
-        all_stock_data = stock_data.process_data(self.tickers, current_date)
+        all_stock_data = stock_data.process_data(all_tickers, current_date)
 
         # =====================================================================
         # STEP 1: CHECK ALL EXISTING POSITIONS FOR EXITS (HIGHEST PRIORITY)
@@ -172,7 +171,6 @@ class SwingTradeStrategy(Strategy):
             # Size position to buy - PASS ADAPTIVE PARAMETERS
             buy_position = position_sizing.calculate_buy_size(
                 self,
-                ticker,
                 data['close'],
                 pending_commitments=pending_cash_commitment,
                 adaptive_params=adaptive_params

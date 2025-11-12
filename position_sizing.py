@@ -1,5 +1,3 @@
-import indicators
-
 
 def check_position_concentration(strategy, ticker, new_position_value, max_concentration_pct=20.0):
     """
@@ -59,7 +57,7 @@ def check_position_concentration(strategy, ticker, new_position_value, max_conce
     }
 
 
-def calculate_buy_size(strategy, ticker, entry_price, account_threshold=40000,
+def calculate_buy_size(strategy, entry_price, account_threshold=40000,
                        max_position_pct=12.0, pending_commitments=0, adaptive_params=None):
     """
     Calculate position size based on available cash - NOW ADAPTIVE
