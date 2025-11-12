@@ -5,20 +5,16 @@ Adaptive signal evaluation similar to the adaptive exit system.
 Scores signals 0-100, detects confluence, and adjusts position sizing.
 
 Usage:
-    from signal_strength import evaluate_all_signals, calculate_adaptive_position_size
+    from entry_monitoring import evaluate_all_signals
 
     # Evaluate all signals
     eval_result = evaluate_all_signals(data, signal_list)
 
-    # Get position size
-    position_size = calculate_adaptive_position_size(
-        cash=cash,
-        signal_evaluation=eval_result,
-        market_condition='strong'
-    )
+    # Check recommendation
+    if eval_result['recommendation'] != 'skip':
+        # Trade!
 """
 
-import signals
 from position_monitoring import calculate_market_condition_score
 
 
@@ -42,19 +38,10 @@ class SignalStrengthConfig:
 
     # Position size multipliers
     SIZE_EXCEPTIONAL = 1.5  # 150% of base
-    SIZE_STRONG = 1.0  # 100% of base
-    SIZE_GOOD = 0.8  # 80% of base
-    SIZE_WEAK = 0.6  # 60% of base
+    SIZE_STRONG = 1.2  # 120% of base
+    SIZE_GOOD = 1.0  # 100% of base
+    SIZE_WEAK = 0.8  # 80% of base
     SIZE_SKIP = 0.0  # Don't trade
-
-    # Base position sizes by market condition
-    BASE_SIZE_STRONG_MARKET = 0.15  # 15% in strong markets
-    BASE_SIZE_NEUTRAL_MARKET = 0.12  # 12% in neutral markets
-    BASE_SIZE_WEAK_MARKET = 0.10  # 10% in weak markets
-
-    # Safety caps
-    MAX_POSITION_PCT = 0.25  # Never more than 25% of cash
-    MIN_POSITION_PCT = 0.05  # Never less than 5% of cash
 
 
 # =============================================================================
@@ -231,6 +218,8 @@ def evaluate_all_signals(data, signal_list):
     """
     Evaluate ALL signals and return scored results with confluence
 
+    OPTIMIZED: Uses BUY_STRATEGIES registry instead of getattr()
+
     Process:
     1. Check each signal in list
     2. If valid (side='buy'), calculate strength
@@ -253,15 +242,19 @@ def evaluate_all_signals(data, signal_list):
             'size_multiplier': float
         }
     """
+    # Import BUY_STRATEGIES registry from signals module
+    from signals import BUY_STRATEGIES
+
     valid_signals = []
 
     # Check each signal
     for signal_name in signal_list:
         try:
-            # Get signal function
-            signal_func = getattr(signals, signal_name, None)
-            if signal_func is None:
+            # Get signal function from registry (OPTIMIZED)
+            if signal_name not in BUY_STRATEGIES:
                 continue
+
+            signal_func = BUY_STRATEGIES[signal_name]
 
             # Get signal result
             signal_result = signal_func(data)
@@ -339,175 +332,3 @@ def evaluate_all_signals(data, signal_list):
         'recommendation': recommendation,
         'size_multiplier': size_multiplier
     }
-
-
-# =============================================================================
-# POSITION SIZING
-# =============================================================================
-
-def calculate_adaptive_position_size(cash, signal_evaluation, market_condition='neutral'):
-    """
-    Calculate position size based on signal strength and market conditions
-
-    Formula:
-        position_size = cash × base_pct × signal_multiplier
-
-    Where:
-        - base_pct depends on market condition (10-15%)
-        - signal_multiplier from signal evaluation (0.6-1.5x)
-
-    Args:
-        cash: Available cash
-        signal_evaluation: Result from evaluate_all_signals()
-        market_condition: 'strong', 'neutral', or 'weak'
-
-    Returns:
-        float: Dollar amount for position
-    """
-    config = SignalStrengthConfig
-
-    # Base position sizes by market condition
-    base_pcts = {
-        'strong': config.BASE_SIZE_STRONG_MARKET,
-        'neutral': config.BASE_SIZE_NEUTRAL_MARKET,
-        'weak': config.BASE_SIZE_WEAK_MARKET
-    }
-
-    base_pct = base_pcts.get(market_condition, config.BASE_SIZE_NEUTRAL_MARKET)
-
-    # Apply signal strength multiplier
-    size_multiplier = signal_evaluation['size_multiplier']
-
-    # Calculate position size
-    position_size = cash * base_pct * size_multiplier
-
-    # Safety caps
-    max_position = cash * config.MAX_POSITION_PCT
-    min_position = cash * config.MIN_POSITION_PCT
-
-    # Apply caps (but allow zero for 'skip' recommendation)
-    if size_multiplier == 0:
-        return 0
-
-    position_size = max(min_position, min(max_position, position_size))
-
-    return position_size
-
-
-# =============================================================================
-# DISPLAY HELPERS
-# =============================================================================
-
-def print_signal_evaluation(ticker, signal_eval, market_condition):
-    """
-    Pretty print signal evaluation results
-
-    Args:
-        ticker: Stock symbol
-        signal_eval: Result from evaluate_all_signals()
-        market_condition: Market condition string
-    """
-    if signal_eval['recommendation'] == 'skip':
-        print(f" * SKIP: {ticker} - No strong signals (score < {SignalStrengthConfig.WEAK_THRESHOLD})")
-        return
-
-    print(f"\n{'=' * 70}")
-    print(f"🎯 SIGNAL EVALUATION - {ticker}")
-    print(f"{'=' * 70}")
-
-    # Show all valid signals
-    print(f"Valid Signals: {signal_eval['confluence_count']}")
-    for sig in signal_eval['signals']:
-        name = sig['name']
-        score = sig['strength']['score']
-        level = sig['strength']['level']
-        breakdown = sig['strength']['breakdown']
-
-        # Format level with emoji
-        level_emoji = {
-            'exceptional': '🔥',
-            'strong': '🟢',
-            'good': '🟡',
-            'weak': '🟠',
-            'very_weak': '🔴'
-        }
-
-        emoji = level_emoji.get(level, '⚪')
-        print(f"  {emoji} {name}: {score:.0f} pts ({level.upper()})")
-        print(f"      Tech: {breakdown['technical']:.0f} | Vol: {breakdown['volume']:.0f} | "
-              f"Trend: {breakdown['trend']:.0f} | R/R: {breakdown['risk_reward']:.0f}")
-
-    # Show best signal and scoring
-    best = signal_eval['best_signal']
-    print(f"\nBest Signal: {best['name']}")
-    print(f"Base Score: {best['strength']['score']:.0f} pts")
-
-    if signal_eval['confluence_bonus'] > 0:
-        print(
-            f"Confluence Bonus: +{signal_eval['confluence_bonus']:.0f} pts ({signal_eval['confluence_count']} signals)")
-
-    print(f"Final Score: {signal_eval['final_score']:.0f} pts")
-    print(f"Market Condition: {market_condition.upper()}")
-    print(f"Recommendation: {signal_eval['recommendation'].upper()}")
-    print(f"Size Multiplier: {signal_eval['size_multiplier']:.1f}x")
-    print(f"{'=' * 70}")
-
-
-# =============================================================================
-# USAGE EXAMPLE
-# =============================================================================
-
-def example_usage():
-    """
-    Example showing how to use signal strength system
-    """
-
-    # Mock data (in real usage, this comes from stock_data.process_data())
-    data = {
-        'close': 100.0,
-        'rsi': 60,
-        'adx': 35,
-        'volume_ratio': 2.5,
-        'macd': 1.5,
-        'macd_signal': 1.0,
-        'macd_histogram': 0.5,
-        'ema8': 99.0,
-        'ema20': 98.0,
-        'ema50': 95.0,
-        'sma200': 90.0
-    }
-
-    # Define signal list
-    signal_list = [
-        'momentum_breakout',
-        'consolidation_breakout',
-        'swing_trade_1',
-        'gap_up_continuation',
-        'swing_trade_2'
-    ]
-
-    # Evaluate all signals
-    signal_eval = evaluate_all_signals(data, signal_list)
-
-    # Get market condition (from existing adaptive exit system)
-    market_score = calculate_market_condition_score(data)
-    market_condition = market_score['condition']
-
-    # Calculate position size
-    cash = 100000  # $100k cash
-    position_size = calculate_adaptive_position_size(
-        cash=cash,
-        signal_evaluation=signal_eval,
-        market_condition=market_condition
-    )
-
-    # Display results
-    print_signal_evaluation('NVDA', signal_eval, market_condition)
-    print(f"Position Size: ${position_size:,.0f}\n")
-
-    return signal_eval, position_size
-
-
-if __name__ == "__main__":
-    # Run example
-    example_usage()

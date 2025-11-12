@@ -5,50 +5,23 @@ tickers = ""
 current_date = datetime.today()
 
 
-# =============================================================================
-# HELPER FUNCTION - Handle both data formats
-# =============================================================================
-
-def _extract_indicators(data):
-    """
-    Helper to handle both data formats:
-    - New: {'indicators': {...}, 'raw': DataFrame}
-    - Old: {...} (just indicators)
-
-    Returns: (indicators_dict, raw_dataframe or None)
-    """
-    if isinstance(data, dict) and 'indicators' in data:
-        # New format: full structure
-        return data['indicators'], data.get('raw', None)
-    else:
-        # Old format: just indicators
-        return data, None
-
-
-# =============================================================================
-# MAIN SIGNAL PROCESSORS
-# =============================================================================
-
+# Process which signals we want to use based on the list provided
 def buy_signals(data, buy_signal_list):
     """
     Check multiple buy strategies and return first valid signal
     Returns dict or None
     """
-    # Extract indicators (handle both formats)
-    indicators, _ = _extract_indicators(data)
-
-    close = indicators['close']
-    sma200 = indicators['sma200']
-    adx = indicators.get('adx', 0)
+    close = data['close']
+    sma200 = data['sma200']
 
     # Calculate distance from 200 SMA
     distance_from_200 = ((close - sma200) / sma200 * 100) if sma200 > 0 else -100
 
-    # IMPROVED FILTER: Only block if BOTH weak price AND weak momentum
-    if close < sma200 and adx < 20:
+    # Only block if MORE than 5% below 200 SMA
+    if distance_from_200 < -5.0:
         return {
             'side': 'hold',
-            'msg': f'🔴 Weak Structure (Below 200 SMA + ADX {adx:.0f} < 20)',
+            'msg': f'🔴 Bear Market Protection Active ({distance_from_200:.1f}% below 200 SMA)',
             'limit_price': None,
             'stop_loss': None,
             'signal_type': 'regime_filter'
@@ -64,24 +37,6 @@ def buy_signals(data, buy_signal_list):
                 return signal
 
     # No buy signal found
-    return None
-
-
-def sell_signals(data, sell_signal_list):
-    """
-    Check multiple sell strategies and return first valid signal
-    Returns dict or None
-    """
-    for strategy_name in sell_signal_list:
-        if strategy_name in SELL_STRATEGIES:
-            strategy_func = SELL_STRATEGIES[strategy_name]
-            signal = strategy_func(data)
-
-            # Return first valid sell signal
-            if signal and isinstance(signal, dict) and signal.get('side') == 'sell':
-                return signal
-
-    # No sell signal found
     return None
 
 
@@ -108,38 +63,37 @@ def swing_trade_1(data):
     Returns:
         Dictionary with decision and trade parameters
     """
-    # Extract indicators
-    indicators, _ = _extract_indicators(data)
-
     # Get indicator values
-    ema20 = indicators.get('ema20', 0)
-    ema50 = indicators.get('ema50', 0)
-    sma200 = indicators.get('sma200', 0)
-    rsi = indicators.get('rsi', 50)
-    close = indicators.get('close', 0)
-    volume_ratio = indicators.get('volume_ratio', 0)
-    macd = indicators.get('macd', 0)
-    macd_signal = indicators.get('macd_signal', 0)
+    ema20 = data.get('ema20', 0)
+    ema50 = data.get('ema50', 0)
+    sma200 = data.get('sma200', 0)
+    rsi = data.get('rsi', 50)
+    close = data.get('close', 0)
+    volume_ratio = data.get('volume_ratio', 0)
+    macd = data.get('macd', 0)
+    macd_signal = data.get('macd_signal', 0)
 
     # Trend confirmation
     if not (ema20 > ema50):
-        return _no_setup_message('No uptrend')
+        return _no_signal('No uptrend')
 
     # Price above both EMAs and 200 SMA
     if not (close > ema20 and close > sma200):
-        return _no_setup_message('Price below key levels')
+        return _no_signal('Price below key levels')
 
     # WIDENED: RSI sweet spot (was 52-68, now 48-72)
     if not (48 <= rsi <= 72):
-        return _no_setup_message(f'RSI {rsi:.0f} not in 48-72 range')
+        return _no_signal(f'RSI {rsi:.0f} not in 48-72 range')
 
     # Volume confirmation
     if volume_ratio < 1.2:
-        return _no_setup_message(f'Volume {volume_ratio:.1f}x too low')
+        return _no_signal(f'Volume {volume_ratio:.1f}x too low')
 
     # NEW: MACD confirmation (momentum must be bullish)
     if macd <= macd_signal:
-        return _no_setup_message('MACD not bullish')
+        return _no_signal('MACD not bullish')
+
+    # REMOVED: Distance check from EMA20 - too restrictive
 
     return {
         'side': 'buy',
@@ -172,44 +126,41 @@ def swing_trade_2(data):
     6. RSI 30-65 (not extreme)
     7. MACD bullish
     """
-    # Extract indicators
-    indicators, _ = _extract_indicators(data)
-
-    prev_low = indicators.get('prev_low', 0)
-    close = indicators.get('close', 0)
-    ema20 = indicators.get('ema20', 0)
-    ema50 = indicators.get('ema50', 0)
-    sma200 = indicators.get('sma200', 0)
-    rsi = indicators.get('rsi', 50)
-    volume_ratio = indicators.get('volume_ratio', 0)
-    daily_change_pct = indicators.get('daily_change_pct', 0)
-    macd = indicators.get('macd', 0)
-    macd_signal = indicators.get('macd_signal', 0)
+    prev_low = data.get('prev_low', 0)
+    close = data.get('close', 0)
+    ema20 = data.get('ema20', 0)
+    ema50 = data.get('ema50', 0)
+    sma200 = data.get('sma200', 0)
+    rsi = data.get('rsi', 50)
+    volume_ratio = data.get('volume_ratio', 0)
+    daily_change_pct = data.get('daily_change_pct', 0)
+    macd = data.get('macd', 0)
+    macd_signal = data.get('macd_signal', 0)
 
     # 1. Price above 200 SMA (uptrend)
     if close <= sma200:
-        return _no_setup_message('Below 200 SMA')
+        return _no_signal('Below 200 SMA')
 
     # 2. EMA structure (medium-term momentum)
     if ema20 <= ema50:
-        return _no_setup_message('EMA20 not above EMA50')
+        return _no_signal('EMA20 not above EMA50')
 
     # 3. TIGHTENED: Pullback depth (3-12% instead of 2-20%)
     ema20_distance = abs((close - ema20) / ema20 * 100) if ema20 > 0 else 100
     if not (3.0 <= ema20_distance <= 12.0):
-        return _no_setup_message(f'Pullback {ema20_distance:.1f}% not in 3-12% range')
+        return _no_signal(f'Pullback {ema20_distance:.1f}% not in 3-12% range')
 
     # 4. TIGHTENED: RSI not oversold or overbought (30-65 instead of 28-78)
     if not (30 <= rsi <= 65):
-        return _no_setup_message(f'RSI {rsi:.0f} outside 30-65')
+        return _no_signal(f'RSI {rsi:.0f} outside 30-65')
 
     # 5. INCREASED: Volume confirmation (1.5x instead of 1.3x)
     if volume_ratio < 1.5:
-        return _no_setup_message(f'Volume {volume_ratio:.1f}x below 1.5x')
+        return _no_signal(f'Volume {volume_ratio:.1f}x below 1.5x')
 
     # 6. NEW: MACD momentum confirmation
     if macd <= macd_signal:
-        return _no_setup_message('MACD not bullish')
+        return _no_signal('MACD not bullish')
 
     # 7. NEW: Price stabilization check
     price_stabilized = False
@@ -223,7 +174,7 @@ def swing_trade_2(data):
         price_stabilized = True
 
     if not price_stabilized:
-        return _no_setup_message('Price not stabilized')
+        return _no_signal('Price not stabilized')
 
     return {
         'side': 'buy',
@@ -251,22 +202,20 @@ def momentum_breakout(data):
 
     This is the highest conviction signal - checks first
     """
-    # UPDATED: Handle both data formats
-    indicators, raw_data = _extract_indicators(data)
-
-    close = indicators.get('close', 0)
-    ema8 = indicators.get('ema8', 0)
-    ema20 = indicators.get('ema20', 0)
-    ema50 = indicators.get('ema50', 0)
-    sma200 = indicators.get('sma200', 0)
-    rsi = indicators.get('rsi', 50)
-    adx = indicators.get('adx', 0)
-    volume_ratio = indicators.get('volume_ratio', 0)
-    macd = indicators.get('macd', 0)
-    macd_signal = indicators.get('macd_signal', 0)
-    macd_hist = indicators.get('macd_histogram', 0)
+    close = data.get('close', 0)
+    ema8 = data.get('ema8', 0)
+    ema20 = data.get('ema20', 0)
+    ema50 = data.get('ema50', 0)
+    sma200 = data.get('sma200', 0)
+    rsi = data.get('rsi', 50)
+    adx = data.get('adx', 0)
+    volume_ratio = data.get('volume_ratio', 0)
+    macd = data.get('macd', 0)
+    macd_signal = data.get('macd_signal', 0)
+    macd_hist = data.get('macd_histogram', 0)
 
     # Get 20-day high for breakout detection
+    raw_data = data.get('raw', None)
     if raw_data is None or len(raw_data) < 20:
         return _no_signal('Insufficient data')
 
@@ -327,16 +276,14 @@ def consolidation_breakout(data):
 
     Catches stocks that pause before continuing higher
     """
-    # UPDATED: Handle both data formats
-    indicators, raw_data = _extract_indicators(data)
+    close = data.get('close', 0)
+    ema20 = data.get('ema20', 0)
+    ema50 = data.get('ema50', 0)
+    sma200 = data.get('sma200', 0)
+    rsi = data.get('rsi', 50)
+    volume_ratio = data.get('volume_ratio', 0)
 
-    close = indicators.get('close', 0)
-    ema20 = indicators.get('ema20', 0)
-    ema50 = indicators.get('ema50', 0)
-    sma200 = indicators.get('sma200', 0)
-    rsi = indicators.get('rsi', 50)
-    volume_ratio = indicators.get('volume_ratio', 0)
-
+    raw_data = data.get('raw', None)
     if raw_data is None or len(raw_data) < 20:
         return _no_signal('Insufficient data')
 
@@ -398,19 +345,14 @@ def gap_up_continuation(data):
 
     Captures post-catalyst momentum
     """
-    # UPDATED: Handle both data formats
-    indicators, _ = _extract_indicators(data)
-
-    close = indicators.get('close', 0)
-    open_price = indicators.get('open', 0)
-    ema20 = indicators.get('ema20', 0)
-    sma200 = indicators.get('sma200', 0)
-    rsi = indicators.get('rsi', 50)
-    volume_ratio = indicators.get('volume_ratio', 0)
-    daily_change_pct = indicators.get('daily_change_pct', 0)
-
-    # Need previous close - get from raw data if available
-    prev_close = indicators.get('prev_close', 0)
+    close = data.get('close', 0)
+    open_price = data.get('open', 0)
+    prev_close = data.get('prev_close', 0)
+    ema20 = data.get('ema20', 0)
+    sma200 = data.get('sma200', 0)
+    rsi = data.get('rsi', 50)
+    volume_ratio = data.get('volume_ratio', 0)
+    daily_change_pct = data.get('daily_change_pct', 0)
 
     if prev_close == 0 or open_price == 0:
         return _no_signal('No previous close/open data')
@@ -458,49 +400,21 @@ def gap_up_continuation(data):
     }
 
 
-def _no_setup_message(reason):
-    """Helper function to return consistent 'no setup' message"""
-    return {
-        'side': 'hold',
-        'msg': f'No swing setup: {reason}',
-        'limit_price': None,
-        'stop_loss': None,
-        'signal_type': 'no_signal'
-    }
-
-
-def _no_signal(reason):
-    """Helper function to return 'no signal' message"""
-    return {
-        'side': 'hold',
-        'msg': f'No signal: {reason}',
-        'limit_price': None,
-        'stop_loss': None,
-        'signal_type': 'no_signal'
-    }
-
-
-# ===================================================================================
-# LEGACY SIGNALS (KEEP FOR REFERENCE)
-# ===================================================================================
-
 def golden_cross(data, position_size='normal'):
     """
     Detects upcoming or recent Golden Cross
 
     LEGACY: Not currently used but kept for reference
     """
-    indicators, _ = _extract_indicators(data)
-
-    ema8 = indicators.get('ema8', 0)
-    ema20 = indicators.get('ema20', 0)
-    ema50 = indicators.get('ema50', 0)
-    sma200 = indicators.get('sma200', 0)
-    rsi = indicators.get('rsi', 50)
-    volume_ratio = indicators.get('volume_ratio', 0)
-    close = indicators.get('close', 0)
-    atr = indicators.get('atr_14', 0)
-    daily_change_pct = indicators.get('daily_change_pct', 0)
+    ema8 = data.get('ema8', 0)
+    ema20 = data.get('ema20', 0)
+    ema50 = data.get('ema50', 0)
+    sma200 = data.get('sma200', 0)
+    rsi = data.get('rsi', 50)
+    volume_ratio = data.get('volume_ratio', 0)
+    close = data.get('close', 0)
+    atr = data.get('atr_14', 0)
+    daily_change_pct = data.get('daily_change_pct', 0)
 
     # ATR volatility filter
     atr_pct = (atr / close * 100) if close > 0 else 100
@@ -538,13 +452,11 @@ def golden_cross(data, position_size='normal'):
 
 def bollinger_buy(data):
     """LEGACY: Bollinger band strategy - not currently used"""
-    indicators, _ = _extract_indicators(data)
-
-    rsi = indicators.get('rsi', 50)
-    volume_ratio = indicators.get('volume_ratio', 0)
-    sma200 = indicators.get('sma200', 0)
-    bollinger_lower = indicators.get('bollinger_lower', 0)
-    close = indicators.get('close', 0)
+    rsi = data.get('rsi', 50)
+    volume_ratio = data.get('volume_ratio', 0)
+    sma200 = data.get('sma200', 0)
+    bollinger_lower = data.get('bollinger_lower', 0)
+    close = data.get('close', 0)
 
     if rsi < 30.0 and bollinger_lower >= close > sma200 and volume_ratio >= 1.2:
         return {
@@ -557,52 +469,15 @@ def bollinger_buy(data):
     return None
 
 
-# ===================================================================================
-# SELL SIGNALS
-# ===================================================================================
-def bollinger_sell(data):
-    """LEGACY: Bollinger band sell - not currently used"""
-    indicators, _ = _extract_indicators(data)
-
-    rsi = indicators.get('rsi', 50)
-    bollinger_upper = indicators.get('bollinger_upper', 0)
-    close = indicators.get('close', 0)
-
-    if rsi > 70.0 and close >= bollinger_upper:
-        return {
-            'side': 'sell',
-            'limit_price': close,
-            'stop_loss': None,
-            'msg': 'Overbought above upper band',
-            'signal_type': 'bollinger_sell',
-        }
-    return None
-
-
-def take_profit_method_1(data):
-    """LEGACY: Simple ATR-based take profit - not currently used"""
-    indicators, _ = _extract_indicators(data)
-
-    close = indicators.get('close', 0)
-    ema20 = indicators.get('ema20', 0)
-    atr = indicators.get('atr_14', 0)
-
-    if atr == 0 or ema20 == 0:
-        return None
-
-    take_profit_level = ema20 + (atr * 2.0)
-
-    if close >= take_profit_level:
-        profit_pct = ((close - ema20) / ema20 * 100)
-        return {
-            'side': 'sell',
-            'limit_price': close,
-            'stop_loss': None,
-            'msg': f'ATR Take Profit: +{profit_pct:.1f}%',
-            'signal_type': 'take_profit_atr'
-        }
-
-    return None
+def _no_signal(reason):
+    """Helper function to return consistent 'no signal' message"""
+    return {
+        'side': 'hold',
+        'msg': f'No signal: {reason}',
+        'limit_price': None,
+        'stop_loss': None,
+        'signal_type': 'no_signal'
+    }
 
 
 # =======================================================================================================================
@@ -623,9 +498,4 @@ BUY_STRATEGIES = {
     # LEGACY SIGNALS (Not actively used)
     'golden_cross': golden_cross,
     'bollinger_buy': bollinger_buy,
-}
-
-SELL_STRATEGIES = {
-    'bollinger_sell': bollinger_sell,
-    'take_profit_method_1': take_profit_method_1
 }

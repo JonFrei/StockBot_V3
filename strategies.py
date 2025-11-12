@@ -7,6 +7,7 @@ import signals
 import position_sizing
 import profit_tracking
 import position_monitoring
+import entry_monitoring
 from ticker_cooldown import TickerCooldown
 
 from lumibot.brokers import Alpaca
@@ -15,6 +16,24 @@ broker = Alpaca(Config.get_alpaca_config())
 
 
 class SwingTradeStrategy(Strategy):
+    # =========================================================================
+    # CONFIGURATION
+    # =========================================================================
+
+    # Active trading signals (in priority order)
+    ACTIVE_SIGNALS = [
+        'momentum_breakout',  # High conviction breakouts
+        'consolidation_breakout',  # Consolidation breaks
+        'swing_trade_1',  # EMA crossover + momentum
+        'gap_up_continuation',  # Post-catalyst continuation
+        'swing_trade_2',  # Pullback plays
+    ]
+
+    # Cooldown configuration
+    COOLDOWN_DAYS = 3  # Days between re-purchases of same ticker
+
+    # =========================================================================
+
     def initialize(self, send_emails=True):
         """Initialize strategy with position tracking"""
         if Config.BACKTESTING:
@@ -30,7 +49,9 @@ class SwingTradeStrategy(Strategy):
         self.position_monitor = position_monitoring.PositionMonitor(self)
 
         # Ticker cooldown to prevent chasing
-        self.ticker_cooldown = TickerCooldown(cooldown_days=3)
+        self.ticker_cooldown = TickerCooldown(cooldown_days=self.COOLDOWN_DAYS)
+        print(f"✅ Ticker Cooldown Enabled: {self.ticker_cooldown.cooldown_days} days between purchases")
+        print(f"✅ Active Signals: {len(self.ACTIVE_SIGNALS)} signals configured")
 
     def before_starting_trading(self):
         """
@@ -72,7 +93,7 @@ class SwingTradeStrategy(Strategy):
         print('Portfolio Value:', self.portfolio_value)
         print('Cash Balance:', self.get_cash())
 
-        # Display active cooldowns
+        # NEW: Display active cooldowns
         active_cooldowns = self.ticker_cooldown.get_all_cooldowns(current_date)
         if active_cooldowns:
             print(f"\n⏰ Active Cooldowns:")
@@ -103,66 +124,50 @@ class SwingTradeStrategy(Strategy):
             current_date=current_date,
             position_monitor=self.position_monitor,
             profit_tracker=self.profit_tracker,
-            ticker_cooldown=self.ticker_cooldown
-
+            ticker_cooldown=self.ticker_cooldown  # NEW: Pass ticker cooldown
         )
 
         # =====================================================================
         # STEP 2: LOOK FOR NEW BUY SIGNALS (only if we have cash)
         # =====================================================================
 
-        # Help to customize strategies
-        buy_signal_list = [
-            'momentum_breakout',
-            'consolidation_breakout',
-            'swing_trade_1',
-            'gap_up_continuation',
-            'swing_trade_2',
-            'bollinger_buy',
-            'golden_cross'
-        ]
-        sell_signal_list = ['take_profit_method_1', 'bollinger_sell']
-
         buy_orders = []
-        signal_sell_orders = []
 
         # Track cash commitments to prevent over-purchasing
         pending_cash_commitment = 0
 
-        # Check Ticker Cooldowns
-        active_cooldowns = self.ticker_cooldown.get_all_cooldowns(current_date)
-        if active_cooldowns:
-            print(f"\n⏰ Active Cooldowns:")
-            for ticker, days_left in active_cooldowns:
-                print(f"   {ticker}: {days_left} day(s) remaining")
-
-        # Start checking each indicator
         for ticker in self.tickers:
 
             if ticker not in all_stock_data:
                 self.log_message(f"No data for {ticker}, skipping")
                 continue
 
-            # Check Cooldown Period
+            # Get stocks and indicators
+            data = all_stock_data[ticker]['indicators']
+
+            # === CHECK COOLDOWN BEFORE PROCESSING ===
             if not self.ticker_cooldown.can_buy(ticker, current_date):
-                days_left = self.ticker_cooldown.days_until_can_buy(ticker, current_date)
-                print(f" * SKIP: {ticker} - Cooldown ({days_left} days remaining)")
                 continue
 
-            # UPDATED: Get full data structure (has both 'indicators' and 'raw')
-            data_full = all_stock_data[ticker]
-            data = data_full['indicators']
+            # Skip if we already have a position
+            has_position = ticker in self.positions
+            if has_position:
+                continue
 
             # === GET ADAPTIVE PARAMETERS (Cached Daily) ===
             adaptive_params = self.position_monitor.get_cached_market_conditions(
                 ticker, current_date_str, data
             )
 
-            # UPDATED: Pass full data structure to signals
-            buy_signal = signals.buy_signals(data_full, buy_signal_list)
-            sell_signal = signals.sell_signals(data_full, sell_signal_list)
+            # === EVALUATE ALL SIGNALS WITH CONFLUENCE ===
+            signal_evaluation = entry_monitoring.evaluate_all_signals(data, self.ACTIVE_SIGNALS)
 
-            has_position = ticker in self.positions
+            # Skip if no strong signals
+            if signal_evaluation['recommendation'] == 'skip':
+                continue
+
+            # Get best signal for entry
+            best_signal = signal_evaluation['best_signal']['signal_data']
 
             # Size position to buy - PASS ADAPTIVE PARAMETERS
             buy_position = position_sizing.calculate_buy_size(
@@ -170,81 +175,41 @@ class SwingTradeStrategy(Strategy):
                 ticker,
                 data['close'],
                 pending_commitments=pending_cash_commitment,
-                adaptive_params=adaptive_params  # Pass adaptive params
+                adaptive_params=adaptive_params
             )
 
-            # For signal-based sells, sell 100% of position
-            # sell_position = position_sizing.calculate_sell_size(self, ticker, sell_percentage=100.0)
+            # Check if we can trade
+            if not buy_position['can_trade']:
+                continue
 
-            # === SELL SIGNAL LOGIC (overrides buy) ===
-            if sell_signal is not None and has_position:
+            # Track that we have a position with entry signal
+            self.position_monitor.track_position(
+                ticker,
+                current_date,
+                best_signal.get('signal_type', 'unknown')
+            )
 
-                # Get broker data (source of truth)
-                position = self.get_position(ticker)
-                broker_quantity = int(position.quantity)
-                broker_entry_price = float(position.avg_fill_price)
-                exit_price = data['close']
+            # Create order
+            order_sig = best_signal
+            order_sig['ticker'] = ticker
+            order_sig['stop_loss'] = 0.90 * data['close']
+            order_sig['quantity'] = buy_position['quantity']
+            order_sig['position_value'] = buy_position['position_value']
+            order_sig['condition'] = adaptive_params['condition_label']
+            order_sig['signal_score'] = signal_evaluation['final_score']
+            order_sig['confluence'] = signal_evaluation['confluence_count']
+            buy_orders.append(order_sig)
 
-                # Get entry signal from metadata
-                metadata = self.position_monitor.get_position_metadata(ticker)
-                entry_signal = metadata.get('entry_signal', 'pre_existing') if metadata else 'pre_existing'
+            # ADD COMMITMENT to prevent over-purchasing
+            pending_cash_commitment += buy_position['position_value']
 
-                # Record the trade
-                self.profit_tracker.record_trade(
-                    ticker=ticker,
-                    quantity_sold=broker_quantity,
-                    entry_price=broker_entry_price,
-                    exit_price=exit_price,
-                    exit_date=current_date,
-                    entry_signal=entry_signal,
-                    exit_signal=sell_signal
-                )
+            # Display signal evaluation
+            score = signal_evaluation['final_score']
+            conf = signal_evaluation['confluence_count']
+            print(
+                f" * PENDING BUY: {ticker} x{buy_position['quantity']} {adaptive_params['condition_label']} | Score: {score:.0f} ({conf} signals) = ${buy_position['position_value']:,.2f}")
 
-                # Clean monitoring metadata
-                self.position_monitor.clean_position_metadata(ticker)
-
-                # Clear cooldown on signal-based full exit
-                self.ticker_cooldown.clear(ticker)
-
-                order_sig = sell_signal
-                order_sig['ticker'] = ticker
-                order_sig['quantity'] = broker_quantity
-                signal_sell_orders.append(order_sig)
-
-            # === BUY SIGNAL LOGIC ===
-            elif buy_signal is not None and buy_signal.get('side') == 'buy' and buy_position['can_trade'] is True:
-
-                # SIMPLIFIED: Just track that we have a position with entry signal
-                # Broker will track quantity and entry price
-                self.position_monitor.track_position(
-                    ticker,
-                    current_date,
-                    buy_signal.get('signal_type', 'unknown')
-                )
-
-                order_sig = buy_signal
-                order_sig['ticker'] = ticker
-                order_sig['stop_loss'] = 0.90 * data['close']
-                order_sig['quantity'] = buy_position['quantity']
-                order_sig['position_value'] = buy_position['position_value']
-                order_sig['condition'] = adaptive_params['condition_label']  # Add condition
-                buy_orders.append(order_sig)
-
-                # ADD COMMITMENT to prevent over-purchasing
-                pending_cash_commitment += buy_position['position_value']
-                print(
-                    f" * PENDING BUY: {ticker} x{buy_position['quantity']} {adaptive_params['condition_label']} = ${buy_position['position_value']:,.2f}")
-
-        # Submit sell orders first
-        if len(signal_sell_orders) > 0:
-            for order in signal_sell_orders:
-                if order['side'] == 'sell':
-                    submit_order = self.create_order(order['ticker'], order['quantity'], order['side'])
-                    print(' * SIGNAL SELL: ' + str(submit_order) + ' | Signal: ' + str(order['signal_type']))
-                    print(10 * ' ' + '--> | Price: ' + str(order['limit_price']))
-                    self.submit_order(submit_order)
-
-        # Then submit buy orders
+        # Submit buy orders
         if len(buy_orders) > 0:
             print(f"\n{'=' * 70}")
             print(f"📊 BUY ORDERS SUMMARY - {len(buy_orders)} order(s)")
@@ -256,9 +221,15 @@ class SwingTradeStrategy(Strategy):
             for order in buy_orders:
                 if order['side'] == 'buy':
                     submit_order = self.create_order(order['ticker'], order['quantity'], order['side'])
+
+                    score = order.get('signal_score', 0)
+                    conf = order.get('confluence', 0)
+
                     print(
                         f" * BUY: {order['ticker']} x{order['quantity']} {order['condition']} | {order['signal_type']}")
-                    print(10 * ' ' + f"--> Price: ${order['limit_price']:.2f} | Value: ${order['position_value']:,.2f}")
+                    print(
+                        f"        Score: {score:.0f}/100 ({conf} signals) | Price: ${order['limit_price']:.2f} | Value: ${order['position_value']:,.2f}")
+
                     self.submit_order(submit_order)
 
                     # Record buy in cooldown tracker
@@ -267,7 +238,7 @@ class SwingTradeStrategy(Strategy):
     def on_strategy_end(self):
         self.profit_tracker.display_final_summary()
 
-        # Display cooldown statistics
+        # NEW: Display cooldown statistics
         cooldown_stats = self.ticker_cooldown.get_statistics()
         print(f"\n{'=' * 80}")
         print(f"⏰ TICKER COOLDOWN STATISTICS")
