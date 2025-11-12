@@ -9,11 +9,6 @@ import profit_tracking
 import position_monitoring
 from ticker_cooldown import TickerCooldown
 
-from lumibot.brokers import Alpaca
-
-broker = Alpaca(Config.get_alpaca_config())
-
-
 class SwingTradeStrategy(Strategy):
     def initialize(self, send_emails=True):
         """Initialize strategy with position tracking"""
@@ -61,8 +56,10 @@ class SwingTradeStrategy(Strategy):
             print(f"[ERROR] Failed to sync positions: {e}")
 
     def on_trading_iteration(self):
-        if not broker.is_market_open() and Config.BACKTESTING == 'False':
-            return
+        if not Config.BACKTESTING:
+            current_broker = getattr(self, 'broker', None)
+            if current_broker is not None and not current_broker.is_market_open():
+                return
 
         current_date = self.get_datetime()
         current_date_str = current_date.strftime('%Y-%m-%d')
@@ -82,7 +79,7 @@ class SwingTradeStrategy(Strategy):
         print('\n')
 
         all_tickers = list(set(self.tickers + [p.symbol for p in self.get_positions()]))
-        all_stock_data = stock_data.process_data(self.tickers, current_date)
+        all_stock_data = stock_data.process_data(all_tickers, current_date)
 
         # =====================================================================
         # STEP 1: CHECK ALL EXISTING POSITIONS FOR EXITS (HIGHEST PRIORITY)

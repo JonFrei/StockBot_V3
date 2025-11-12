@@ -80,6 +80,7 @@ def process_data(symbols, current_date):
         temp_data['indicators']['open'] = round(float(df['open'].iloc[-1]), 2)
         temp_data['indicators']['high'] = round(float(df['high'].iloc[-1]), 2)
         temp_data['indicators']['low'] = round(float(df['low'].iloc[-1]), 2)
+        temp_data['indicators']['raw'] = df
         temp_data['indicators']['prev_low'] = round(float(df['low'].iloc[-2]), 2) if len(df) > 1 else round(
             float(df['low'].iloc[-1]), 2)
 
@@ -88,8 +89,10 @@ def process_data(symbols, current_date):
             prev_close = df['close'].iloc[-2]
             current_close = df['close'].iloc[-1]
             temp_data['indicators']['daily_change_pct'] = round(((current_close - prev_close) / prev_close * 100), 2)
+            temp_data['indicators']['prev_close'] = round(float(prev_close), 2)
         else:
             temp_data['indicators']['daily_change_pct'] = 0
+            temp_data['indicators']['prev_close'] = round(float(df['close'].iloc[-1]), 2)
 
         processed_data[ticker] = temp_data
 
