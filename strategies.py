@@ -7,6 +7,7 @@ import signals
 import position_sizing
 import profit_tracking
 import position_monitoring
+from ticker_cooldown import TickerCooldown
 
 from lumibot.brokers import Alpaca
 
@@ -27,6 +28,9 @@ class SwingTradeStrategy(Strategy):
 
         # Position monitoring (for exits + market condition caching)
         self.position_monitor = position_monitoring.PositionMonitor(self)
+
+        # Ticker cooldown to prevent chasing
+        self.ticker_cooldown = TickerCooldown(cooldown_days=3)
 
     def before_starting_trading(self):
         """
@@ -67,6 +71,14 @@ class SwingTradeStrategy(Strategy):
         print(30 * '=' + ' Date: ' + str(current_date) + ' ' + 30 * '=')
         print('Portfolio Value:', self.portfolio_value)
         print('Cash Balance:', self.get_cash())
+
+        # Display active cooldowns
+        active_cooldowns = self.ticker_cooldown.get_all_cooldowns(current_date)
+        if active_cooldowns:
+            print(f"\n⏰ Active Cooldowns:")
+            for ticker, days_left in active_cooldowns:
+                print(f"   {ticker}: {days_left} day(s) remaining")
+
         print('\n')
 
         all_tickers = list(set(self.tickers + [p.symbol for p in self.get_positions()]))
@@ -90,7 +102,9 @@ class SwingTradeStrategy(Strategy):
             exit_orders=exit_orders,
             current_date=current_date,
             position_monitor=self.position_monitor,
-            profit_tracker=self.profit_tracker  # NEW: Pass profit tracker
+            profit_tracker=self.profit_tracker,
+            ticker_cooldown=self.ticker_cooldown
+
         )
 
         # =====================================================================
@@ -115,10 +129,24 @@ class SwingTradeStrategy(Strategy):
         # Track cash commitments to prevent over-purchasing
         pending_cash_commitment = 0
 
+        # Check Ticker Cooldowns
+        active_cooldowns = self.ticker_cooldown.get_all_cooldowns(current_date)
+        if active_cooldowns:
+            print(f"\n⏰ Active Cooldowns:")
+            for ticker, days_left in active_cooldowns:
+                print(f"   {ticker}: {days_left} day(s) remaining")
+
+        # Start checking each indicator
         for ticker in self.tickers:
 
             if ticker not in all_stock_data:
                 self.log_message(f"No data for {ticker}, skipping")
+                continue
+
+            # Check Cooldown Period
+            if not self.ticker_cooldown.can_buy(ticker, current_date):
+                days_left = self.ticker_cooldown.days_until_can_buy(ticker, current_date)
+                print(f" * SKIP: {ticker} - Cooldown ({days_left} days remaining)")
                 continue
 
             # Get stocks and indicators
@@ -141,14 +169,14 @@ class SwingTradeStrategy(Strategy):
                 ticker,
                 data['close'],
                 pending_commitments=pending_cash_commitment,
-                adaptive_params=adaptive_params  # NEW: Pass adaptive params
+                adaptive_params=adaptive_params  # Pass adaptive params
             )
 
             # For signal-based sells, sell 100% of position
-            sell_position = position_sizing.calculate_sell_size(self, ticker, sell_percentage=100.0)
+            # sell_position = position_sizing.calculate_sell_size(self, ticker, sell_percentage=100.0)
 
             # === SELL SIGNAL LOGIC (overrides buy) ===
-            if not sell_signal == None and sell_position['can_trade'] == True and has_position:
+            if sell_signal is not None and has_position:
 
                 # Get broker data (source of truth)
                 position = self.get_position(ticker)
@@ -163,7 +191,7 @@ class SwingTradeStrategy(Strategy):
                 # Record the trade
                 self.profit_tracker.record_trade(
                     ticker=ticker,
-                    quantity_sold=sell_position['quantity'],
+                    quantity_sold=broker_quantity,
                     entry_price=broker_entry_price,
                     exit_price=exit_price,
                     exit_date=current_date,
@@ -174,9 +202,12 @@ class SwingTradeStrategy(Strategy):
                 # Clean monitoring metadata
                 self.position_monitor.clean_position_metadata(ticker)
 
+                # Clear cooldown on signal-based full exit
+                self.ticker_cooldown.clear(ticker)
+
                 order_sig = sell_signal
                 order_sig['ticker'] = ticker
-                order_sig['quantity'] = sell_position['quantity']
+                order_sig['quantity'] = broker_quantity
                 signal_sell_orders.append(order_sig)
 
             # === BUY SIGNAL LOGIC ===
@@ -229,7 +260,22 @@ class SwingTradeStrategy(Strategy):
                     print(10 * ' ' + f"--> Price: ${order['limit_price']:.2f} | Value: ${order['position_value']:,.2f}")
                     self.submit_order(submit_order)
 
+                    # Record buy in cooldown tracker
+                    self.ticker_cooldown.record_buy(order['ticker'], current_date)
+
     def on_strategy_end(self):
         self.profit_tracker.display_final_summary()
+
+        # Display cooldown statistics
+        cooldown_stats = self.ticker_cooldown.get_statistics()
+        print(f"\n{'=' * 80}")
+        print(f"⏰ TICKER COOLDOWN STATISTICS")
+        print(f"{'=' * 80}")
+        print(f"Cooldown Period: {cooldown_stats['cooldown_days']} days")
+        print(f"Total Buys Recorded: {cooldown_stats['total_buys_recorded']}")
+        print(f"\nBuy Count by Ticker:")
+        for ticker, count in list(cooldown_stats['buy_count_by_ticker'].items())[:10]:
+            print(f"   {ticker}: {count} purchases")
+        print(f"{'=' * 80}\n")
 
         return 0

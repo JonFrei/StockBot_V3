@@ -564,13 +564,13 @@ def take_profit_method_1(data):
 
 BUY_STRATEGIES = {
     # NEW SIGNALS (High Priority)
-    'momentum_breakout': momentum_breakout,  # NEW - Highest conviction
-    'consolidation_breakout': consolidation_breakout,  # NEW - Lower risk breakouts
-    'gap_up_continuation': gap_up_continuation,  # NEW - Opportunistic
+    'momentum_breakout': momentum_breakout,
+    'consolidation_breakout': consolidation_breakout,
+    'gap_up_continuation': gap_up_continuation,
 
     # EXISTING SIGNALS (Optimized)
-    'swing_trade_1': swing_trade_1,  # IMPROVED - 74% win rate
-    'swing_trade_2': swing_trade_2,  # IMPROVED - Tightened criteria
+    'swing_trade_1': swing_trade_1,
+    'swing_trade_2': swing_trade_2,
 
     # LEGACY SIGNALS (Not actively used)
     'golden_cross': golden_cross,

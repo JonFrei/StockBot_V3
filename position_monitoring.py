@@ -550,7 +550,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
     return exit_orders
 
 
-def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, profit_tracker):
+def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, profit_tracker, ticker_cooldown=None):
     """
     Execute exit orders using BROKER data for P&L calculation
 
@@ -561,7 +561,8 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
         exit_orders: List of exit order dicts
         current_date: Current date
         position_monitor: PositionMonitor instance
-        profit_tracker: ProfitTracker instance (NEW)
+        profit_tracker: ProfitTracker instance
+        ticker_cooldown: TickerCooldown instance (optional, NEW)
     """
 
     for order in exit_orders:
@@ -649,6 +650,11 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
 
             # Clean metadata
             position_monitor.clean_position_metadata(ticker)
+
+            # NEW: Clear cooldown so ticker can be bought again
+            if ticker_cooldown:
+                ticker_cooldown.clear(ticker)
+                print(f" * ⏰ COOLDOWN CLEARED: {ticker} (can buy again immediately if signal appears)")
 
             # Execute sell
             sell_order = strategy.create_order(ticker, sell_quantity, 'sell')
