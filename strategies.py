@@ -98,7 +98,15 @@ class SwingTradeStrategy(Strategy):
         # =====================================================================
 
         # Help to customize strategies
-        buy_signal_list = ['swing_trade_1', 'swing_trade_2']
+        buy_signal_list = [
+            'momentum_breakout',
+            'consolidation_breakout',
+            'swing_trade_1',
+            'gap_up_continuation',
+            'swing_trade_2',
+            'bollinger_buy',
+            'golden_cross'
+        ]
         sell_signal_list = ['take_profit_method_1', 'bollinger_sell']
 
         buy_orders = []
