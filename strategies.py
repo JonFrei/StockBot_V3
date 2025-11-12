@@ -22,30 +22,36 @@ class SwingTradeStrategy(Strategy):
             self.sleeptime = "10M"
         self.tickers = self.parameters.get("tickers", [])
 
-        # Initialize position tracking (for P&L reporting)
-        self.position_tracking = profit_tracking.ProfitTracker(self)
+        # SIMPLIFIED: Tracker just logs completed trades
+        self.profit_tracker = profit_tracking.ProfitTracker(self)
 
-        # Initialize position monitoring (for exits)
+        # Position monitoring (for exits + market condition caching)
         self.position_monitor = position_monitoring.PositionMonitor(self)
 
     def before_starting_trading(self):
-        """Runs once before trading starts - sync existing positions from Alpaca"""
-        # if Config.BACKTESTING:
-        # print("\n[SYNC] Loading existing positions from broker...")
+        """
+        Sync existing positions - SIMPLIFIED
+        Just track metadata, broker has quantity/price
+        """
+        if Config.BACKTESTING:
+            return
+
         try:
             broker_positions = self.get_positions()
 
-            if len(broker_positions) > 1:
+            if len(broker_positions) > 0:
                 for position in broker_positions:
                     ticker = position.symbol
-                    quantity = int(position.quantity)
-                    entry_price = float(position.avg_fill_price)
 
                     if ticker in self.tickers:
-                        self.position_tracking.record_position(ticker, quantity, entry_price, 'pre_existing')
-                        # print(f"  Synced {ticker}: {quantity} shares @ ${entry_price:.2f}")
+                        # Just track metadata (no quantity/price needed)
+                        self.position_monitor.track_position(
+                            ticker,
+                            self.get_datetime(),
+                            'pre_existing'
+                        )
 
-                print(f"[SYNC] Loaded {len(self.position_tracking.positions)} positions")
+                print(f"[SYNC] Loaded {len(self.position_monitor.positions_metadata)} positions\n")
 
         except Exception as e:
             print(f"[ERROR] Failed to sync positions: {e}")
@@ -55,11 +61,13 @@ class SwingTradeStrategy(Strategy):
             return
 
         current_date = self.get_datetime()
-        # print('\n')
+        current_date_str = current_date.strftime('%Y-%m-%d')
+
+        print('\n')
         print(30 * '=' + ' Date: ' + str(current_date) + ' ' + 30 * '=')
         print('Portfolio Value:', self.portfolio_value)
         print('Cash Balance:', self.get_cash())
-        # print('\n')
+        print('\n')
 
         all_tickers = list(set(self.tickers + [p.symbol for p in self.get_positions()]))
         all_stock_data = stock_data.process_data(self.tickers, current_date)
@@ -68,7 +76,7 @@ class SwingTradeStrategy(Strategy):
         # STEP 1: CHECK ALL EXISTING POSITIONS FOR EXITS (HIGHEST PRIORITY)
         # =====================================================================
 
-        # Check positions and get exit orders (pure calculation)
+        # Check positions and get exit orders (uses adaptive parameters)
         exit_orders = position_monitoring.check_positions_for_exits(
             strategy=self,
             current_date=current_date,
@@ -76,14 +84,13 @@ class SwingTradeStrategy(Strategy):
             position_monitor=self.position_monitor
         )
 
-        # Execute all exit orders (handles orders, tracking, cleanup)
+        # Execute all exit orders
         position_monitoring.execute_exit_orders(
             strategy=self,
             exit_orders=exit_orders,
             current_date=current_date,
-            all_stock_data=all_stock_data,
-            position_tracking=self.position_tracking,
-            position_monitor=self.position_monitor
+            position_monitor=self.position_monitor,
+            profit_tracker=self.profit_tracker  # NEW: Pass profit tracker
         )
 
         # =====================================================================
@@ -101,7 +108,6 @@ class SwingTradeStrategy(Strategy):
         pending_cash_commitment = 0
 
         for ticker in self.tickers:
-            # print('Ticker: ', ticker)
 
             if ticker not in all_stock_data:
                 self.log_message(f"No data for {ticker}, skipping")
@@ -109,8 +115,11 @@ class SwingTradeStrategy(Strategy):
 
             # Get stocks and indicators
             data = all_stock_data[ticker]['indicators']
-            # print('Stock data: ', data)
-            # print('\n')
+
+            # === GET ADAPTIVE PARAMETERS (Cached Daily) ===
+            adaptive_params = self.position_monitor.get_cached_market_conditions(
+                ticker, current_date_str, data
+            )
 
             # Get buy/sell signal
             buy_signal = signals.buy_signals(data, buy_signal_list)
@@ -118,13 +127,13 @@ class SwingTradeStrategy(Strategy):
 
             has_position = ticker in self.positions
 
-            # Size position to sell
-            # Size position to buy/sell - PASS PENDING COMMITMENTS
+            # Size position to buy - PASS ADAPTIVE PARAMETERS
             buy_position = position_sizing.calculate_buy_size(
                 self,
                 ticker,
                 data['close'],
-                pending_commitments=pending_cash_commitment
+                pending_commitments=pending_cash_commitment,
+                adaptive_params=adaptive_params  # NEW: Pass adaptive params
             )
 
             # For signal-based sells, sell 100% of position
@@ -132,16 +141,28 @@ class SwingTradeStrategy(Strategy):
 
             # === SELL SIGNAL LOGIC (overrides buy) ===
             if not sell_signal == None and sell_position['can_trade'] == True and has_position:
+
+                # Get broker data (source of truth)
+                position = self.get_position(ticker)
+                broker_quantity = int(position.quantity)
+                broker_entry_price = float(position.avg_fill_price)
                 exit_price = data['close']
 
-                # Record and display realized P&L
-                self.position_tracking.close_position(
+                # Get entry signal from metadata
+                metadata = self.position_monitor.get_position_metadata(ticker)
+                entry_signal = metadata.get('entry_signal', 'pre_existing') if metadata else 'pre_existing'
+
+                # Record the trade
+                self.profit_tracker.record_trade(
                     ticker=ticker,
+                    quantity_sold=sell_position['quantity'],
+                    entry_price=broker_entry_price,
                     exit_price=exit_price,
                     exit_date=current_date,
-                    exit_signal=sell_signal,
-                    quantity_sold=sell_position['quantity']  # Pass actual sold quantity
+                    entry_signal=entry_signal,
+                    exit_signal=sell_signal
                 )
+
                 # Clean monitoring metadata
                 self.position_monitor.clean_position_metadata(ticker)
 
@@ -153,11 +174,11 @@ class SwingTradeStrategy(Strategy):
             # === BUY SIGNAL LOGIC ===
             elif buy_signal is not None and buy_position['can_trade'] is True:
 
-                # Record position
-                self.position_tracking.record_position(
+                # SIMPLIFIED: Just track that we have a position with entry signal
+                # Broker will track quantity and entry price
+                self.position_monitor.track_position(
                     ticker,
-                    buy_position['quantity'],
-                    data['close'],
+                    current_date,
                     buy_signal.get('signal_type', 'unknown')
                 )
 
@@ -165,24 +186,14 @@ class SwingTradeStrategy(Strategy):
                 order_sig['ticker'] = ticker
                 order_sig['stop_loss'] = 0.90 * data['close']
                 order_sig['quantity'] = buy_position['quantity']
-                order_sig['position_value'] = buy_position['position_value']  # Track value
+                order_sig['position_value'] = buy_position['position_value']
+                order_sig['condition'] = adaptive_params['condition_label']  # Add condition
                 buy_orders.append(order_sig)
 
                 # ADD COMMITMENT to prevent over-purchasing
                 pending_cash_commitment += buy_position['position_value']
-                print(f" * PENDING BUY: {ticker} x{buy_position['quantity']} = ${buy_position['position_value']:,.2f} | Total pending: ${pending_cash_commitment:,.2f}")
-
-        # Summary of pending orders
-        '''
-        if len(buy_orders) > 0:
-            print(f"\n{'='*60}")
-            print(f"📊 ORDER SUMMARY - {len(buy_orders)} buy order(s)")
-            print(f"{'='*60}")
-            print(f"Total Cash Commitment: ${pending_cash_commitment:,.2f}")
-            print(f"Cash Before Orders: ${self.get_cash():,.2f}")
-            print(f"Cash After Orders: ${self.get_cash() - pending_cash_commitment:,.2f}")
-            print(f"{'='*60}\n")
-        '''
+                print(
+                    f" * PENDING BUY: {ticker} x{buy_position['quantity']} {adaptive_params['condition_label']} = ${buy_position['position_value']:,.2f}")
 
         # Submit sell orders first
         if len(signal_sell_orders) > 0:
@@ -190,19 +201,27 @@ class SwingTradeStrategy(Strategy):
                 if order['side'] == 'sell':
                     submit_order = self.create_order(order['ticker'], order['quantity'], order['side'])
                     print(' * SIGNAL SELL: ' + str(submit_order) + ' | Signal: ' + str(order['signal_type']))
-                    print(10 * ' ' + '--> | Price: ' + str(order['limit_price']) + ' | ')
+                    print(10 * ' ' + '--> | Price: ' + str(order['limit_price']))
                     self.submit_order(submit_order)
 
         # Then submit buy orders
         if len(buy_orders) > 0:
+            print(f"\n{'=' * 70}")
+            print(f"📊 BUY ORDERS SUMMARY - {len(buy_orders)} order(s)")
+            print(f"{'=' * 70}")
+            print(f"Total Cash Commitment: ${pending_cash_commitment:,.2f}")
+            print(f"Cash After Orders: ${self.get_cash() - pending_cash_commitment:,.2f}")
+            print(f"{'=' * 70}\n")
+
             for order in buy_orders:
                 if order['side'] == 'buy':
                     submit_order = self.create_order(order['ticker'], order['quantity'], order['side'])
-                    print(' * BUY ORDER: ' + str(submit_order) + ' | Signal: ' + str(order['signal_type']))
-                    print(10 * ' ' + '--> | Price: ' + str(order['limit_price']) + ' | ')
+                    print(
+                        f" * BUY: {order['ticker']} x{order['quantity']} {order['condition']} | {order['signal_type']}")
+                    print(10 * ' ' + f"--> Price: ${order['limit_price']:.2f} | Value: ${order['position_value']:,.2f}")
                     self.submit_order(submit_order)
 
     def on_strategy_end(self):
-        self.position_tracking.display_final_summary()
+        self.profit_tracker.display_final_summary()
 
         return 0

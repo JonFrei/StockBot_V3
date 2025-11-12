@@ -1,172 +1,86 @@
 """
-Profit Tracking System - Records and reports realized P&L
+Profit Tracking System - SIMPLIFIED
+
+Just logs closed trades for reporting.
+Does NOT track positions (broker already does that).
+
+Key Fix: Uses broker data for all P&L calculations - no accumulation bugs
 """
 
 from datetime import datetime
 
 
 class ProfitTracker:
-    """Tracks position entries and exits for P&L reporting"""
+    """
+    Simplified tracker - just records closed trades
+    No position tracking (broker handles that)
+    """
 
     def __init__(self, strategy):
         self.strategy = strategy
-        self.positions = {}  # {ticker: {'quantity': int, 'entry_price': float, ...}}
-        self.closed_positions = []  # List of closed position dicts
+        self.closed_trades = []  # List of completed trades
 
-    def record_position(self, ticker, quantity, entry_price, signal_type):
-        """Record a new position or add to existing"""
-        if ticker not in self.positions:
-            self.positions[ticker] = {
-                'quantity': quantity,
-                'entry_price': entry_price,
-                'signal_type': signal_type,
-                'entry_date': datetime.now()
-            }
-        else:
-            # Adding to existing position - calculate new average entry
-            existing = self.positions[ticker]
-            total_quantity = existing['quantity'] + quantity
-            total_cost = (existing['quantity'] * existing['entry_price']) + (quantity * entry_price)
-            new_avg_entry = total_cost / total_quantity
-
-            self.positions[ticker] = {
-                'quantity': total_quantity,
-                'entry_price': new_avg_entry,
-                'signal_type': signal_type,
-                'entry_date': existing['entry_date']
-            }
-
-    def close_position(self, ticker, exit_price, exit_date, exit_signal, quantity_sold=None):
+    def record_trade(self, ticker, quantity_sold, entry_price, exit_price,
+                     exit_date, entry_signal, exit_signal):
         """
-        Record position close and calculate realized P&L
+        Record a completed trade (full or partial exit)
 
         Args:
             ticker: Stock symbol
-            exit_price: Exit price per share
+            quantity_sold: Number of shares sold
+            entry_price: Average entry price (from broker)
+            exit_price: Exit price
             exit_date: Exit date
-            exit_signal: Dict with signal info
-            quantity_sold: Number of shares sold (None = sell entire position)
+            entry_signal: Entry signal type
+            exit_signal: Exit signal info dict
         """
-        if ticker not in self.positions:
-            return
-
-        position = self.positions[ticker]
-
-        # If no quantity specified, assume selling entire position
-        if quantity_sold is None:
-            quantity_sold = position['quantity']
-
-        # Calculate P&L only on shares actually sold
-        pnl_per_share = exit_price - position['entry_price']
+        # Calculate P&L
+        pnl_per_share = exit_price - entry_price
         total_pnl = pnl_per_share * quantity_sold
-        pnl_pct = (pnl_per_share / position['entry_price'] * 100)
+        pnl_pct = (pnl_per_share / entry_price * 100) if entry_price > 0 else 0
 
-        # Record closed position
-        closed_position = {
+        # Record trade
+        trade = {
             'ticker': ticker,
             'quantity': quantity_sold,
-            'entry_price': position['entry_price'],
+            'entry_price': entry_price,
             'exit_price': exit_price,
             'pnl_dollars': total_pnl,
             'pnl_pct': pnl_pct,
-            'entry_signal': position['signal_type'],
-            'exit_signal': exit_signal.get('signal_type', exit_signal.get('msg', 'unknown')),
-            'entry_date': position['entry_date'],
+            'entry_signal': entry_signal,
+            'exit_signal': exit_signal.get('reason', 'unknown'),
             'exit_date': exit_date
         }
 
-        self.closed_positions.append(closed_position)
+        self.closed_trades.append(trade)
 
-        # Display immediate P&L
+        # Display immediate feedback
         emoji = "✅" if total_pnl > 0 else "❌"
-
-        # Check if this is a partial or full exit
-        if quantity_sold < position['quantity']:
-            remaining = position['quantity'] - quantity_sold
-            print(
-                f"\n{emoji} PARTIAL EXIT: {ticker} | ${total_pnl:+,.2f} ({pnl_pct:+.1f}%) | Sold {quantity_sold}/{position['quantity']} shares @ ${exit_price:.2f} | Remaining: {remaining}")
-            # Update position with remaining shares
-            position['quantity'] = remaining
-        else:
-            print(
-                f"\n{emoji} CLOSED: {ticker} | ${total_pnl:+,.2f} ({pnl_pct:+.1f}%) | {quantity_sold} shares @ ${position['entry_price']:.2f} → ${exit_price:.2f}")
-            # Remove from active positions
-            del self.positions[ticker]
-
-    def record_partial_exit(self, ticker, sell_quantity, exit_price, exit_date, exit_signal):
-        """
-        Record partial position exit (e.g., selling 75% at profit target)
-
-        Args:
-            ticker: Stock symbol
-            sell_quantity: Number of shares sold
-            exit_price: Exit price per share
-            exit_date: Exit date
-            exit_signal: Dict with signal info
-        """
-        if ticker not in self.positions:
-            print(f"⚠️ WARNING: Attempted to record partial exit for {ticker} but no position found")
-            return
-
-        position = self.positions[ticker]
-
-        # Calculate P&L for sold portion
-        pnl_per_share = exit_price - position['entry_price']
-        total_pnl = pnl_per_share * sell_quantity
-        pnl_pct = (pnl_per_share / position['entry_price'] * 100)
-
-        # Record as closed position
-        closed_position = {
-            'ticker': ticker,
-            'quantity': sell_quantity,
-            'entry_price': position['entry_price'],
-            'exit_price': exit_price,
-            'pnl_dollars': total_pnl,
-            'pnl_pct': pnl_pct,
-            'entry_signal': position['signal_type'],
-            'exit_signal': exit_signal.get('signal_type', exit_signal.get('msg', 'partial_exit')),
-            'entry_date': position['entry_date'],
-            'exit_date': exit_date,
-            'partial': True  # Flag to indicate this was a partial exit
-        }
-
-        self.closed_positions.append(closed_position)
-
-        # Display immediate P&L
-        emoji = "✅" if total_pnl > 0 else "❌"
-        remaining_qty = position['quantity'] - sell_quantity
         print(
-            f"\n{emoji} PARTIAL EXIT: {ticker} | ${total_pnl:+,.2f} ({pnl_pct:+.1f}%) | Sold {sell_quantity}/{position['quantity']} shares @ ${exit_price:.2f} | Remaining: {remaining_qty}")
-
-        # Update position (reduce quantity, keep entry price)
-        self.positions[ticker]['quantity'] -= sell_quantity
-
-        # If position is now zero, remove it
-        if self.positions[ticker]['quantity'] <= 0:
-            del self.positions[ticker]
+            f"\n{emoji} TRADE CLOSED: {ticker} | ${total_pnl:+,.2f} ({pnl_pct:+.1f}%) | {quantity_sold} shares @ ${entry_price:.2f} → ${exit_price:.2f}")
 
     def display_final_summary(self):
-        """Display comprehensive P&L summary at end of backtest"""
-        if not self.closed_positions:
-            print("\n📊 No closed positions to report")
+        """Display P&L summary at end of backtest"""
+        if not self.closed_trades:
+            print("\n📊 No closed trades to report")
             return
 
         # Calculate summary stats
-        winners = [p for p in self.closed_positions if p['pnl_dollars'] > 0]
-        losers = [p for p in self.closed_positions if p['pnl_dollars'] < 0]
+        winners = [t for t in self.closed_trades if t['pnl_dollars'] > 0]
+        losers = [t for t in self.closed_trades if t['pnl_dollars'] < 0]
 
-        total_realized = sum(p['pnl_dollars'] for p in self.closed_positions)
-        win_rate = (len(winners) / len(self.closed_positions) * 100) if self.closed_positions else 0
+        total_realized = sum(t['pnl_dollars'] for t in self.closed_trades)
+        win_rate = (len(winners) / len(self.closed_trades) * 100) if self.closed_trades else 0
 
-        avg_win = sum(p['pnl_dollars'] for p in winners) / len(winners) if winners else 0
-        avg_loss = sum(p['pnl_dollars'] for p in losers) / len(losers) if losers else 0
+        avg_win = sum(t['pnl_dollars'] for t in winners) / len(winners) if winners else 0
+        avg_loss = sum(t['pnl_dollars'] for t in losers) / len(losers) if losers else 0
 
         # Display summary
         print(f"\n{'=' * 80}")
         print(f"📊 FINAL P&L SUMMARY")
         print(f"{'=' * 80}\n")
 
-        print(f"📈 CLOSED POSITIONS: {len(self.closed_positions)} trades")
+        print(f"📈 CLOSED TRADES: {len(self.closed_trades)} trades")
         print(f"   Winners: {len(winners)} trades")
         print(f"   Losers:  {len(losers)} trades")
         print(f"   Win Rate: {win_rate:.1f}%")
@@ -174,42 +88,24 @@ class ProfitTracker:
         print(f"   Avg Win: ${avg_win:,.2f}")
         print(f"   Avg Loss: ${avg_loss:,.2f}")
 
-        # === NEW: SIGNAL PERFORMANCE BREAKDOWN ===
+        # Signal performance breakdown
         self._display_signal_performance()
 
         # Display individual trades
         print(f"\n📋 Trade Details:")
-        for p in self.closed_positions:
-            print(
-                f"   {p['ticker']:6} | ${p['pnl_dollars']:+9,.2f} ({p['pnl_pct']:+6.2f}%) | {p['entry_signal']:15} → {p['exit_signal']:15} ")
+        for t in self.closed_trades[-50:]:  # Show last 50 trades
+            print(f"   {t['ticker']:6} | ${t['pnl_dollars']:+9,.2f} ({t['pnl_pct']:+6.2f}%) | "
+                  f"{t['entry_signal']:15} → {t['exit_signal']:20}")
 
-        # Display open positions
-        if self.positions:
-            print(f"\n📊 OPEN POSITIONS: {len(self.positions)}")
-            total_unrealized = 0
-
-            for ticker, pos in self.positions.items():
-                try:
-                    current_price = self.strategy.get_last_price(ticker)
-                    unrealized_pnl = (current_price - pos['entry_price']) * pos['quantity']
-                    unrealized_pct = ((current_price - pos['entry_price']) / pos['entry_price'] * 100)
-                    total_unrealized += unrealized_pnl
-
-                    print(
-                        f"   {ticker:6} | {pos['quantity']} shares @ ${pos['entry_price']:7.2f} | Current: ${current_price:7.2f} | P&L: ${unrealized_pnl:+9,.2f} ({unrealized_pct:+6.2f}%)")
-                except:
-                    print(
-                        f"   {ticker:6} | {pos['quantity']} shares @ ${pos['entry_price']:7.2f} | (price unavailable)")
-
-            print(f"\n   Total Unrealized P&L: ${total_unrealized:+,.2f}")
+        # Display open positions from broker
+        self._display_open_positions()
 
         print(f"\n{'=' * 80}\n")
 
     def _display_signal_performance(self):
-        """Display performance breakdown by entry signal type"""
+        """Display performance breakdown by entry signal"""
         from collections import defaultdict
 
-        # Group trades by entry signal
         signal_stats = defaultdict(lambda: {
             'trades': [],
             'wins': 0,
@@ -217,21 +113,19 @@ class ProfitTracker:
             'total_pnl': 0.0
         })
 
-        for pos in self.closed_positions:
-            signal = pos['entry_signal']
-            signal_stats[signal]['trades'].append(pos)
-            signal_stats[signal]['total_pnl'] += pos['pnl_dollars']
+        for trade in self.closed_trades:
+            signal = trade['entry_signal']
+            signal_stats[signal]['trades'].append(trade)
+            signal_stats[signal]['total_pnl'] += trade['pnl_dollars']
 
-            if pos['pnl_dollars'] > 0:
+            if trade['pnl_dollars'] > 0:
                 signal_stats[signal]['wins'] += 1
             else:
                 signal_stats[signal]['losses'] += 1
 
-        # Display breakdown
         print(f"\n🎯 PERFORMANCE BY ENTRY SIGNAL:")
         print(f"{'─' * 80}")
 
-        # Sort by total P&L (best performing first)
         sorted_signals = sorted(signal_stats.items(), key=lambda x: x[1]['total_pnl'], reverse=True)
 
         for signal_name, stats in sorted_signals:
@@ -239,9 +133,8 @@ class ProfitTracker:
             win_rate = (stats['wins'] / total_trades * 100) if total_trades > 0 else 0
             avg_pnl = stats['total_pnl'] / total_trades if total_trades > 0 else 0
 
-            # Calculate average win and loss for this signal
-            wins = [p['pnl_dollars'] for p in stats['trades'] if p['pnl_dollars'] > 0]
-            losses = [p['pnl_dollars'] for p in stats['trades'] if p['pnl_dollars'] < 0]
+            wins = [t['pnl_dollars'] for t in stats['trades'] if t['pnl_dollars'] > 0]
+            losses = [t['pnl_dollars'] for t in stats['trades'] if t['pnl_dollars'] < 0]
 
             avg_win = sum(wins) / len(wins) if wins else 0
             avg_loss = sum(losses) / len(losses) if losses else 0
@@ -255,3 +148,37 @@ class ProfitTracker:
             print(f"      Avg Loss: ${avg_loss:,.2f}")
 
         print(f"\n{'─' * 80}")
+
+    def _display_open_positions(self):
+        """Display current open positions from broker"""
+        try:
+            positions = self.strategy.get_positions()
+
+            if not positions or len(positions) == 0:
+                print(f"\n📊 No open positions")
+                return
+
+            print(f"\n📊 OPEN POSITIONS: {len(positions)}")
+            total_unrealized = 0
+
+            for position in positions:
+                ticker = position.symbol
+                quantity = int(position.quantity)
+                entry_price = float(position.avg_fill_price)
+
+                try:
+                    current_price = self.strategy.get_last_price(ticker)
+                    unrealized_pnl = (current_price - entry_price) * quantity
+                    unrealized_pct = ((current_price - entry_price) / entry_price * 100)
+                    total_unrealized += unrealized_pnl
+
+                    print(f"   {ticker:6} | {quantity:,} shares @ ${entry_price:7.2f} | "
+                          f"Current: ${current_price:7.2f} | "
+                          f"P&L: ${unrealized_pnl:+,.2f} ({unrealized_pct:+.1f}%)")
+                except:
+                    print(f"   {ticker:6} | {quantity:,} shares @ ${entry_price:7.2f} | "
+                          f"(price unavailable)")
+
+            print(f"\n   Total Unrealized P&L: ${total_unrealized:+,.2f}")
+        except Exception as e:
+            print(f"\n⚠️ Could not retrieve open positions: {e}")

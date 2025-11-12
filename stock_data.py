@@ -66,6 +66,15 @@ def process_data(symbols, current_date):
         # Calculate ATR (14 period)
         temp_data['indicators']['atr_14'] = round(float(indicators.get_atr(df, period=14)), 2)
 
+        # === NEW: Calculate MACD ===
+        macd_data = indicators.get_macd(df)
+        temp_data['indicators']['macd'] = round(float(macd_data['macd']), 4)
+        temp_data['indicators']['macd_signal'] = round(float(macd_data['macd_signal']), 4)
+        temp_data['indicators']['macd_histogram'] = round(float(macd_data['macd_histogram']), 4)
+
+        # === NEW: Calculate ADX ===
+        temp_data['indicators']['adx'] = round(float(indicators.get_adx(df, period=14)), 2)
+
         # Add current price data
         temp_data['indicators']['close'] = round(float(df['close'].iloc[-1]), 2)
         temp_data['indicators']['open'] = round(float(df['open'].iloc[-1]), 2)

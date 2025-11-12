@@ -59,22 +59,24 @@ def check_position_concentration(strategy, ticker, new_position_value, max_conce
     }
 
 
-def calculate_buy_size(strategy, ticker, entry_price, account_threshold=40000, max_position_pct=12.0, pending_commitments=0):
+def calculate_buy_size(strategy, ticker, entry_price, account_threshold=40000,
+                       max_position_pct=12.0, pending_commitments=0, adaptive_params=None):
     """
-    Calculate position size based on available cash
+    Calculate position size based on available cash - NOW ADAPTIVE
 
-    Rules:
-    1. Don't trade if cash < threshold ($20,000)
-    2. Max position = 15% of cash balance
-    3. Must ensure we can afford it
-    4. Must ensure purchase won't drop us below threshold
+    Adaptive behavior:
+    - STRONG conditions: Use 15% position sizes (more aggressive)
+    - NEUTRAL conditions: Use 12% position sizes (standard)
+    - WEAK conditions: Use 10% position sizes (more conservative)
 
     Args:
         strategy: Lumibot Strategy object (to access portfolio)
         ticker: Stock symbol
         entry_price: Price per share
-        account_threshold: Minimum cash to keep in account (default $20,000)
-        max_position_pct: Maximum % of cash to use (default 15%)
+        account_threshold: Minimum cash to keep in account (default $40,000)
+        max_position_pct: Maximum % of cash to use (default 12%, overridden by adaptive_params)
+        pending_commitments: Cash already committed to pending orders
+        adaptive_params: Dict with 'position_size_pct' from market conditions (NEW)
 
     Returns:
         dict: {
@@ -85,6 +87,13 @@ def calculate_buy_size(strategy, ticker, entry_price, account_threshold=40000, m
             'message': str
         }
     """
+    # === USE ADAPTIVE POSITION SIZE IF PROVIDED ===
+    if adaptive_params and 'position_size_pct' in adaptive_params:
+        max_position_pct = adaptive_params['position_size_pct']
+        condition_label = adaptive_params.get('condition_label', '')
+    else:
+        condition_label = ''
+
     # Get cash balance from strategy
     cash_balance = strategy.get_cash()
 
@@ -122,8 +131,7 @@ def calculate_buy_size(strategy, ticker, entry_price, account_threshold=40000, m
             'message': f'No available cash after threshold'
         }
 
-    # Calculate max position value (12% of ORIGINAL cash balance, not effective)
-    # This ensures position sizes are consistent regardless of order sequence
+    # Calculate max position value using ADAPTIVE percentage
     max_position_value = cash_balance * (max_position_pct / 100)
 
     # Can't use more than available cash
@@ -158,7 +166,7 @@ def calculate_buy_size(strategy, ticker, entry_price, account_threshold=40000, m
         'position_value': round(actual_position_value, 2),
         'remaining_cash': round(remaining_cash, 2),
         'can_trade': True,
-        'message': f'{quantity} shares @ ${entry_price:.2f} (pending: ${pending_commitments:,.2f})'
+        'message': f'{quantity} shares @ ${entry_price:.2f} ({max_position_pct:.0f}% {condition_label})'
     }
 
 

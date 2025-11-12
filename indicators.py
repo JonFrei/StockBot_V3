@@ -140,3 +140,103 @@ def get_atr_stop_loss(current_price, atr, atr_multiplier=2.0, min_pct=3.0, max_p
     stop_price = max(min_stop, min(stop_price, max_stop))
 
     return round(stop_price, 2)
+
+
+def get_macd(df, fast_period=12, slow_period=26, signal_period=9):
+    """
+    Calculate MACD (Moving Average Convergence Divergence)
+
+    MACD measures momentum and trend direction
+    - MACD line = 12 EMA - 26 EMA
+    - Signal line = 9 EMA of MACD line
+    - Histogram = MACD line - Signal line
+
+    Args:
+        df: DataFrame with 'close' column
+        fast_period: Fast EMA period (default 12)
+        slow_period: Slow EMA period (default 26)
+        signal_period: Signal line EMA period (default 9)
+
+    Returns:
+        dict: {
+            'macd': float,
+            'macd_signal': float,
+            'macd_histogram': float
+        }
+    """
+    if len(df) < slow_period + signal_period:
+        return {'macd': 0, 'macd_signal': 0, 'macd_histogram': 0}
+
+    close = df['close']
+
+    # Calculate fast and slow EMAs
+    ema_fast = close.ewm(span=fast_period, adjust=False).mean()
+    ema_slow = close.ewm(span=slow_period, adjust=False).mean()
+
+    # MACD line = Fast EMA - Slow EMA
+    macd_line = ema_fast - ema_slow
+
+    # Signal line = 9-period EMA of MACD line
+    signal_line = macd_line.ewm(span=signal_period, adjust=False).mean()
+
+    # Histogram = MACD - Signal
+    histogram = macd_line - signal_line
+
+    # Return most recent values
+    return {
+        'macd': macd_line.iloc[-1],
+        'macd_signal': signal_line.iloc[-1],
+        'macd_histogram': histogram.iloc[-1]
+    }
+
+
+def get_adx(df, period=14):
+    """
+    Calculate ADX (Average Directional Index)
+
+    ADX measures trend strength (not direction)
+    - ADX > 25: Strong trend
+    - ADX < 20: Weak/choppy trend
+    - Rising ADX: Strengthening trend
+    - Falling ADX: Weakening trend
+
+    Args:
+        df: DataFrame with 'high', 'low', 'close' columns
+        period: Lookback period (default 14)
+
+    Returns:
+        float: ADX value (0-100)
+    """
+    if len(df) < period * 2:
+        return 0
+
+    high = df['high']
+    low = df['low']
+    close = df['close']
+
+    # Calculate +DM and -DM
+    high_diff = high.diff()
+    low_diff = -low.diff()
+
+    plus_dm = high_diff.where((high_diff > low_diff) & (high_diff > 0), 0)
+    minus_dm = low_diff.where((low_diff > high_diff) & (low_diff > 0), 0)
+
+    # Calculate True Range
+    prev_close = close.shift(1)
+    tr1 = high - low
+    tr2 = (high - prev_close).abs()
+    tr3 = (low - prev_close).abs()
+    true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+    # Smooth the values using Wilder's smoothing (EMA with alpha = 1/period)
+    atr = true_range.ewm(alpha=1 / period, adjust=False).mean()
+    plus_di = 100 * (plus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr)
+    minus_di = 100 * (minus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr)
+
+    # Calculate DX (Directional Index)
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
+
+    # ADX is smoothed DX
+    adx = dx.ewm(alpha=1 / period, adjust=False).mean()
+
+    return adx.iloc[-1] if len(adx) > 0 else 0
