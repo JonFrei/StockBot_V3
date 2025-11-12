@@ -6,7 +6,7 @@ Combines:
 - Simplified tracking (broker is source of truth for qty/price)
 - Daily caching of market conditions
 - 80/20 rule exits with adaptive thresholds
-- Max holding period (60 days)
+- Max holding period (120 days with momentum exception)
 - Tighter trailing stops for large gains (>50%)
 
 Key Fix: Uses broker data for all quantity and entry price calculations
@@ -36,7 +36,7 @@ class AdaptiveExitConfig:
     STRONG_PROFIT_TARGET_2 = 32.0  # Higher second target
     STRONG_PROFIT_TARGET_2_SELL = 35.0  # Sell less
     STRONG_TRAILING_STOP = 11.0  # Wider trail
-    STRONG_POSITION_SIZE_PCT = 15.0  # Larger positions
+    STRONG_POSITION_SIZE_PCT = 18.0  # UPDATED: 15.0 → 18.0 (+20%)
 
     # === NEUTRAL CONDITIONS (Score 4-6) ===
     NEUTRAL_EMERGENCY_STOP = -5.0
@@ -45,7 +45,7 @@ class AdaptiveExitConfig:
     NEUTRAL_PROFIT_TARGET_2 = 25.0
     NEUTRAL_PROFIT_TARGET_2_SELL = 40.0
     NEUTRAL_TRAILING_STOP = 8.0
-    NEUTRAL_POSITION_SIZE_PCT = 12.0
+    NEUTRAL_POSITION_SIZE_PCT = 14.0  # UPDATED: 12.0 → 14.0 (+17%)
 
     # === WEAK CONDITIONS (Score 0-3) ===
     WEAK_EMERGENCY_STOP = -3.5  # Tight stop
@@ -54,7 +54,7 @@ class AdaptiveExitConfig:
     WEAK_PROFIT_TARGET_2 = 18.0  # Lower second target
     WEAK_PROFIT_TARGET_2_SELL = 45.0  # Sell more
     WEAK_TRAILING_STOP = 5.0  # Tight trail
-    WEAK_POSITION_SIZE_PCT = 10.0  # Smaller positions
+    WEAK_POSITION_SIZE_PCT = 10.0  # Keep conservative in weak conditions
 
 
 # =============================================================================
@@ -410,12 +410,15 @@ def check_trailing_stop(profit_level_2_locked, highest_price, current_price, tra
     return None
 
 
-def check_max_holding_period(position_monitor, ticker, current_date, max_days=60):
+def check_max_holding_period(position_monitor, ticker, current_date, data, max_days=120):
     """
-    NEW: Exit positions held longer than max_days
+    Exit positions held longer than max_days, UNLESS still trending strongly
 
-    Prevents holding losing or stagnant positions indefinitely
-    Default: 60 days
+    UPDATED: Changed from 60 to 120 days and added momentum exception:
+    - If stock still has strong trend (ADX > 25, above EMAs, MACD bullish), let it ride
+    - Otherwise exit to prevent stagnation
+
+    This prevents cutting off big winners like MU +65%, ORCL +52% that were still trending
     """
     metadata = position_monitor.get_position_metadata(ticker)
     if not metadata:
@@ -425,11 +428,26 @@ def check_max_holding_period(position_monitor, ticker, current_date, max_days=60
     days_held = (current_date - entry_date).days
 
     if days_held >= max_days:
+        # Get momentum indicators
+        adx = data.get('adx', 0)
+        close = data.get('close', 0)
+        ema20 = data.get('ema20', 0)
+        ema50 = data.get('ema50', 0)
+        macd = data.get('macd', 0)
+        macd_signal = data.get('macd_signal', 0)
+
+        # EXCEPTION: Strong trend = keep position (let trailing stop handle exit)
+        if (close > ema20 > ema50 and
+                adx > 25 and
+                macd > macd_signal):
+            return None  # Keep riding the trend
+
+        # Weak/broken trend = exit
         return {
             'type': 'full_exit',
             'reason': 'max_holding_period',
             'sell_pct': 100.0,
-            'message': f'⏰ Max Hold Period ({days_held} days) - Taking profits/cutting losses'
+            'message': f'⏰ Max Hold ({days_held}d) + Weakening Trend'
         }
     return None
 
@@ -445,7 +463,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
     SIMPLIFIED: Gets quantity and entry price from broker (source of truth)
 
     Exit Priority Order:
-    1. Max holding period (60 days)
+    1. Max holding period (120 days with momentum exception)
     2. Emergency stops (adaptive based on conditions)
     3. Profit taking level 1 (adaptive targets)
     4. Profit taking level 2 (adaptive targets)
@@ -496,12 +514,13 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         # === CHECK EXIT CONDITIONS (Using Adaptive Parameters) ===
         exit_signal = None
 
-        # 1. NEW: Max holding period (60 days)
+        # 1. Max holding period (120 days with momentum exception)
         exit_signal = check_max_holding_period(
             position_monitor=position_monitor,
             ticker=ticker,
             current_date=current_date,
-            max_days=60
+            data=data,
+            max_days=120
         )
 
         # 2. Emergency stop (adaptive)
@@ -525,14 +544,14 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
                 profit_level_2_locked=metadata.get('profit_level_2_locked', False)
             )
 
-        # 4. Trailing stop (adaptive distance, NEW: wider for gains > 50%)
+        # 4. Trailing stop (adaptive distance, wider for gains > 50%)
         if not exit_signal:
             exit_signal = check_trailing_stop(
                 profit_level_2_locked=metadata.get('profit_level_2_locked', False),
                 highest_price=metadata.get('highest_price', broker_entry_price),
                 current_price=current_price,
                 trail_pct=adaptive_params['trailing_stop_pct'],
-                pnl_pct=pnl_pct  # NEW: Pass P&L to adjust trail width
+                pnl_pct=pnl_pct
             )
 
         # Add to exit orders
@@ -562,7 +581,7 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
         current_date: Current date
         position_monitor: PositionMonitor instance
         profit_tracker: ProfitTracker instance
-        ticker_cooldown: TickerCooldown instance (optional, NEW)
+        ticker_cooldown: TickerCooldown instance (optional)
     """
 
     for order in exit_orders:
@@ -651,7 +670,7 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
             # Clean metadata
             position_monitor.clean_position_metadata(ticker)
 
-            # NEW: Clear cooldown so ticker can be bought again
+            # Clear cooldown so ticker can be bought again
             if ticker_cooldown:
                 ticker_cooldown.clear(ticker)
                 print(f" * ⏰ COOLDOWN CLEARED: {ticker} (can buy again immediately if signal appears)")

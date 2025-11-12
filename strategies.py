@@ -149,17 +149,18 @@ class SwingTradeStrategy(Strategy):
                 print(f" * SKIP: {ticker} - Cooldown ({days_left} days remaining)")
                 continue
 
-            # Get stocks and indicators
-            data = all_stock_data[ticker]['indicators']
+            # UPDATED: Get full data structure (has both 'indicators' and 'raw')
+            data_full = all_stock_data[ticker]
+            data = data_full['indicators']
 
             # === GET ADAPTIVE PARAMETERS (Cached Daily) ===
             adaptive_params = self.position_monitor.get_cached_market_conditions(
                 ticker, current_date_str, data
             )
 
-            # Get buy/sell signal
-            buy_signal = signals.buy_signals(data, buy_signal_list)
-            sell_signal = signals.sell_signals(data, sell_signal_list)
+            # UPDATED: Pass full data structure to signals
+            buy_signal = signals.buy_signals(data_full, buy_signal_list)
+            sell_signal = signals.sell_signals(data_full, sell_signal_list)
 
             has_position = ticker in self.positions
 

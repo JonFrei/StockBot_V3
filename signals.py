@@ -5,23 +5,50 @@ tickers = ""
 current_date = datetime.today()
 
 
-# Process which signals we want to use based on the list provided
+# =============================================================================
+# HELPER FUNCTION - Handle both data formats
+# =============================================================================
+
+def _extract_indicators(data):
+    """
+    Helper to handle both data formats:
+    - New: {'indicators': {...}, 'raw': DataFrame}
+    - Old: {...} (just indicators)
+
+    Returns: (indicators_dict, raw_dataframe or None)
+    """
+    if isinstance(data, dict) and 'indicators' in data:
+        # New format: full structure
+        return data['indicators'], data.get('raw', None)
+    else:
+        # Old format: just indicators
+        return data, None
+
+
+# =============================================================================
+# MAIN SIGNAL PROCESSORS
+# =============================================================================
+
 def buy_signals(data, buy_signal_list):
     """
     Check multiple buy strategies and return first valid signal
     Returns dict or None
     """
-    close = data['close']
-    sma200 = data['sma200']
+    # Extract indicators (handle both formats)
+    indicators, _ = _extract_indicators(data)
+
+    close = indicators['close']
+    sma200 = indicators['sma200']
+    adx = indicators.get('adx', 0)
 
     # Calculate distance from 200 SMA
     distance_from_200 = ((close - sma200) / sma200 * 100) if sma200 > 0 else -100
 
-    # Only block if MORE than 5% below 200 SMA
-    if distance_from_200 < -5.0:
+    # IMPROVED FILTER: Only block if BOTH weak price AND weak momentum
+    if close < sma200 and adx < 20:
         return {
             'side': 'hold',
-            'msg': f'🔴 Bear Market Protection Active ({distance_from_200:.1f}% below 200 SMA)',
+            'msg': f'🔴 Weak Structure (Below 200 SMA + ADX {adx:.0f} < 20)',
             'limit_price': None,
             'stop_loss': None,
             'signal_type': 'regime_filter'
@@ -81,15 +108,18 @@ def swing_trade_1(data):
     Returns:
         Dictionary with decision and trade parameters
     """
+    # Extract indicators
+    indicators, _ = _extract_indicators(data)
+
     # Get indicator values
-    ema20 = data.get('ema20', 0)
-    ema50 = data.get('ema50', 0)
-    sma200 = data.get('sma200', 0)
-    rsi = data.get('rsi', 50)
-    close = data.get('close', 0)
-    volume_ratio = data.get('volume_ratio', 0)
-    macd = data.get('macd', 0)
-    macd_signal = data.get('macd_signal', 0)
+    ema20 = indicators.get('ema20', 0)
+    ema50 = indicators.get('ema50', 0)
+    sma200 = indicators.get('sma200', 0)
+    rsi = indicators.get('rsi', 50)
+    close = indicators.get('close', 0)
+    volume_ratio = indicators.get('volume_ratio', 0)
+    macd = indicators.get('macd', 0)
+    macd_signal = indicators.get('macd_signal', 0)
 
     # Trend confirmation
     if not (ema20 > ema50):
@@ -110,8 +140,6 @@ def swing_trade_1(data):
     # NEW: MACD confirmation (momentum must be bullish)
     if macd <= macd_signal:
         return _no_setup_message('MACD not bullish')
-
-    # REMOVED: Distance check from EMA20 - too restrictive
 
     return {
         'side': 'buy',
@@ -144,16 +172,19 @@ def swing_trade_2(data):
     6. RSI 30-65 (not extreme)
     7. MACD bullish
     """
-    prev_low = data.get('prev_low', 0)
-    close = data.get('close', 0)
-    ema20 = data.get('ema20', 0)
-    ema50 = data.get('ema50', 0)
-    sma200 = data.get('sma200', 0)
-    rsi = data.get('rsi', 50)
-    volume_ratio = data.get('volume_ratio', 0)
-    daily_change_pct = data.get('daily_change_pct', 0)
-    macd = data.get('macd', 0)
-    macd_signal = data.get('macd_signal', 0)
+    # Extract indicators
+    indicators, _ = _extract_indicators(data)
+
+    prev_low = indicators.get('prev_low', 0)
+    close = indicators.get('close', 0)
+    ema20 = indicators.get('ema20', 0)
+    ema50 = indicators.get('ema50', 0)
+    sma200 = indicators.get('sma200', 0)
+    rsi = indicators.get('rsi', 50)
+    volume_ratio = indicators.get('volume_ratio', 0)
+    daily_change_pct = indicators.get('daily_change_pct', 0)
+    macd = indicators.get('macd', 0)
+    macd_signal = indicators.get('macd_signal', 0)
 
     # 1. Price above 200 SMA (uptrend)
     if close <= sma200:
@@ -220,20 +251,22 @@ def momentum_breakout(data):
 
     This is the highest conviction signal - checks first
     """
-    close = data.get('close', 0)
-    ema8 = data.get('ema8', 0)
-    ema20 = data.get('ema20', 0)
-    ema50 = data.get('ema50', 0)
-    sma200 = data.get('sma200', 0)
-    rsi = data.get('rsi', 50)
-    adx = data.get('adx', 0)
-    volume_ratio = data.get('volume_ratio', 0)
-    macd = data.get('macd', 0)
-    macd_signal = data.get('macd_signal', 0)
-    macd_hist = data.get('macd_histogram', 0)
+    # UPDATED: Handle both data formats
+    indicators, raw_data = _extract_indicators(data)
+
+    close = indicators.get('close', 0)
+    ema8 = indicators.get('ema8', 0)
+    ema20 = indicators.get('ema20', 0)
+    ema50 = indicators.get('ema50', 0)
+    sma200 = indicators.get('sma200', 0)
+    rsi = indicators.get('rsi', 50)
+    adx = indicators.get('adx', 0)
+    volume_ratio = indicators.get('volume_ratio', 0)
+    macd = indicators.get('macd', 0)
+    macd_signal = indicators.get('macd_signal', 0)
+    macd_hist = indicators.get('macd_histogram', 0)
 
     # Get 20-day high for breakout detection
-    raw_data = data.get('raw', None)
     if raw_data is None or len(raw_data) < 20:
         return _no_signal('Insufficient data')
 
@@ -294,14 +327,16 @@ def consolidation_breakout(data):
 
     Catches stocks that pause before continuing higher
     """
-    close = data.get('close', 0)
-    ema20 = data.get('ema20', 0)
-    ema50 = data.get('ema50', 0)
-    sma200 = data.get('sma200', 0)
-    rsi = data.get('rsi', 50)
-    volume_ratio = data.get('volume_ratio', 0)
+    # UPDATED: Handle both data formats
+    indicators, raw_data = _extract_indicators(data)
 
-    raw_data = data.get('raw', None)
+    close = indicators.get('close', 0)
+    ema20 = indicators.get('ema20', 0)
+    ema50 = indicators.get('ema50', 0)
+    sma200 = indicators.get('sma200', 0)
+    rsi = indicators.get('rsi', 50)
+    volume_ratio = indicators.get('volume_ratio', 0)
+
     if raw_data is None or len(raw_data) < 20:
         return _no_signal('Insufficient data')
 
@@ -363,14 +398,19 @@ def gap_up_continuation(data):
 
     Captures post-catalyst momentum
     """
-    close = data.get('close', 0)
-    open_price = data.get('open', 0)
-    prev_close = data.get('prev_close', 0)
-    ema20 = data.get('ema20', 0)
-    sma200 = data.get('sma200', 0)
-    rsi = data.get('rsi', 50)
-    volume_ratio = data.get('volume_ratio', 0)
-    daily_change_pct = data.get('daily_change_pct', 0)
+    # UPDATED: Handle both data formats
+    indicators, _ = _extract_indicators(data)
+
+    close = indicators.get('close', 0)
+    open_price = indicators.get('open', 0)
+    ema20 = indicators.get('ema20', 0)
+    sma200 = indicators.get('sma200', 0)
+    rsi = indicators.get('rsi', 50)
+    volume_ratio = indicators.get('volume_ratio', 0)
+    daily_change_pct = indicators.get('daily_change_pct', 0)
+
+    # Need previous close - get from raw data if available
+    prev_close = indicators.get('prev_close', 0)
 
     if prev_close == 0 or open_price == 0:
         return _no_signal('No previous close/open data')
@@ -450,15 +490,17 @@ def golden_cross(data, position_size='normal'):
 
     LEGACY: Not currently used but kept for reference
     """
-    ema8 = data.get('ema8', 0)
-    ema20 = data.get('ema20', 0)
-    ema50 = data.get('ema50', 0)
-    sma200 = data.get('sma200', 0)
-    rsi = data.get('rsi', 50)
-    volume_ratio = data.get('volume_ratio', 0)
-    close = data.get('close', 0)
-    atr = data.get('atr_14', 0)
-    daily_change_pct = data.get('daily_change_pct', 0)
+    indicators, _ = _extract_indicators(data)
+
+    ema8 = indicators.get('ema8', 0)
+    ema20 = indicators.get('ema20', 0)
+    ema50 = indicators.get('ema50', 0)
+    sma200 = indicators.get('sma200', 0)
+    rsi = indicators.get('rsi', 50)
+    volume_ratio = indicators.get('volume_ratio', 0)
+    close = indicators.get('close', 0)
+    atr = indicators.get('atr_14', 0)
+    daily_change_pct = indicators.get('daily_change_pct', 0)
 
     # ATR volatility filter
     atr_pct = (atr / close * 100) if close > 0 else 100
@@ -496,11 +538,13 @@ def golden_cross(data, position_size='normal'):
 
 def bollinger_buy(data):
     """LEGACY: Bollinger band strategy - not currently used"""
-    rsi = data.get('rsi', 50)
-    volume_ratio = data.get('volume_ratio', 0)
-    sma200 = data.get('sma200', 0)
-    bollinger_lower = data.get('bollinger_lower', 0)
-    close = data.get('close', 0)
+    indicators, _ = _extract_indicators(data)
+
+    rsi = indicators.get('rsi', 50)
+    volume_ratio = indicators.get('volume_ratio', 0)
+    sma200 = indicators.get('sma200', 0)
+    bollinger_lower = indicators.get('bollinger_lower', 0)
+    close = indicators.get('close', 0)
 
     if rsi < 30.0 and bollinger_lower >= close > sma200 and volume_ratio >= 1.2:
         return {
@@ -518,9 +562,11 @@ def bollinger_buy(data):
 # ===================================================================================
 def bollinger_sell(data):
     """LEGACY: Bollinger band sell - not currently used"""
-    rsi = data.get('rsi', 50)
-    bollinger_upper = data.get('bollinger_upper', 0)
-    close = data.get('close', 0)
+    indicators, _ = _extract_indicators(data)
+
+    rsi = indicators.get('rsi', 50)
+    bollinger_upper = indicators.get('bollinger_upper', 0)
+    close = indicators.get('close', 0)
 
     if rsi > 70.0 and close >= bollinger_upper:
         return {
@@ -535,9 +581,11 @@ def bollinger_sell(data):
 
 def take_profit_method_1(data):
     """LEGACY: Simple ATR-based take profit - not currently used"""
-    close = data.get('close', 0)
-    ema20 = data.get('ema20', 0)
-    atr = data.get('atr_14', 0)
+    indicators, _ = _extract_indicators(data)
+
+    close = indicators.get('close', 0)
+    ema20 = indicators.get('ema20', 0)
+    atr = indicators.get('atr_14', 0)
 
     if atr == 0 or ema20 == 0:
         return None
