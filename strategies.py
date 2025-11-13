@@ -56,15 +56,20 @@ class SwingTradeStrategy(Strategy):
         # Ticker cooldown to prevent chasing
         self.ticker_cooldown = TickerCooldown(cooldown_days=self.COOLDOWN_DAYS)
 
-        # Stock rotation
-        self.stock_rotator = StockRotator(max_active=self.MAX_ACTIVE_STOCKS, rotation_frequency='biweekly')
+        # PRIORITY 5: Stock rotation WITH profit_tracker for win rate tracking
+        self.stock_rotator = StockRotator(
+            max_active=self.MAX_ACTIVE_STOCKS,
+            rotation_frequency='biweekly',
+            profit_tracker=self.profit_tracker  # NEW: Pass profit tracker
+        )
 
         # Track rotation timing
         self.last_rotation_week = None
 
         print(f"✅ Ticker Cooldown Enabled: {self.ticker_cooldown.cooldown_days} days between purchases")
-        print(
-            f"✅ Stock Rotation: Max {self.stock_rotator.max_active} active stocks ({self.stock_rotator.rotation_frequency})")
+        print(f"✅ Stock Rotation: Max {self.stock_rotator.max_active} active stocks ({self.stock_rotator.rotation_frequency})")
+        print(f"✅ Win Rate Tracking: Enabled (Priority 5)")
+        print(f"✅ Ticker Penalties: Enabled (Priority 3)")
         print(f"✅ Active Signals: {len(self.ACTIVE_SIGNALS)} signals configured")
         print(f"✅ Fixed Position Size: {self.POSITION_SIZE_PCT}% per trade")
 

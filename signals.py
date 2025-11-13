@@ -40,19 +40,18 @@ def buy_signals(data, buy_signal_list):
 
 
 # ===================================================================================
-# BUY SIGNALS - UPDATED VERSION
+# BUY SIGNALS - IMPROVED VERSION
 # ===================================================================================
 
 def swing_trade_1(data):
     """
-    SLIGHTLY TIGHTENED: Reduced emergency stops while maintaining volume
+    PRIORITY 4: TIGHTENED for better win rate
 
-    Changes from previous:
-    - Volume: 1.2x → 1.3x (filter weak volume)
-    - RSI: 48-72 → 50-70 (avoid RSI extremes)
-    - Added: ADX > 20 (require trend strength)
+    Changes:
+    - RSI: 50-70 → 52-68 (slightly tighter)
+    - Volume: 1.3x → 1.4x (require stronger conviction)
 
-    Expected: 85-95 trades with 65-70% win rate
+    Target: Maintain high volume, improve from 60.5% to 70%+ win rate
     """
     ema20 = data.get('ema20', 0)
     ema50 = data.get('ema50', 0)
@@ -73,12 +72,12 @@ def swing_trade_1(data):
     if not (close > ema20 and close > sma200):
         return _no_signal('Price below key levels')
 
-    # TIGHTENED: RSI sweet spot (50-70 from 48-72)
-    if not (50 <= rsi <= 70):
-        return _no_signal(f'RSI {rsi:.0f} not in 50-70 range')
+    # TIGHTENED: RSI sweet spot (52-68 from 50-70)
+    if not (52 <= rsi <= 68):
+        return _no_signal(f'RSI {rsi:.0f} not in 52-68 range')
 
-    # TIGHTENED: Volume (1.3x from 1.2x)
-    if volume_ratio < 1.3:
+    # TIGHTENED: Volume (1.4x from 1.3x)
+    if volume_ratio < 1.4:
         return _no_signal(f'Volume {volume_ratio:.1f}x too low')
 
     # MACD bullish
@@ -89,7 +88,7 @@ def swing_trade_1(data):
     if not obv_trending_up:
         return _no_signal('OBV not confirming')
 
-    # NEW: ADX requirement (trend strength)
+    # ADX requirement (trend strength)
     if adx < 20:
         return _no_signal(f'ADX {adx:.0f} too weak')
 
@@ -104,24 +103,14 @@ def swing_trade_1(data):
 
 def swing_trade_2(data):
     """
-    FIXED: Was too restrictive (0 trades) - Now balanced
+    PRIORITY 1: TIGHTENED for 70%+ win rate
 
-    Original: 55 trades, 65.5% win rate
-    V1 (too strict): 0 trades
-    V2 (balanced): Target 45-55 trades, 70%+ win rate
-
-    LOOSENED FILTERS:
-    - Volume: 1.2x → 1.1x
-    - RSI: 38-70 → 35-72
-    - ADX: Removed (was blocking too much)
-    - Stochastic: Removed (too restrictive)
-    - Daily change: -3% → -5%
-    - Pullback volume: Removed check
-
-    KEPT FILTERS:
-    - OBV trending up (good filter)
-    - MACD bullish
-    - Pullback range 2-12%
+    Changes from 56.7% → Target 70%+:
+    - RSI: 35-72 → 40-68 (avoid extremes)
+    - Volume: 1.1x → 1.25x (require stronger volume)
+    - Pullback: 2-12% → 3-10% (tighter range)
+    - Added: ADX > 18 (trend strength requirement)
+    - Daily change: -5% → -4% (stricter stabilization)
     """
     close = data.get('close', 0)
     ema20 = data.get('ema20', 0)
@@ -133,6 +122,7 @@ def swing_trade_2(data):
     macd = data.get('macd', 0)
     macd_signal = data.get('macd_signal', 0)
     obv_trending_up = data.get('obv_trending_up', False)
+    adx = data.get('adx', 0)
 
     # 1. Price above 200 SMA
     if close <= sma200:
@@ -142,34 +132,38 @@ def swing_trade_2(data):
     if ema20 <= ema50:
         return _no_signal('EMA20 not above EMA50')
 
-    # 3. Pullback depth (2-12% - keep this)
+    # 3. TIGHTENED: Pullback depth (3-10% from 2-12%)
     ema20_distance = abs((close - ema20) / ema20 * 100) if ema20 > 0 else 100
-    if not (2.0 <= ema20_distance <= 12.0):
-        return _no_signal(f'Pullback {ema20_distance:.1f}% not in 2-12% range')
+    if not (3.0 <= ema20_distance <= 10.0):
+        return _no_signal(f'Pullback {ema20_distance:.1f}% not in 3-10% range')
 
-    # 4. LOOSENED: RSI (35-72 instead of 38-70)
-    if not (35 <= rsi <= 72):
-        return _no_signal(f'RSI {rsi:.0f} outside 35-72')
+    # 4. TIGHTENED: RSI (40-68 from 35-72)
+    if not (40 <= rsi <= 68):
+        return _no_signal(f'RSI {rsi:.0f} outside 40-68')
 
-    # 5. LOOSENED: Volume (1.1x instead of 1.2x)
-    if volume_ratio < 1.1:
-        return _no_signal(f'Volume {volume_ratio:.1f}x below 1.1x')
+    # 5. TIGHTENED: Volume (1.25x from 1.1x)
+    if volume_ratio < 1.25:
+        return _no_signal(f'Volume {volume_ratio:.1f}x below 1.25x')
 
     # 6. MACD momentum
     if macd <= macd_signal:
         return _no_signal('MACD not bullish')
 
-    # 7. OBV (keep - good filter)
+    # 7. OBV confirmation
     if not obv_trending_up:
         return _no_signal('OBV not confirming')
 
-    # 8. LOOSENED: Price stabilization (-5% instead of -3%)
-    if daily_change_pct < -5.0:
+    # 8. NEW: ADX requirement (trend strength)
+    if adx < 18:
+        return _no_signal(f'ADX {adx:.0f} too weak')
+
+    # 9. TIGHTENED: Price stabilization (-4% from -5%)
+    if daily_change_pct < -4.0:
         return _no_signal(f'Price dropping too fast ({daily_change_pct:.1f}%)')
 
     return {
         'side': 'buy',
-        'msg': f'✅ Pullback: {ema20_distance:.1f}% from EMA20, RSI {rsi:.0f}, OBV+',
+        'msg': f'✅ Pullback: {ema20_distance:.1f}% from EMA20, RSI {rsi:.0f}, ADX {adx:.0f}, OBV+',
         'limit_price': close,
         'stop_loss': None,
         'signal_type': 'swing_trade_2'
@@ -178,9 +172,7 @@ def swing_trade_2(data):
 
 def consolidation_breakout(data):
     """
-    REVERTED: My enhancements made it worse (84.8%→74.5%)
-
-    Going back to ORIGINAL logic (before my changes)
+    KEEPING ORIGINAL - Already 72% win rate (above target!)
     """
     close = data.get('close', 0)
     ema20 = data.get('ema20', 0)
@@ -231,9 +223,7 @@ def consolidation_breakout(data):
 
 def golden_cross(data):
     """
-    SIMPLIFIED: Was too complex (0 trades)
-
-    Now much simpler - just detect fresh golden cross with basic confirmation
+    KEEPING ORIGINAL - Already 81.8% win rate (excellent!)
     """
     ema20 = data.get('ema20', 0)
     ema50 = data.get('ema50', 0)
@@ -274,16 +264,19 @@ def golden_cross(data):
 
 def bollinger_buy(data):
     """
-    KEEPING ORIGINAL - 100% win rate, extremely selective
+    PRIORITY 2: IMPROVED bollinger_buy from 33.3% to 70%+
 
-    This signal already has perfect filters:
-    - Strict Bollinger proximity (3%)
-    - Tight RSI range (28-45)
-    - High volume requirement (1.3x)
-    - OBV confirmation
-    - Bounce confirmation
+    Analysis: Was too rare and caught bad reversals
 
-    Don't fix what isn't broken!
+    NEW FILTERS ADDED:
+    - ADX > 20 (require strong trend, not choppy)
+    - EMA20 > EMA50 (uptrend structure confirmation)
+    - MACD bullish (momentum confirmation)
+    - Tighter RSI: 28-45 → 30-42 (more oversold)
+    - Tighter Bollinger proximity: 3% → 2% (closer to band)
+    - Higher volume: 1.3x → 1.5x (stronger conviction)
+
+    Strategy: Only catch strong bounces in confirmed uptrends
     """
     rsi = data.get('rsi', 50)
     volume_ratio = data.get('volume_ratio', 0)
@@ -292,22 +285,39 @@ def bollinger_buy(data):
     close = data.get('close', 0)
     daily_change_pct = data.get('daily_change_pct', 0)
     obv_trending_up = data.get('obv_trending_up', False)
+    ema20 = data.get('ema20', 0)
+    ema50 = data.get('ema50', 0)
+    adx = data.get('adx', 0)
+    macd = data.get('macd', 0)
+    macd_signal = data.get('macd_signal', 0)
 
-    # Price at lower Bollinger (within 3%)
-    if bollinger_lower == 0 or close > bollinger_lower * 1.03:
-        return _no_signal('Not at lower Bollinger')
+    # NEW: Require strong trend (not choppy/range-bound)
+    if adx < 20:
+        return _no_signal('ADX too weak for Bollinger')
+
+    # NEW: Require uptrend structure
+    if not (ema20 > ema50):
+        return _no_signal('No uptrend structure')
+
+    # Price at lower Bollinger (TIGHTENED: within 2% from 3%)
+    if bollinger_lower == 0 or close > bollinger_lower * 1.02:
+        return _no_signal('Not close enough to lower Bollinger')
 
     # Above 200 SMA (uptrend)
     if close <= sma200:
         return _no_signal('Below 200 SMA')
 
-    # RSI oversold (28-45)
-    if not (28 <= rsi <= 45):
-        return _no_signal(f'RSI not in range')
+    # TIGHTENED: RSI oversold (30-42 from 28-45)
+    if not (30 <= rsi <= 42):
+        return _no_signal(f'RSI {rsi:.0f} not in 30-42 range')
 
-    # Volume confirmation (1.3x)
-    if volume_ratio < 1.3:
-        return _no_signal('Volume too low')
+    # TIGHTENED: Volume confirmation (1.5x from 1.3x)
+    if volume_ratio < 1.5:
+        return _no_signal(f'Volume {volume_ratio:.1f}x below 1.5x')
+
+    # NEW: MACD momentum confirmation
+    if macd <= macd_signal:
+        return _no_signal('MACD not bullish')
 
     # OBV confirmation
     if not obv_trending_up:
@@ -319,7 +329,7 @@ def bollinger_buy(data):
 
     return {
         'side': 'buy',
-        'msg': f'🎪 Bollinger Bounce: RSI {rsi:.0f}, Vol {volume_ratio:.1f}x, OBV+',
+        'msg': f'🎪 Bollinger Bounce: RSI {rsi:.0f}, Vol {volume_ratio:.1f}x, ADX {adx:.0f}, OBV+',
         'limit_price': close,
         'stop_loss': None,
         'signal_type': 'bollinger_buy',
