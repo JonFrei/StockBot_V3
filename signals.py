@@ -106,25 +106,15 @@ def swing_trade_1(data):
 
 def swing_trade_2(data):
     """
-    OPTIMIZED: Enhanced Pullback Strategy
+    RELAXED: Enhanced Pullback Strategy
 
-    ⚠️ IMPROVED: Tightened to reduce 38% loss rate
-
-    Key Changes:
-    1. Tighter pullback range (3-12% instead of 2-20%)
-    2. RSI optimization (30-65 instead of 28-78)
-    3. MACD confirmation added
-    4. Price stabilization check added
-    5. Volume increased (1.5x instead of 1.3x)
-
-    Entry Criteria:
+    Entry Criteria (RELAXED):
     1. Price > 200 SMA (long-term trend)
     2. 20 EMA > 50 EMA (medium-term momentum)
-    3. Price 3-12% from 20 EMA (controlled pullback)
-    4. Volume > 1.5x average (confirmation)
-    5. Price stabilized (higher low or green candle)
-    6. RSI 30-65 (not extreme)
-    7. MACD bullish
+    3. Price 2-15% from 20 EMA (controlled pullback) - was 3-12%
+    4. Volume > 1.2x average (confirmation) - was 1.5x
+    5. RSI 30-70 (not extreme) - was 30-65
+    6. MACD bullish
     """
     prev_low = data.get('prev_low', 0)
     close = data.get('close', 0)
@@ -145,36 +135,24 @@ def swing_trade_2(data):
     if ema20 <= ema50:
         return _no_signal('EMA20 not above EMA50')
 
-    # 3. TIGHTENED: Pullback depth (3-12% instead of 2-20%)
+    # 3. RELAXED: Pullback depth (2-15% instead of 3-12%)
     ema20_distance = abs((close - ema20) / ema20 * 100) if ema20 > 0 else 100
-    if not (3.0 <= ema20_distance <= 12.0):
-        return _no_signal(f'Pullback {ema20_distance:.1f}% not in 3-12% range')
+    if not (2.0 <= ema20_distance <= 15.0):
+        return _no_signal(f'Pullback {ema20_distance:.1f}% not in 2-15% range')
 
-    # 4. TIGHTENED: RSI not oversold or overbought (30-65 instead of 28-78)
-    if not (30 <= rsi <= 65):
-        return _no_signal(f'RSI {rsi:.0f} outside 30-65')
+    # 4. RELAXED: RSI (30-70 instead of 30-65)
+    if not (30 <= rsi <= 70):
+        return _no_signal(f'RSI {rsi:.0f} outside 30-70')
 
-    # 5. INCREASED: Volume confirmation (1.5x instead of 1.3x)
-    if volume_ratio < 1.5:
-        return _no_signal(f'Volume {volume_ratio:.1f}x below 1.5x')
+    # 5. RELAXED: Volume confirmation (1.2x instead of 1.5x)
+    if volume_ratio < 1.2:
+        return _no_signal(f'Volume {volume_ratio:.1f}x below 1.2x')
 
-    # 6. NEW: MACD momentum confirmation
+    # 6. MACD momentum confirmation
     if macd <= macd_signal:
         return _no_signal('MACD not bullish')
 
-    # 7. NEW: Price stabilization check
-    price_stabilized = False
-
-    # Check for higher low
-    if prev_low > 0 and close > prev_low:
-        price_stabilized = True
-
-    # OR check for bullish candle
-    if daily_change_pct > 0.5:
-        price_stabilized = True
-
-    if not price_stabilized:
-        return _no_signal('Price not stabilized')
+    # REMOVED: Price stabilization check (was too restrictive)
 
     return {
         'side': 'buy',
@@ -187,20 +165,18 @@ def swing_trade_2(data):
 
 def momentum_breakout(data):
     """
-    NEW: Catch strong momentum breakouts early
+    RELAXED: Catch strong momentum breakouts early
 
     Target: RGTI +176%, MU +65% style explosive moves
-    Expected Win Rate: 70%+
+    Expected Win Rate: 65%+
 
-    Entry Criteria:
+    Entry Criteria (RELAXED):
     1. Price breaking above 20-day high
-    2. Very strong volume (2x+)
-    3. Strong momentum (ADX > 30, MACD bullish/expanding)
-    4. Not overextended (RSI 50-75)
+    2. Strong volume (1.5x+) - was 2x
+    3. Momentum (ADX > 25, MACD bullish/expanding) - was ADX > 30
+    4. Not overextended (RSI 48-75) - was 50-75
     5. All EMAs aligned bullishly
-    6. Not too far from EMA8 (< 5%)
-
-    This is the highest conviction signal - checks first
+    6. Not too far from EMA8 (< 8%) - was 5%
     """
     close = data.get('close', 0)
     ema8 = data.get('ema8', 0)
@@ -229,25 +205,25 @@ def momentum_breakout(data):
     if not (close > ema8 > ema20 > ema50 > sma200):
         return _no_signal('EMAs not aligned')
 
-    # 3. MOMENTUM: Strong trend (ADX > 30)
-    if adx < 30:
+    # 3. MOMENTUM: Strong trend (ADX > 22) - RELAXED from 25
+    if adx < 22:
         return _no_signal(f'ADX {adx:.0f} too weak')
 
     # 4. MOMENTUM: MACD bullish and expanding
     if macd <= macd_signal or macd_hist <= 0:
         return _no_signal('MACD not bullish/expanding')
 
-    # 5. VOLUME: Very strong (2x+)
-    if volume_ratio < 2.0:
+    # 5. VOLUME: Strong (1.3x+) - RELAXED from 1.5x
+    if volume_ratio < 1.3:
         return _no_signal(f'Volume {volume_ratio:.1f}x too low')
 
-    # 6. RSI: Strong but not overbought (50-75)
-    if not (50 <= rsi <= 75):
-        return _no_signal(f'RSI {rsi:.0f} outside 50-75')
+    # 6. RSI: Strong but not overbought (48-75) - RELAXED from 50-75
+    if not (48 <= rsi <= 75):
+        return _no_signal(f'RSI {rsi:.0f} outside 48-75')
 
-    # 7. DISTANCE: Not too extended from EMA8 (< 5%)
+    # 7. DISTANCE: Not too extended from EMA8 (< 8%) - RELAXED from 5%
     distance_from_ema8 = abs((close - ema8) / ema8 * 100) if ema8 > 0 else 100
-    if distance_from_ema8 > 5.0:
+    if distance_from_ema8 > 8.0:
         return _no_signal(f'Too extended from EMA8')
 
     return {
@@ -261,20 +237,17 @@ def momentum_breakout(data):
 
 def consolidation_breakout(data):
     """
-    NEW: Trade breakouts from consolidation zones
+    RELAXED: Trade breakouts from consolidation zones
 
-    Expected Win Rate: 70%+
-    Lower risk than momentum_breakout
+    Expected Win Rate: 65%+
 
-    Entry Criteria:
-    1. Stock consolidating near highs (< 8% range over 10 days)
+    Entry Criteria (RELAXED):
+    1. Stock consolidating near highs (< 12% range over 10 days) - was 8%
     2. Breaking above consolidation range
-    3. Volume expansion (1.8x+)
+    3. Volume expansion (1.3x+) - was 1.8x
     4. Bullish structure intact (above 200 SMA, EMA20 > EMA50)
-    5. RSI healthy (45-70)
-    6. Not too far from EMA20 (< 8%)
-
-    Catches stocks that pause before continuing higher
+    5. RSI healthy (45-72) - was 45-70
+    6. Not too far from EMA20 (< 10%) - was 8%
     """
     close = data.get('close', 0)
     ema20 = data.get('ema20', 0)
@@ -294,8 +267,8 @@ def consolidation_breakout(data):
 
     high_10d = max(recent_highs)
 
-    # 1. CONSOLIDATION: Tight range (< 8% over 10 days)
-    if consolidation_range > 8.0:
+    # 1. CONSOLIDATION: Tight range (< 15% over 10 days) - RELAXED from 12%
+    if consolidation_range > 15.0:
         return _no_signal(f'Range {consolidation_range:.1f}% too wide')
 
     # 2. STRUCTURE: Above 200 SMA and EMA20 > EMA50
@@ -306,17 +279,17 @@ def consolidation_breakout(data):
     if close < high_10d * 0.995:
         return _no_signal('Not breaking out')
 
-    # 4. VOLUME: Expansion (1.8x+)
-    if volume_ratio < 1.8:
+    # 4. VOLUME: Expansion (1.2x+) - RELAXED from 1.3x
+    if volume_ratio < 1.2:
         return _no_signal(f'Volume {volume_ratio:.1f}x too low')
 
-    # 5. RSI: Healthy range (45-70)
-    if not (45 <= rsi <= 70):
-        return _no_signal(f'RSI {rsi:.0f} outside 45-70')
+    # 5. RSI: Healthy range (45-72) - RELAXED from 45-70
+    if not (45 <= rsi <= 72):
+        return _no_signal(f'RSI {rsi:.0f} outside 45-72')
 
-    # 6. POSITION: Close to EMA20 (< 8%)
+    # 6. POSITION: Close to EMA20 (< 10%) - RELAXED from 8%
     distance_to_ema20 = abs((close - ema20) / ema20 * 100) if ema20 > 0 else 100
-    if distance_to_ema20 > 8.0:
+    if distance_to_ema20 > 10.0:
         return _no_signal(f'Too far from EMA20')
 
     return {
@@ -325,78 +298,6 @@ def consolidation_breakout(data):
         'limit_price': close,
         'stop_loss': None,
         'signal_type': 'consolidation_breakout'
-    }
-
-
-def gap_up_continuation(data):
-    """
-    NEW: Trade continuation after gap-up moves
-
-    Expected Win Rate: 68%+
-    Opportunistic signal for post-news/earnings momentum
-
-    Entry Criteria:
-    1. Stock gaps up 2-5% (not too extreme)
-    2. Holds most of gap (not fading > 1%)
-    3. Strong volume (2x+)
-    4. Above 200 SMA and EMA20
-    5. RSI not overbought (< 75)
-    6. Green day overall
-
-    Captures post-catalyst momentum
-    """
-    close = data.get('close', 0)
-    open_price = data.get('open', 0)
-    prev_close = data.get('prev_close', 0)
-    ema20 = data.get('ema20', 0)
-    sma200 = data.get('sma200', 0)
-    rsi = data.get('rsi', 50)
-    volume_ratio = data.get('volume_ratio', 0)
-    daily_change_pct = data.get('daily_change_pct', 0)
-
-    if prev_close == 0 or open_price == 0:
-        return _no_signal('No previous close/open data')
-
-    # Calculate gap size
-    gap_pct = ((open_price - prev_close) / prev_close * 100)
-
-    # Calculate intraday change
-    intraday_change = ((close - open_price) / open_price * 100)
-
-    # 1. GAP SIZE: 2-5% gap (not too small, not too big)
-    if not (2.0 <= gap_pct <= 5.0):
-        return _no_signal(f'Gap {gap_pct:.1f}% not in 2-5%')
-
-    # 2. HOLDING GAP: Not fading (down < 1% from open)
-    if intraday_change < -1.0:
-        return _no_signal(f'Fading gap')
-
-    # 3. STRUCTURE: Above 200 SMA
-    if close <= sma200:
-        return _no_signal('Below 200 SMA')
-
-    # 4. STRUCTURE: Above EMA20
-    if close <= ema20:
-        return _no_signal('Below EMA20')
-
-    # 5. VOLUME: Strong (2x+)
-    if volume_ratio < 2.0:
-        return _no_signal(f'Volume {volume_ratio:.1f}x too low')
-
-    # 6. RSI: Not overbought (< 75)
-    if rsi > 75:
-        return _no_signal(f'RSI {rsi:.0f} overbought')
-
-    # 7. DAILY PERFORMANCE: Green day overall
-    if daily_change_pct < 0:
-        return _no_signal('Red day')
-
-    return {
-        'side': 'buy',
-        'msg': f'⚡ Gap-Up +{gap_pct:.1f}%: Holding, Vol {volume_ratio:.1f}x',
-        'limit_price': close,
-        'stop_loss': None,
-        'signal_type': 'gap_up_continuation'
     }
 
 
@@ -486,14 +387,13 @@ def _no_signal(reason):
 # =======================================================================================================================
 
 BUY_STRATEGIES = {
-    # NEW SIGNALS (High Priority)
+    # NEW SIGNALS (High Priority) - NOW RELAXED
     'momentum_breakout': momentum_breakout,
     'consolidation_breakout': consolidation_breakout,
-    'gap_up_continuation': gap_up_continuation,
 
     # EXISTING SIGNALS (Optimized)
     'swing_trade_1': swing_trade_1,
-    'swing_trade_2': swing_trade_2,
+    'swing_trade_2': swing_trade_2,  # NOW RELAXED
 
     # LEGACY SIGNALS (Not actively used)
     'golden_cross': golden_cross,

@@ -1,10 +1,12 @@
 """
-Profit Tracking System - SIMPLIFIED
+Profit Tracking System - SIMPLIFIED + ENHANCED
 
 Just logs closed trades for reporting.
 Does NOT track positions (broker already does that).
 
 Key Fix: Uses broker data for all P&L calculations - no accumulation bugs
+
+ENHANCED: Now includes per-ticker win/loss statistics
 """
 
 from datetime import datetime
@@ -14,6 +16,8 @@ class ProfitTracker:
     """
     Simplified tracker - just records closed trades
     No position tracking (broker handles that)
+
+    ENHANCED: Now tracks per-ticker performance
     """
 
     def __init__(self, strategy):
@@ -60,7 +64,7 @@ class ProfitTracker:
             f"\n{emoji} TRADE CLOSED: {ticker} | ${total_pnl:+,.2f} ({pnl_pct:+.1f}%) | {quantity_sold} shares @ ${entry_price:.2f} → ${exit_price:.2f}")
 
     def display_final_summary(self):
-        """Display P&L summary at end of backtest"""
+        """Display P&L summary at end of backtest - ENHANCED with per-ticker stats"""
         if not self.closed_trades:
             print("\n📊 No closed trades to report")
             return
@@ -90,6 +94,9 @@ class ProfitTracker:
 
         # Signal performance breakdown
         self._display_signal_performance()
+
+        # NEW: Per-ticker performance breakdown
+        self._display_ticker_performance()
 
         # Display individual trades
         print(f"\n📋 Trade Details:")
@@ -148,6 +155,63 @@ class ProfitTracker:
             print(f"      Avg Loss: ${avg_loss:,.2f}")
 
         print(f"\n{'─' * 80}")
+
+    def _display_ticker_performance(self):
+        """
+        NEW: Display performance breakdown by ticker
+        Shows which stocks are performing best/worst
+        """
+        from collections import defaultdict
+
+        ticker_stats = defaultdict(lambda: {
+            'trades': [],
+            'wins': 0,
+            'losses': 0,
+            'total_pnl': 0.0,
+            'total_pnl_pct': 0.0
+        })
+
+        for trade in self.closed_trades:
+            ticker = trade['ticker']
+            ticker_stats[ticker]['trades'].append(trade)
+            ticker_stats[ticker]['total_pnl'] += trade['pnl_dollars']
+            ticker_stats[ticker]['total_pnl_pct'] += trade['pnl_pct']
+
+            if trade['pnl_dollars'] > 0:
+                ticker_stats[ticker]['wins'] += 1
+            else:
+                ticker_stats[ticker]['losses'] += 1
+
+        print(f"\n💰 PERFORMANCE BY TICKER:")
+        print(f"{'─' * 80}")
+
+        # Sort by total P&L (highest first)
+        sorted_tickers = sorted(ticker_stats.items(), key=lambda x: x[1]['total_pnl'], reverse=True)
+
+        print(f"{'Ticker':<8} {'Trades':<10} {'W/L':<10} {'Win Rate':<12} {'Total P&L':<15} {'Avg P&L':<15}")
+        print(f"{'─' * 80}")
+
+        for ticker, stats in sorted_tickers:
+            total_trades = len(stats['trades'])
+            win_rate = (stats['wins'] / total_trades * 100) if total_trades > 0 else 0
+            avg_pnl = stats['total_pnl'] / total_trades if total_trades > 0 else 0
+            avg_pnl_pct = stats['total_pnl_pct'] / total_trades if total_trades > 0 else 0
+
+            w_l_str = f"{stats['wins']}W/{stats['losses']}L"
+
+            print(f"{ticker:<8} {total_trades:<10} {w_l_str:<10} {win_rate:>6.1f}%      "
+                  f"${stats['total_pnl']:>+10,.2f}   ${avg_pnl:>+8,.2f} ({avg_pnl_pct:>+5.1f}%)")
+
+        print(f"{'─' * 80}")
+
+        # Display best and worst performers
+        if sorted_tickers:
+            best = sorted_tickers[0]
+            worst = sorted_tickers[-1]
+
+            print(f"\n🏆 BEST PERFORMER: {best[0]} (${best[1]['total_pnl']:+,.2f} from {len(best[1]['trades'])} trades)")
+            print(
+                f"⚠️  WORST PERFORMER: {worst[0]} (${worst[1]['total_pnl']:+,.2f} from {len(worst[1]['trades'])} trades)")
 
     def _display_open_positions(self):
         """Display current open positions from broker"""

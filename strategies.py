@@ -24,12 +24,11 @@ class SwingTradeStrategy(Strategy):
         'momentum_breakout',  # High conviction breakouts
         'consolidation_breakout',  # Consolidation breaks
         'swing_trade_1',  # EMA crossover + momentum
-        'gap_up_continuation',  # Post-catalyst continuation
         'swing_trade_2',  # Pullback plays
     ]
 
     # Cooldown configuration
-    COOLDOWN_DAYS = 3  # Days between re-purchases of same ticker
+    COOLDOWN_DAYS = 1  # Days between re-purchases of same ticker
 
     # =========================================================================
 
