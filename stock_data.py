@@ -12,6 +12,7 @@ from alpaca.data.timeframe import TimeFrame
 def process_data(symbols, current_date):
     """
     Process historical data and calculate indicators for each symbol
+    NOW WITH NEW INDICATORS
 
     Returns:
         dict: {ticker: {'indicators': {...}, 'raw': DataFrame}}
@@ -24,6 +25,10 @@ def process_data(symbols, current_date):
             'indicators': {},
             'raw': df
         }
+
+        # ==========================================
+        # EXISTING INDICATORS (KEPT AS-IS)
+        # ==========================================
 
         # Calculate SMAs (14, 20, 50, 200 day)
         sma14 = indicators.get_sma(df, period=14)
@@ -66,14 +71,60 @@ def process_data(symbols, current_date):
         # Calculate ATR (14 period)
         temp_data['indicators']['atr_14'] = round(float(indicators.get_atr(df, period=14)), 2)
 
-        # === NEW: Calculate MACD ===
+        # Calculate MACD
         macd_data = indicators.get_macd(df)
         temp_data['indicators']['macd'] = round(float(macd_data['macd']), 4)
         temp_data['indicators']['macd_signal'] = round(float(macd_data['macd_signal']), 4)
         temp_data['indicators']['macd_histogram'] = round(float(macd_data['macd_histogram']), 4)
 
-        # === NEW: Calculate ADX ===
+        # Calculate ADX
         temp_data['indicators']['adx'] = round(float(indicators.get_adx(df, period=14)), 2)
+
+        # ==========================================
+        # NEW INDICATORS FOR IMPROVED SIGNALS
+        # ==========================================
+
+        # OBV Trend
+        obv_trend = indicators.get_obv_trend(df, period=20)
+        temp_data['indicators']['obv'] = round(obv_trend['obv'], 2)
+        temp_data['indicators']['obv_ema'] = round(obv_trend['obv_ema'], 2)
+        temp_data['indicators']['obv_trending_up'] = obv_trend['obv_trending_up']
+
+        # Stochastic Oscillator
+        stoch = indicators.get_stochastic(df, k_period=14, d_period=3)
+        temp_data['indicators']['stoch_k'] = stoch['stoch_k']
+        temp_data['indicators']['stoch_d'] = stoch['stoch_d']
+        temp_data['indicators']['stoch_bullish'] = stoch['stoch_bullish']
+
+        # Rate of Change
+        temp_data['indicators']['roc_12'] = indicators.get_roc(df, period=12)
+
+        # Williams %R
+        temp_data['indicators']['williams_r'] = indicators.get_williams_r(df, period=14)
+
+        # Volume Surge Score (0-10)
+        temp_data['indicators']['volume_surge_score'] = indicators.get_volume_surge_score(df, period=20)
+
+        # MACD previous histogram (for acceleration check)
+        if len(df) > 1:
+            macd_prev = indicators.get_macd(df.iloc[:-1])
+            temp_data['indicators']['macd_hist_prev'] = round(float(macd_prev['macd_histogram']), 4)
+        else:
+            temp_data['indicators']['macd_hist_prev'] = 0
+
+        # EMA50 10 days ago (for golden cross trend check)
+        if len(df) >= 60:
+            ema50_series = df['close'].ewm(span=50, adjust=False).mean()
+            if len(ema50_series) >= 11:
+                temp_data['indicators']['ema50_10d_ago'] = round(float(ema50_series.iloc[-11]), 2)
+            else:
+                temp_data['indicators']['ema50_10d_ago'] = temp_data['indicators']['ema50']
+        else:
+            temp_data['indicators']['ema50_10d_ago'] = temp_data['indicators']['ema50']
+
+        # ==========================================
+        # CURRENT PRICE DATA (KEPT AS-IS)
+        # ==========================================
 
         # Add current price data
         temp_data['indicators']['close'] = round(float(df['close'].iloc[-1]), 2)
@@ -167,10 +218,6 @@ def _fetch_alpaca_batch_data(symbols, current_date, days=250):
                 if len(df) < 200:
                     continue
 
-                # CRITICAL: Call process_data to calculate indicators
-                # processed = process_data(df, symbol)
-                # if processed:
-                #     stock_data[symbol] = processed
                 stock_data[symbol] = df
 
             except Exception as e:

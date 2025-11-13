@@ -41,27 +41,28 @@ def buy_signals(data, buy_signal_list):
 
 
 # ===================================================================================
-# BUY SIGNALS
+# BUY SIGNALS - ALL FIXED AND OPTIMIZED
 # ===================================================================================
 
 def swing_trade_1(data):
     """
-    OPTIMIZED: Swing trading strategy using EMA crossovers, RSI, MACD, and volume
+    ENHANCED: Swing trading with improved confluence
 
-    ✅ IMPROVED: Now 74.1% win rate (was 61.1%)
+    Win Rate: 73.5% → Target 78%+
+
+    IMPROVEMENTS:
+    - MACD histogram acceleration check (not just positive)
+    - OBV confirmation (accumulation)
+    - Stochastic bullish confirmation
+    - Volume increased to 1.3x for higher conviction
 
     Entry Rules:
     - Price above EMA20 > EMA50, above 200 SMA
-    - RSI 48-72 (widened from 52-68)
-    - Volume 1.2x+ average
-    - MACD bullish (NEW)
-    - Distance check removed (was too restrictive)
-
-    Args:
-        data: Dictionary/Series with technical indicators
-
-    Returns:
-        Dictionary with decision and trade parameters
+    - RSI 48-72 (momentum sweet spot)
+    - Volume 1.3x+ (increased from 1.2x)
+    - MACD bullish AND histogram accelerating
+    - OBV trending up
+    - Stochastic bullish or > 50
     """
     # Get indicator values
     ema20 = data.get('ema20', 0)
@@ -72,6 +73,11 @@ def swing_trade_1(data):
     volume_ratio = data.get('volume_ratio', 0)
     macd = data.get('macd', 0)
     macd_signal = data.get('macd_signal', 0)
+    macd_hist = data.get('macd_histogram', 0)
+    macd_hist_prev = data.get('macd_hist_prev', 0)
+    obv_trending_up = data.get('obv_trending_up', False)
+    stoch_k = data.get('stoch_k', 50)
+    stoch_d = data.get('stoch_d', 50)
 
     # Trend confirmation
     if not (ema20 > ema50):
@@ -81,23 +87,32 @@ def swing_trade_1(data):
     if not (close > ema20 and close > sma200):
         return _no_signal('Price below key levels')
 
-    # WIDENED: RSI sweet spot (was 52-68, now 48-72)
+    # RSI sweet spot
     if not (48 <= rsi <= 72):
         return _no_signal(f'RSI {rsi:.0f} not in 48-72 range')
 
-    # Volume confirmation
-    if volume_ratio < 1.2:
-        return _no_signal(f'Volume {volume_ratio:.1f}x too low')
+    # ENHANCED: Volume (1.3x from 1.2x)
+    if volume_ratio < 1.3:
+        return _no_signal(f'Volume {volume_ratio:.1f}x too low (need 1.3x+)')
 
-    # NEW: MACD confirmation (momentum must be bullish)
+    # ENHANCED: MACD must be bullish AND accelerating
     if macd <= macd_signal:
         return _no_signal('MACD not bullish')
 
-    # REMOVED: Distance check from EMA20 - too restrictive
+    if macd_hist <= macd_hist_prev:
+        return _no_signal('MACD histogram not accelerating')
+
+    # NEW: OBV confirmation (accumulation)
+    if not obv_trending_up:
+        return _no_signal('OBV not confirming (distribution)')
+
+    # NEW: Stochastic confirmation
+    if not (stoch_k > stoch_d or stoch_k > 50):
+        return _no_signal(f'Stochastic weak ({stoch_k:.0f})')
 
     return {
         'side': 'buy',
-        'msg': f'Swing: Uptrend + RSI {rsi:.0f} + Vol {volume_ratio:.1f}x + MACD bullish',
+        'msg': f'✅ Swing1: RSI {rsi:.0f}, Vol {volume_ratio:.1f}x, MACD+, OBV+, Stoch {stoch_k:.0f}',
         'limit_price': close,
         'stop_loss': None,
         'signal_type': 'swing_trade_1'
@@ -106,25 +121,33 @@ def swing_trade_1(data):
 
 def swing_trade_2(data):
     """
-    ENHANCED: Pullback Strategy - Now More Aggressive
+    FIXED: Pullback Strategy - Balanced Quality + Frequency
 
-    CHANGES FROM ORIGINAL:
-    - Pullback range: 2-15% (was 3-12%) - captures more setups
-    - Volume requirement: 1.0x (was 1.2x) - less restrictive
-    - RSI range: 30-72 (was 30-70) - slightly wider
-    - Removed price stabilization check - was too restrictive
+    Win Rate: 65.5% → Target 76%+
 
-    Expected Win Rate: 85%+ (proven with 85.7% in backtest)
+    FIXES APPLIED:
+    - Volume back to 1.2x (was 1.0x - too loose)
+    - RSI tightened to 38-70 (from 30-72)
+    - ADX > 18 required (confirm trend)
+    - OBV accumulation check
+    - Stochastic oversold bounce (20-65)
+    - Price stabilization check (daily change > -3%)
+    - Pullback volume check (lighter than recent)
+    - Pullback range tightened to 2-12% (from 2-15%)
 
     Entry Criteria:
     1. Price > 200 SMA (long-term trend)
     2. 20 EMA > 50 EMA (medium-term momentum)
-    3. Price 2-15% from 20 EMA (controlled pullback)
-    4. Volume > 1.0x average (confirmation)
-    5. RSI 30-72 (not extreme)
-    6. MACD bullish
+    3. Price 2-12% from 20 EMA (controlled pullback)
+    4. ADX > 18 (trend exists)
+    5. Volume > 1.2x (confirmation)
+    6. RSI 38-70 (not extreme)
+    7. MACD bullish
+    8. OBV trending up (accumulation)
+    9. Stochastic 20-65 (oversold bounce)
+    10. Daily change > -3% (stabilizing)
+    11. Pullback on lighter volume
     """
-    prev_low = data.get('prev_low', 0)
     close = data.get('close', 0)
     ema20 = data.get('ema20', 0)
     ema50 = data.get('ema50', 0)
@@ -134,6 +157,9 @@ def swing_trade_2(data):
     daily_change_pct = data.get('daily_change_pct', 0)
     macd = data.get('macd', 0)
     macd_signal = data.get('macd_signal', 0)
+    adx = data.get('adx', 0)
+    obv_trending_up = data.get('obv_trending_up', False)
+    stoch_k = data.get('stoch_k', 50)
 
     # 1. Price above 200 SMA (uptrend)
     if close <= sma200:
@@ -143,28 +169,46 @@ def swing_trade_2(data):
     if ema20 <= ema50:
         return _no_signal('EMA20 not above EMA50')
 
-    # 3. ENHANCED: Pullback depth (2-15% instead of 3-12%)
+    # 3. FIXED: Pullback depth (2-12% tightened from 2-15%)
     ema20_distance = abs((close - ema20) / ema20 * 100) if ema20 > 0 else 100
-    if not (2.0 <= ema20_distance <= 15.0):
-        return _no_signal(f'Pullback {ema20_distance:.1f}% not in 2-15% range')
+    if not (2.0 <= ema20_distance <= 12.0):
+        return _no_signal(f'Pullback {ema20_distance:.1f}% not in 2-12% range')
 
-    # 4. ENHANCED: RSI (30-72 instead of 30-70)
-    if not (30 <= rsi <= 72):
-        return _no_signal(f'RSI {rsi:.0f} outside 30-72')
+    # 4. NEW: ADX requirement (trend exists)
+    if adx < 18:
+        return _no_signal(f'ADX {adx:.0f} too weak (need 18+)')
 
-    # 5. ENHANCED: Volume confirmation (1.0x instead of 1.2x)
-    if volume_ratio < 1.0:
-        return _no_signal(f'Volume {volume_ratio:.1f}x below 1.0x')
+    # 5. FIXED: RSI (38-70 tightened from 30-72)
+    if not (38 <= rsi <= 70):
+        return _no_signal(f'RSI {rsi:.0f} outside 38-70')
 
-    # 6. MACD momentum confirmation
+    # 6. FIXED: Volume (1.2x increased from 1.0x)
+    if volume_ratio < 1.2:
+        return _no_signal(f'Volume {volume_ratio:.1f}x below 1.2x')
+
+    # 7. MACD momentum confirmation
     if macd <= macd_signal:
         return _no_signal('MACD not bullish')
 
-    # REMOVED: Price stabilization check (was too restrictive)
+    # 8. NEW: OBV accumulation check
+    if not obv_trending_up:
+        return _no_signal('OBV not confirming accumulation')
+
+    # 9. NEW: Stochastic oversold bounce (20-65)
+    if not (20 <= stoch_k <= 65):
+        return _no_signal(f'Stochastic {stoch_k:.0f} not in 20-65 range')
+
+    # 10. NEW: Price stabilization (not dumping)
+    if daily_change_pct < -3.0:
+        return _no_signal(f'Price dropping too fast ({daily_change_pct:.1f}%)')
+
+    # 11. NEW: Pullback volume check (lighter selling)
+    if volume_ratio > 1.5:
+        return _no_signal('Pullback volume too heavy (selling pressure)')
 
     return {
         'side': 'buy',
-        'msg': f'Enhanced Pullback: {ema20_distance:.1f}% from EMA20, RSI {rsi:.0f}, Vol {volume_ratio:.1f}x, MACD+',
+        'msg': f'✅ Pullback: {ema20_distance:.1f}% from EMA20, ADX {adx:.0f}, RSI {rsi:.0f}, OBV+, Stoch {stoch_k:.0f}',
         'limit_price': close,
         'stop_loss': None,
         'signal_type': 'swing_trade_2'
@@ -173,29 +217,29 @@ def swing_trade_2(data):
 
 def momentum_breakout(data):
     """
-    FIXED: Momentum breakout strategy - now more reliable
+    MAJOR FIXES: Momentum breakout - Quality over quantity
 
-    ORIGINAL ISSUES (44% win rate):
-    - Too strict on volume (2x was too high)
-    - Too strict on ADX (30 was too high)
-    - Too strict on distance from EMA8 (5% was too tight)
-    - RSI range too narrow (50-75)
+    Win Rate: 56.2% → Target 70%+
 
-    FIXES APPLIED:
-    - Volume: 1.3x (was 2x) - more entries
-    - ADX: 22+ (was 30+) - catches earlier momentum
-    - Distance from EMA8: 8% (was 5%) - less restrictive
-    - RSI: 45-75 (was 50-75) - wider range
-    - Added volume surge check (3x+) for high conviction
+    ISSUES FIXED:
+    - Volume too low (1.3x → 1.6x)
+    - ADX too low (22 → 25)
+    - No consolidation check (random breakouts)
+    - Distance from EMA8 too loose (8% → 6%)
+    - MACD just positive (now must accelerate)
+    - No ROC check (added)
+    - No OBV breakout confirmation (added)
 
-    Target Win Rate: 65-70%
-
-    Entry Criteria:
-    1. Breaking above 20-day high (or within 2%)
-    2. Strong volume (1.3x+, or 3x+ for high conviction)
-    3. Momentum (ADX > 22, MACD bullish/expanding)
-    4. Not overextended (RSI 45-75, < 8% from EMA8)
-    5. All EMAs aligned bullishly
+    NEW REQUIREMENTS:
+    1. Prior consolidation (5-15 days, range < 10%)
+    2. Breaking above 20-day high
+    3. Strong volume (1.6x+ AND surge score > 6/10)
+    4. Strong momentum (ADX > 25, ROC > 5%)
+    5. MACD accelerating (not just positive)
+    6. All EMAs aligned bullishly
+    7. Not overextended (RSI 48-75, < 6% from EMA8)
+    8. OBV breakout confirmation
+    9. Stochastic > 60
     """
     close = data.get('close', 0)
     ema8 = data.get('ema8', 0)
@@ -205,14 +249,37 @@ def momentum_breakout(data):
     rsi = data.get('rsi', 50)
     adx = data.get('adx', 0)
     volume_ratio = data.get('volume_ratio', 0)
+    volume_surge_score = data.get('volume_surge_score', 0)
     macd = data.get('macd', 0)
     macd_signal = data.get('macd_signal', 0)
     macd_hist = data.get('macd_histogram', 0)
+    macd_hist_prev = data.get('macd_hist_prev', 0)
+    roc_12 = data.get('roc_12', 0)
+    obv_trending_up = data.get('obv_trending_up', False)
+    stoch_k = data.get('stoch_k', 50)
 
-    # Get 20-day high for breakout detection
+    # Get raw data for consolidation check
     raw_data = data.get('raw', None)
     if raw_data is None or len(raw_data) < 20:
         return _no_signal('Insufficient data')
+
+    # NEW: Check for consolidation before breakout (5-15 days)
+    consolidation_periods = [5, 7, 10, 12, 15]
+    found_consolidation = False
+
+    for period in consolidation_periods:
+        if len(raw_data) < period:
+            continue
+        recent_high = raw_data['high'].iloc[-period:].max()
+        recent_low = raw_data['low'].iloc[-period:].min()
+        consolidation_range = (recent_high - recent_low) / recent_low * 100
+
+        if consolidation_range < 10.0:
+            found_consolidation = True
+            break
+
+    if not found_consolidation:
+        return _no_signal('No consolidation base (need 5-15d range < 10%)')
 
     high_20d = raw_data['high'].iloc[-20:].max()
 
@@ -224,35 +291,51 @@ def momentum_breakout(data):
     if not (close > ema8 > ema20 > ema50 > sma200):
         return _no_signal('EMAs not aligned')
 
-    # 3. FIXED: Momentum - Strong trend (ADX > 22) - was 30
-    if adx < 22:
-        return _no_signal(f'ADX {adx:.0f} too weak (need 22+)')
+    # 3. FIXED: Strong trend (ADX > 25, increased from 22)
+    if adx < 25:
+        return _no_signal(f'ADX {adx:.0f} too weak (need 25+)')
 
-    # 4. MOMENTUM: MACD bullish and expanding
+    # 4. FIXED: MACD bullish AND accelerating
     if macd <= macd_signal or macd_hist <= 0:
-        return _no_signal('MACD not bullish/expanding')
+        return _no_signal('MACD not bullish')
 
-    # 5. FIXED: Volume - (1.3x+) - was 2x
-    # BONUS: If volume is 3x+, treat as high conviction
-    high_conviction = volume_ratio >= 3.0
+    if macd_hist <= macd_hist_prev:
+        return _no_signal('MACD not accelerating')
 
-    if volume_ratio < 1.3:
-        return _no_signal(f'Volume {volume_ratio:.1f}x too low (need 1.3x+)')
+    # 5. FIXED: Strong volume (1.6x+, increased from 1.3x)
+    if volume_ratio < 1.6:
+        return _no_signal(f'Volume {volume_ratio:.1f}x too low (need 1.6x+)')
 
-    # 6. FIXED: RSI - Strong but not overbought (45-75) - was 50-75
-    if not (45 <= rsi <= 75):
-        return _no_signal(f'RSI {rsi:.0f} outside 45-75 range')
+    # 6. NEW: Volume surge quality (> 6/10)
+    if volume_surge_score < 6.0:
+        return _no_signal(f'Volume surge quality too low ({volume_surge_score}/10)')
 
-    # 7. FIXED: Distance from EMA8 (< 8%) - was 5%
+    # 7. FIXED: RSI - Strong but not overbought (48-75, tightened from 45-75)
+    if not (48 <= rsi <= 75):
+        return _no_signal(f'RSI {rsi:.0f} outside 48-75 range')
+
+    # 8. FIXED: Distance from EMA8 (< 6%, tightened from 8%)
     distance_from_ema8 = abs((close - ema8) / ema8 * 100) if ema8 > 0 else 100
-    if distance_from_ema8 > 8.0:
-        return _no_signal(f'Too extended from EMA8 ({distance_from_ema8:.1f}% > 8%)')
+    if distance_from_ema8 > 6.0:
+        return _no_signal(f'Too extended from EMA8 ({distance_from_ema8:.1f}% > 6%)')
 
-    conviction_label = "🔥 HIGH CONVICTION" if high_conviction else ""
+    # 9. NEW: ROC check (strong momentum)
+    if roc_12 < 5.0:
+        return _no_signal(f'ROC {roc_12:.1f}% too weak (need 5%+)')
+
+    # 10. NEW: OBV breakout confirmation
+    if not obv_trending_up:
+        return _no_signal('OBV not confirming breakout')
+
+    # 11. NEW: Stochastic breakout (> 60)
+    if stoch_k < 60:
+        return _no_signal(f'Stochastic {stoch_k:.0f} not confirming breakout')
+
+    conviction_label = "🔥 EXTREME" if volume_surge_score >= 8.0 else "🚀 HIGH"
 
     return {
         'side': 'buy',
-        'msg': f'🚀 Momentum Breakout {conviction_label}: ADX {adx:.0f}, Vol {volume_ratio:.1f}x, RSI {rsi:.0f}',
+        'msg': f'{conviction_label} Momentum: ADX {adx:.0f}, Vol {volume_ratio:.1f}x, Surge {volume_surge_score}/10, ROC {roc_12:.1f}%',
         'limit_price': close,
         'stop_loss': None,
         'signal_type': 'momentum_breakout'
@@ -261,17 +344,25 @@ def momentum_breakout(data):
 
 def consolidation_breakout(data):
     """
-    RELAXED: Trade breakouts from consolidation zones
+    ENHANCED: Consolidation breakout - Already excellent, minor improvements
 
-    Expected Win Rate: 65%+
+    Win Rate: 84.8% → Target 86%+
 
-    Entry Criteria (RELAXED):
-    1. Stock consolidating near highs (< 12% range over 10 days) - was 8%
+    ENHANCEMENTS:
+    - Volume surge score requirement
+    - OBV accumulation confirmation
+    - Stochastic confirmation
+
+    Entry Criteria (MOSTLY UNCHANGED):
+    1. Stock consolidating near highs (< 12% range over 10 days)
     2. Breaking above consolidation range
-    3. Volume expansion (1.3x+) - was 1.8x
-    4. Bullish structure intact (above 200 SMA, EMA20 > EMA50)
-    5. RSI healthy (45-72) - was 45-70
-    6. Not too far from EMA20 (< 10%) - was 8%
+    3. Volume expansion (1.2x+)
+    4. Volume surge score > 5/10 (NEW)
+    5. Bullish structure (above 200 SMA, EMA20 > EMA50)
+    6. RSI healthy (45-72)
+    7. Not too far from EMA20 (< 10%)
+    8. OBV trending up (NEW)
+    9. Stochastic > 45 (NEW)
     """
     close = data.get('close', 0)
     ema20 = data.get('ema20', 0)
@@ -279,6 +370,9 @@ def consolidation_breakout(data):
     sma200 = data.get('sma200', 0)
     rsi = data.get('rsi', 50)
     volume_ratio = data.get('volume_ratio', 0)
+    volume_surge_score = data.get('volume_surge_score', 0)
+    obv_trending_up = data.get('obv_trending_up', False)
+    stoch_k = data.get('stoch_k', 50)
 
     raw_data = data.get('raw', None)
     if raw_data is None or len(raw_data) < 20:
@@ -291,8 +385,8 @@ def consolidation_breakout(data):
 
     high_10d = max(recent_highs)
 
-    # 1. CONSOLIDATION: Tight range (< 15% over 10 days) - RELAXED from 12%
-    if consolidation_range > 15.0:
+    # 1. CONSOLIDATION: Tight range (< 12% over 10 days)
+    if consolidation_range > 12.0:
         return _no_signal(f'Range {consolidation_range:.1f}% too wide')
 
     # 2. STRUCTURE: Above 200 SMA and EMA20 > EMA50
@@ -303,33 +397,51 @@ def consolidation_breakout(data):
     if close < high_10d * 0.995:
         return _no_signal('Not breaking out')
 
-    # 4. VOLUME: Expansion (1.2x+) - RELAXED from 1.3x
+    # 4. VOLUME: Expansion (1.2x+)
     if volume_ratio < 1.2:
         return _no_signal(f'Volume {volume_ratio:.1f}x too low')
 
-    # 5. RSI: Healthy range (45-72) - RELAXED from 45-70
+    # 5. NEW: Volume surge quality
+    if volume_surge_score < 5.0:
+        return _no_signal(f'Volume surge quality too low ({volume_surge_score}/10)')
+
+    # 6. RSI: Healthy range (45-72)
     if not (45 <= rsi <= 72):
         return _no_signal(f'RSI {rsi:.0f} outside 45-72')
 
-    # 6. POSITION: Close to EMA20 (< 10%) - RELAXED from 8%
+    # 7. POSITION: Close to EMA20 (< 10%)
     distance_to_ema20 = abs((close - ema20) / ema20 * 100) if ema20 > 0 else 100
     if distance_to_ema20 > 10.0:
         return _no_signal(f'Too far from EMA20')
 
+    # 8. NEW: OBV accumulation
+    if not obv_trending_up:
+        return _no_signal('OBV not confirming accumulation')
+
+    # 9. NEW: Stochastic confirmation
+    if stoch_k < 45:
+        return _no_signal(f'Stochastic {stoch_k:.0f} too low')
+
     return {
         'side': 'buy',
-        'msg': f'📦 Consolidation Break: {consolidation_range:.1f}% range, Vol {volume_ratio:.1f}x',
+        'msg': f'📦 Consolidation: {consolidation_range:.1f}% range, Vol {volume_ratio:.1f}x (score {volume_surge_score}), OBV+',
         'limit_price': close,
         'stop_loss': None,
         'signal_type': 'consolidation_breakout'
     }
 
 
-def golden_cross(data, position_size='normal'):
+def golden_cross(data):
     """
-    Detects upcoming or recent Golden Cross
+    ACTIVATED & OPTIMIZED: Golden Cross in 3 stages
 
-    LEGACY: Not currently used but kept for reference
+    Target Win Rate: 75%+
+
+    Detects and trades golden cross (50 EMA crossing above 200 SMA) in 3 stages:
+
+    Stage 1: Pre-Cross (50 EMA approaching 200 SMA)
+    Stage 2: Fresh Cross (just crossed, 0-4% above)
+    Stage 3: Post-Cross Pullback (4-15% above, pullback to EMA20)
     """
     ema8 = data.get('ema8', 0)
     ema20 = data.get('ema20', 0)
@@ -338,60 +450,172 @@ def golden_cross(data, position_size='normal'):
     rsi = data.get('rsi', 50)
     volume_ratio = data.get('volume_ratio', 0)
     close = data.get('close', 0)
-    atr = data.get('atr_14', 0)
+    adx = data.get('adx', 0)
     daily_change_pct = data.get('daily_change_pct', 0)
+    obv_trending_up = data.get('obv_trending_up', False)
+    stoch_k = data.get('stoch_k', 50)
+    stoch_d = data.get('stoch_d', 50)
 
-    # ATR volatility filter
-    atr_pct = (atr / close * 100) if close > 0 else 100
-    if atr_pct > 12.0:
-        return _no_signal('Too volatile')
+    # Calculate distance of EMA50 from SMA200
+    distance_pct = ((ema50 - sma200) / sma200 * 100) if sma200 > 0 else -100
 
-    # Calculate distance
-    distance_pct = ((ema50 - sma200) / sma200 * 100)
-
-    # SETUP 1: Fresh Cross (0-3% above)
-    if 0 < distance_pct <= 3.0:
+    # ===== STAGE 1: PRE-CROSS (0-2% below) =====
+    if -2.0 <= distance_pct < 0:
+        # 50 EMA approaching from below
+        if adx < 20:
+            return _no_signal('Pre-cross needs ADX > 20')
         if volume_ratio < 1.5:
             return _no_signal('Pre-cross needs 1.5x+ volume')
         if not (45 <= rsi <= 70):
             return _no_signal(f'RSI {rsi:.0f} outside 45-70')
         if not (close > ema8 > ema20 > ema50):
             return _no_signal('EMAs not aligned')
-        if daily_change_pct <= 0:
-            return _no_signal('Need green candle')
-
-        distance_to_ema20 = abs((close - ema20) / ema20 * 100) if ema20 > 0 else 100
-        if distance_to_ema20 > 5.0:
-            return _no_signal(f'Too far from EMA20')
+        if not obv_trending_up:
+            return _no_signal('OBV not confirming')
+        if not (stoch_k > stoch_d):
+            return _no_signal('Stochastic not bullish')
 
         return {
             'side': 'buy',
-            'msg': f'Golden cross SETUP: {abs(distance_pct):.1f}% from cross',
+            'msg': f'🌅 Golden Cross PRE-CROSS: {abs(distance_pct):.1f}% away, ADX {adx:.0f}, Vol {volume_ratio:.1f}x',
             'limit_price': close,
             'stop_loss': None,
-            'signal_type': 'golden_cross_pullback'
+            'signal_type': 'golden_cross'
+        }
+
+    # ===== STAGE 2: FRESH CROSS (0-4% above) =====
+    elif 0 <= distance_pct <= 4.0:
+        # Fresh golden cross
+        if volume_ratio < 1.3:
+            return _no_signal('Fresh cross needs 1.3x+ volume')
+        if not obv_trending_up:
+            return _no_signal('OBV not confirming')
+        if adx < 20:
+            return _no_signal('ADX too weak')
+        if not (45 <= rsi <= 70):
+            return _no_signal(f'RSI {rsi:.0f} outside 45-70')
+        if daily_change_pct < 0:
+            return _no_signal('Need green candle on cross')
+
+        return {
+            'side': 'buy',
+            'msg': f'✨ Golden Cross FRESH: {distance_pct:.1f}% above, ADX {adx:.0f}, OBV surging',
+            'limit_price': close,
+            'stop_loss': None,
+            'signal_type': 'golden_cross'
+        }
+
+    # ===== STAGE 3: POST-CROSS PULLBACK (4-15% above) =====
+    elif 4.0 < distance_pct <= 15.0:
+        # Post-cross pullback to EMA20
+        distance_to_ema20 = abs((close - ema20) / ema20 * 100) if ema20 > 0 else 100
+
+        if not (2.0 <= distance_to_ema20 <= 8.0):
+            return _no_signal(f'Not at EMA20 pullback ({distance_to_ema20:.1f}%)')
+        if not obv_trending_up:
+            return _no_signal('OBV not confirming (distribution)')
+        if not (35 <= rsi <= 65):
+            return _no_signal(f'RSI {rsi:.0f} outside 35-65')
+        if stoch_k > 40:
+            return _no_signal('Stochastic not oversold enough')
+        if volume_ratio > 1.2:
+            return _no_signal('Pullback volume too heavy')
+
+        return {
+            'side': 'buy',
+            'msg': f'🎯 Golden Cross PULLBACK: {distance_to_ema20:.1f}% to EMA20, Stoch {stoch_k:.0f}, OBV+',
+            'limit_price': close,
+            'stop_loss': None,
+            'signal_type': 'golden_cross'
         }
 
     return _no_signal('No golden cross setup')
 
 
 def bollinger_buy(data):
-    """LEGACY: Bollinger band strategy - not currently used"""
+    """
+    ACTIVATED & OPTIMIZED: Bollinger Band bounce with trend confirmation
+
+    Target Win Rate: 72%+
+
+    Buys oversold bounces from lower Bollinger Band with:
+    - Confirmed uptrend (price > 200 SMA, EMA50 trending up)
+    - Multiple oversold indicators (RSI, Stochastic, Williams %R)
+    - Volume surge on bounce
+    - OBV accumulation (buying the dip)
+    - MACD turning up
+    """
     rsi = data.get('rsi', 50)
     volume_ratio = data.get('volume_ratio', 0)
+    volume_surge_score = data.get('volume_surge_score', 0)
     sma200 = data.get('sma200', 0)
+    ema50 = data.get('ema50', 0)
+    ema50_10d_ago = data.get('ema50_10d_ago', 0)
     bollinger_lower = data.get('bollinger_lower', 0)
     close = data.get('close', 0)
+    adx = data.get('adx', 0)
+    daily_change_pct = data.get('daily_change_pct', 0)
+    obv_trending_up = data.get('obv_trending_up', False)
+    stoch_k = data.get('stoch_k', 50)
+    williams_r = data.get('williams_r', -50)
+    macd_hist = data.get('macd_histogram', 0)
+    macd_hist_prev = data.get('macd_hist_prev', 0)
 
-    if rsi < 30.0 and bollinger_lower >= close > sma200 and volume_ratio >= 1.2:
-        return {
-            'side': 'buy',
-            'limit_price': close,
-            'stop_loss': None,
-            'msg': 'Oversold + Volume + Above 200 SMA',
-            'signal_type': 'bollinger_buy',
-        }
-    return None
+    # 1. Price at lower Bollinger Band (within 2%)
+    if bollinger_lower == 0 or close > bollinger_lower * 1.02:
+        return _no_signal('Not at lower Bollinger Band')
+
+    # 2. Long-term uptrend (above 200 SMA)
+    if close <= sma200:
+        return _no_signal('Below 200 SMA')
+
+    # 3. EMA50 trending up (confirm trend intact)
+    if ema50 <= ema50_10d_ago:
+        return _no_signal('EMA50 not trending up')
+
+    # 4. RSI oversold but not extreme (25-40)
+    if not (25 <= rsi <= 40):
+        return _no_signal(f'RSI {rsi:.0f} not in 25-40 range')
+
+    # 5. Stochastic oversold (< 25)
+    if stoch_k >= 25:
+        return _no_signal(f'Stochastic {stoch_k:.0f} not oversold')
+
+    # 6. Williams %R oversold (< -75)
+    if williams_r >= -75:
+        return _no_signal(f'Williams %R {williams_r:.0f} not oversold')
+
+    # 7. Volume surge on bounce (1.4x+)
+    if volume_ratio < 1.4:
+        return _no_signal(f'Volume {volume_ratio:.1f}x too low (need 1.4x+)')
+
+    # 8. Volume surge quality (> 5/10)
+    if volume_surge_score < 5.0:
+        return _no_signal(f'Volume surge quality too low ({volume_surge_score}/10)')
+
+    # 9. OBV accumulation (buying the dip)
+    if not obv_trending_up:
+        return _no_signal('OBV not confirming accumulation')
+
+    # 10. ADX shows some trend (> 15)
+    if adx < 15:
+        return _no_signal(f'ADX {adx:.0f} too weak')
+
+    # 11. Starting to bounce (daily change > 0)
+    if daily_change_pct <= 0:
+        return _no_signal('Not bouncing yet')
+
+    # 12. MACD turning up (histogram increasing)
+    if macd_hist <= macd_hist_prev:
+        return _no_signal('MACD not turning up')
+
+    return {
+        'side': 'buy',
+        'msg': f'🎪 Bollinger Bounce: RSI {rsi:.0f}, Stoch {stoch_k:.0f}, WilliamsR {williams_r:.0f}, Vol {volume_ratio:.1f}x, OBV+',
+        'limit_price': close,
+        'stop_loss': None,
+        'signal_type': 'bollinger_buy',
+    }
 
 
 def _no_signal(reason):
@@ -406,20 +630,19 @@ def _no_signal(reason):
 
 
 # =======================================================================================================================
-# STRATEGY REGISTRY
-# ORDER MATTERS: Earlier signals are checked first
+# STRATEGY REGISTRY - OPTIMIZED ORDER BY EXPECTED WIN RATE
 # =======================================================================================================================
 
 BUY_STRATEGIES = {
-    # PRIORITY 1: High Win Rate Signals
-    'consolidation_breakout': consolidation_breakout,  # 86% win rate
-    'swing_trade_2': swing_trade_2,  # 85.7% win rate - NOW MORE AGGRESSIVE
+    # PRIORITY 1: Highest Win Rate (80%+)
+    'consolidation_breakout': consolidation_breakout,  # 84.8% → 86%+
 
-    # PRIORITY 2: Solid Performers
-    'swing_trade_1': swing_trade_1,  # 66.7% win rate
-    'momentum_breakout': momentum_breakout,  # FIXED: was 44%, targeting 65-70%
+    # PRIORITY 2: Very High Win Rate (75-80%)
+    'golden_cross': golden_cross,  # NEW - Expecting 75%+
+    'swing_trade_1': swing_trade_1,  # 73.5% → 78%+
+    'swing_trade_2': swing_trade_2,  # 65.5% → 76%+
 
-    # LEGACY SIGNALS (Not actively used)
-    'golden_cross': golden_cross,
-    'bollinger_buy': bollinger_buy,
+    # PRIORITY 3: Good Win Rate (70-75%)
+    'bollinger_buy': bollinger_buy,  # NEW - Expecting 72%+
+    'momentum_breakout': momentum_breakout,  # 56.2% → 70%+
 }

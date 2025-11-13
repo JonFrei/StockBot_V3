@@ -240,3 +240,253 @@ def get_adx(df, period=14):
     adx = dx.ewm(alpha=1 / period, adjust=False).mean()
 
     return adx.iloc[-1] if len(adx) > 0 else 0
+
+
+# ============================================================================
+# NEW INDICATORS FOR IMPROVED SIGNAL QUALITY
+# ============================================================================
+
+def get_obv(df):
+    """
+    Calculate On Balance Volume (OBV)
+
+    OBV measures buying/selling pressure by adding volume on up days
+    and subtracting on down days. Rising OBV = accumulation,
+    Falling OBV = distribution.
+
+    Args:
+        df: DataFrame with 'close' and 'volume' columns
+
+    Returns:
+        float: Current OBV value
+    """
+    if len(df) < 2:
+        return 0
+
+    close = df['close']
+    volume = df['volume']
+
+    # Calculate price direction
+    price_direction = close.diff()
+
+    # OBV calculation
+    obv = pd.Series(index=df.index, dtype=float)
+    obv.iloc[0] = volume.iloc[0]
+
+    for i in range(1, len(df)):
+        if price_direction.iloc[i] > 0:
+            obv.iloc[i] = obv.iloc[i - 1] + volume.iloc[i]
+        elif price_direction.iloc[i] < 0:
+            obv.iloc[i] = obv.iloc[i - 1] - volume.iloc[i]
+        else:
+            obv.iloc[i] = obv.iloc[i - 1]
+
+    return obv.iloc[-1]
+
+
+def get_obv_trend(df, period=20):
+    """
+    Calculate OBV trend direction (rising or falling)
+
+    Returns:
+        dict: {
+            'obv': current OBV,
+            'obv_ema': EMA of OBV,
+            'obv_trending_up': bool
+        }
+    """
+    if len(df) < period:
+        return {'obv': 0, 'obv_ema': 0, 'obv_trending_up': False}
+
+    close = df['close']
+    volume = df['volume']
+
+    # Calculate OBV series
+    price_direction = close.diff()
+    obv = pd.Series(index=df.index, dtype=float)
+    obv.iloc[0] = volume.iloc[0]
+
+    for i in range(1, len(df)):
+        if price_direction.iloc[i] > 0:
+            obv.iloc[i] = obv.iloc[i - 1] + volume.iloc[i]
+        elif price_direction.iloc[i] < 0:
+            obv.iloc[i] = obv.iloc[i - 1] - volume.iloc[i]
+        else:
+            obv.iloc[i] = obv.iloc[i - 1]
+
+    # Calculate EMA of OBV
+    obv_ema = obv.ewm(span=period, adjust=False).mean()
+
+    # Check if trending up
+    obv_trending_up = obv.iloc[-1] > obv_ema.iloc[-1]
+
+    return {
+        'obv': obv.iloc[-1],
+        'obv_ema': obv_ema.iloc[-1],
+        'obv_trending_up': obv_trending_up
+    }
+
+
+def get_stochastic(df, k_period=14, d_period=3):
+    """
+    Calculate Stochastic Oscillator (%K and %D)
+
+    Measures momentum by comparing close to recent high/low range.
+    - %K > 80: Overbought
+    - %K < 20: Oversold
+    - %K crossing above %D: Bullish signal
+    - %K crossing below %D: Bearish signal
+
+    Args:
+        df: DataFrame with 'high', 'low', 'close' columns
+        k_period: Period for %K (default 14)
+        d_period: Period for %D smoothing (default 3)
+
+    Returns:
+        dict: {
+            'stoch_k': float (0-100),
+            'stoch_d': float (0-100),
+            'stoch_bullish': bool (K > D)
+        }
+    """
+    if len(df) < k_period + d_period:
+        return {'stoch_k': 50, 'stoch_d': 50, 'stoch_bullish': False}
+
+    high = df['high']
+    low = df['low']
+    close = df['close']
+
+    # Calculate %K
+    lowest_low = low.rolling(window=k_period).min()
+    highest_high = high.rolling(window=k_period).max()
+
+    stoch_k = 100 * (close - lowest_low) / (highest_high - lowest_low)
+
+    # Calculate %D (SMA of %K)
+    stoch_d = stoch_k.rolling(window=d_period).mean()
+
+    # Get current values
+    current_k = stoch_k.iloc[-1] if not pd.isna(stoch_k.iloc[-1]) else 50
+    current_d = stoch_d.iloc[-1] if not pd.isna(stoch_d.iloc[-1]) else 50
+
+    return {
+        'stoch_k': round(float(current_k), 2),
+        'stoch_d': round(float(current_d), 2),
+        'stoch_bullish': current_k > current_d
+    }
+
+
+def get_roc(df, period=12):
+    """
+    Calculate Rate of Change (ROC)
+
+    Measures the percentage price change over a period.
+    - ROC > 0: Upward momentum
+    - ROC < 0: Downward momentum
+    - Rising ROC: Accelerating momentum
+
+    Args:
+        df: DataFrame with 'close' column
+        period: Lookback period (default 12)
+
+    Returns:
+        float: ROC percentage
+    """
+    if len(df) < period + 1:
+        return 0
+
+    close = df['close']
+
+    # Calculate ROC
+    roc = ((close - close.shift(period)) / close.shift(period)) * 100
+
+    return round(float(roc.iloc[-1]), 2) if not pd.isna(roc.iloc[-1]) else 0
+
+
+def get_williams_r(df, period=14):
+    """
+    Calculate Williams %R
+
+    Similar to Stochastic but inverted scale.
+    - %R > -20: Overbought
+    - %R < -80: Oversold
+    - Rising %R: Bullish momentum
+
+    Args:
+        df: DataFrame with 'high', 'low', 'close' columns
+        period: Lookback period (default 14)
+
+    Returns:
+        float: Williams %R value (-100 to 0)
+    """
+    if len(df) < period:
+        return -50
+
+    high = df['high']
+    low = df['low']
+    close = df['close']
+
+    # Calculate Williams %R
+    highest_high = high.rolling(window=period).max()
+    lowest_low = low.rolling(window=period).min()
+
+    williams_r = -100 * (highest_high - close) / (highest_high - lowest_low)
+
+    return round(float(williams_r.iloc[-1]), 2) if not pd.isna(williams_r.iloc[-1]) else -50
+
+
+def get_volume_surge_score(df, period=20):
+    """
+    Calculate volume surge quality score (0-10)
+
+    Analyzes recent volume patterns to score quality of volume surge.
+    Higher score = more significant/unusual volume
+
+    Args:
+        df: DataFrame with 'volume' column
+        period: Lookback period (default 20)
+
+    Returns:
+        float: Score 0-10
+    """
+    if len(df) < period:
+        return 0
+
+    volume = df['volume']
+    current_volume = volume.iloc[-1]
+    avg_volume = volume.iloc[-period:].mean()
+
+    # Calculate percentile rank
+    volume_history = volume.iloc[-period:]
+    percentile = (volume_history < current_volume).sum() / len(volume_history) * 100
+
+    # Score based on volume ratio and percentile
+    volume_ratio = current_volume / avg_volume if avg_volume > 0 else 0
+
+    score = 0
+
+    # Volume ratio component (0-5 points)
+    if volume_ratio > 3.0:
+        score += 5
+    elif volume_ratio > 2.0:
+        score += 4
+    elif volume_ratio > 1.5:
+        score += 3
+    elif volume_ratio > 1.2:
+        score += 2
+    elif volume_ratio > 1.0:
+        score += 1
+
+    # Percentile component (0-5 points)
+    if percentile >= 95:
+        score += 5
+    elif percentile >= 90:
+        score += 4
+    elif percentile >= 80:
+        score += 3
+    elif percentile >= 70:
+        score += 2
+    elif percentile >= 60:
+        score += 1
+
+    return round(score, 1)
