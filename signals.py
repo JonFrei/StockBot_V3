@@ -45,12 +45,14 @@ def buy_signals(data, buy_signal_list):
 
 def swing_trade_1(data):
     """
-    ENHANCED BUT BALANCED: Keep improvements that worked
+    SLIGHTLY TIGHTENED: Reduced emergency stops while maintaining volume
 
-    Win Rate: 73.5% → 75.8% ✅ (WORKING WELL)
-    Trades: 68 → 95 ✅ (MORE TRADES)
+    Changes from previous:
+    - Volume: 1.2x → 1.3x (filter weak volume)
+    - RSI: 48-72 → 50-70 (avoid RSI extremes)
+    - Added: ADX > 20 (require trend strength)
 
-    Keep only the best enhancements, drop the restrictive ones
+    Expected: 85-95 trades with 65-70% win rate
     """
     ema20 = data.get('ema20', 0)
     ema50 = data.get('ema50', 0)
@@ -61,6 +63,7 @@ def swing_trade_1(data):
     macd = data.get('macd', 0)
     macd_signal = data.get('macd_signal', 0)
     obv_trending_up = data.get('obv_trending_up', False)
+    adx = data.get('adx', 0)
 
     # Trend confirmation
     if not (ema20 > ema50):
@@ -70,25 +73,29 @@ def swing_trade_1(data):
     if not (close > ema20 and close > sma200):
         return _no_signal('Price below key levels')
 
-    # RSI sweet spot
-    if not (48 <= rsi <= 72):
-        return _no_signal(f'RSI {rsi:.0f} not in 48-72 range')
+    # TIGHTENED: RSI sweet spot (50-70 from 48-72)
+    if not (50 <= rsi <= 70):
+        return _no_signal(f'RSI {rsi:.0f} not in 50-70 range')
 
-    # Volume (keep at 1.2x - working well)
-    if volume_ratio < 1.2:
+    # TIGHTENED: Volume (1.3x from 1.2x)
+    if volume_ratio < 1.3:
         return _no_signal(f'Volume {volume_ratio:.1f}x too low')
 
     # MACD bullish
     if macd <= macd_signal:
         return _no_signal('MACD not bullish')
 
-    # OBV confirmation (KEEP - helpful)
+    # OBV confirmation
     if not obv_trending_up:
         return _no_signal('OBV not confirming')
 
+    # NEW: ADX requirement (trend strength)
+    if adx < 20:
+        return _no_signal(f'ADX {adx:.0f} too weak')
+
     return {
         'side': 'buy',
-        'msg': f'✅ Swing1: RSI {rsi:.0f}, Vol {volume_ratio:.1f}x, MACD+, OBV+',
+        'msg': f'✅ Swing1: RSI {rsi:.0f}, Vol {volume_ratio:.1f}x, ADX {adx:.0f}, OBV+',
         'limit_price': close,
         'stop_loss': None,
         'signal_type': 'swing_trade_1'

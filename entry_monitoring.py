@@ -50,24 +50,20 @@ class SignalStrengthConfig:
 
 def calculate_signal_strength(signal_type, data):
     """
-    Calculate strength score for a specific signal (0-100)
+    Calculate strength score with POWER COMBINATION BONUSES (0-100)
 
-    Scoring Components:
+    Base Scoring (0-100):
     1. Technical Strength (40 pts) - RSI, MACD, ADX quality
     2. Volume Conviction (25 pts) - Volume confirmation
     3. Trend Quality (20 pts) - EMA alignment, distance from 200 SMA
     4. Risk/Reward (15 pts) - Entry timing
 
-    Args:
-        signal_type: Signal name (e.g., 'momentum_breakout')
-        data: Dictionary with technical indicators
-
-    Returns:
-        dict: {
-            'score': float (0-100),
-            'level': str,
-            'breakdown': dict
-        }
+    Power Combination Bonuses (up to +70, capped at 100):
+    - Volume + Accumulation: +20
+    - Momentum Acceleration: +15
+    - Perfect Structure: +15
+    - Sweet Spot RSI: +10
+    - Multiple Timeframe Confirmation: +10
     """
     score = 0.0
     breakdown = {}
@@ -80,31 +76,33 @@ def calculate_signal_strength(signal_type, data):
     macd = data.get('macd', 0)
     macd_signal = data.get('macd_signal', 0)
     macd_hist = data.get('macd_histogram', 0)
+    macd_hist_prev = data.get('macd_hist_prev', 0)
     ema8 = data.get('ema8', 0)
     ema20 = data.get('ema20', 0)
     ema50 = data.get('ema50', 0)
     sma200 = data.get('sma200', 0)
+    obv_trending_up = data.get('obv_trending_up', False)
 
-    # === 1. TECHNICAL STRENGTH (40 points) ===
+    # === BASE SCORING (0-100) ===
+
+    # 1. TECHNICAL STRENGTH (40 points)
     technical_score = 0.0
 
     # RSI positioning (15 pts)
-    if 55 <= rsi <= 65:  # Sweet spot
+    if 55 <= rsi <= 65:
         technical_score += 15.0
-    elif 50 <= rsi <= 70:  # Good
+    elif 50 <= rsi <= 70:
         technical_score += 12.0
-    elif 45 <= rsi <= 75:  # Acceptable
+    elif 45 <= rsi <= 75:
         technical_score += 8.0
-    elif 40 <= rsi <= 80:  # Marginal
+    elif 40 <= rsi <= 80:
         technical_score += 4.0
 
     # MACD strength (15 pts)
     if macd > macd_signal and macd_hist > 0:
-        # Bullish and expanding - scale by histogram strength
         macd_strength = min(15.0, 10.0 + abs(macd_hist) * 2)
         technical_score += macd_strength
     elif macd > macd_signal:
-        # Bullish but not expanding
         technical_score += 8.0
 
     # ADX trend strength (10 pts)
@@ -120,11 +118,11 @@ def calculate_signal_strength(signal_type, data):
     score += technical_score
     breakdown['technical'] = round(technical_score, 1)
 
-    # === 2. VOLUME CONVICTION (25 points) ===
+    # 2. VOLUME CONVICTION (25 points)
     volume_score = 0.0
 
     if volume_ratio > 3.0:
-        volume_score = 25.0  # Exceptional volume
+        volume_score = 25.0
     elif volume_ratio > 2.5:
         volume_score = 22.0
     elif volume_ratio > 2.0:
@@ -139,18 +137,18 @@ def calculate_signal_strength(signal_type, data):
     score += volume_score
     breakdown['volume'] = round(volume_score, 1)
 
-    # === 3. TREND QUALITY (20 points) ===
+    # 3. TREND QUALITY (20 points)
     trend_score = 0.0
 
     # EMA alignment (12 pts)
     if close > ema8 > ema20 > ema50 > sma200:
-        trend_score += 12.0  # Perfect alignment
+        trend_score += 12.0
     elif close > ema20 > ema50 > sma200:
-        trend_score += 10.0  # Good alignment
+        trend_score += 10.0
     elif close > ema20 > sma200:
-        trend_score += 7.0  # Decent
+        trend_score += 7.0
     elif close > sma200:
-        trend_score += 4.0  # Weak
+        trend_score += 4.0
 
     # Distance from 200 SMA (8 pts)
     if sma200 > 0:
@@ -167,16 +165,14 @@ def calculate_signal_strength(signal_type, data):
     score += trend_score
     breakdown['trend'] = round(trend_score, 1)
 
-    # === 4. RISK/REWARD SETUP (15 points) ===
+    # 4. RISK/REWARD SETUP (15 points)
     rr_score = 0.0
 
-    # Distance from EMA20 (entry timing)
     if ema20 > 0:
         distance_from_ema20 = abs((close - ema20) / ema20 * 100)
 
-        # Closer to EMA20 = better R/R
         if distance_from_ema20 < 2:
-            rr_score += 15.0  # Very close
+            rr_score += 15.0
         elif distance_from_ema20 < 4:
             rr_score += 12.0
         elif distance_from_ema20 < 6:
@@ -189,22 +185,61 @@ def calculate_signal_strength(signal_type, data):
     score += rr_score
     breakdown['risk_reward'] = round(rr_score, 1)
 
-    # === DETERMINE LEVEL ===
+    # === POWER COMBINATION BONUSES (up to +70) ===
+    bonus_score = 0.0
+
+    # POWER COMBO 1: Volume + Accumulation (+20)
+    if volume_ratio > 1.5 and obv_trending_up:
+        bonus_score += 20.0
+        breakdown['volume_accumulation_bonus'] = 20.0
+
+    # POWER COMBO 2: Momentum Acceleration (+15)
+    if (macd > macd_signal and
+        macd_hist > 0 and
+        macd_hist > macd_hist_prev and
+        adx > 25):
+        bonus_score += 15.0
+        breakdown['momentum_acceleration_bonus'] = 15.0
+
+    # POWER COMBO 3: Perfect Structure (+15)
+    if close > ema8 > ema20 > ema50 > sma200:
+        bonus_score += 15.0
+        breakdown['perfect_structure_bonus'] = 15.0
+
+    # POWER COMBO 4: Sweet Spot RSI (+10)
+    if 52 <= rsi <= 65:
+        bonus_score += 10.0
+        breakdown['sweet_spot_rsi_bonus'] = 10.0
+
+    # POWER COMBO 5: Multiple Timeframe Confirmation (+10)
+    if ema20 > 0:
+        distance_from_ema20 = abs((close - ema20) / ema20 * 100)
+        if distance_from_ema20 < 3 and close > ema8 > ema20:
+            bonus_score += 10.0
+            breakdown['timeframe_confirmation_bonus'] = 10.0
+
+    score += bonus_score
+    breakdown['power_bonuses'] = round(bonus_score, 1)
+
+    # Cap final score at 100
+    final_score = min(100.0, score)
+
+    # Determine level
     config = SignalStrengthConfig
 
-    if score >= config.EXCEPTIONAL_THRESHOLD:
+    if final_score >= config.EXCEPTIONAL_THRESHOLD:
         level = 'exceptional'
-    elif score >= config.STRONG_THRESHOLD:
+    elif final_score >= config.STRONG_THRESHOLD:
         level = 'strong'
-    elif score >= config.GOOD_THRESHOLD:
+    elif final_score >= config.GOOD_THRESHOLD:
         level = 'good'
-    elif score >= config.WEAK_THRESHOLD:
+    elif final_score >= config.WEAK_THRESHOLD:
         level = 'weak'
     else:
         level = 'very_weak'
 
     return {
-        'score': round(score, 2),
+        'score': round(final_score, 2),
         'level': level,
         'breakdown': breakdown
     }
