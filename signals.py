@@ -40,7 +40,7 @@ def buy_signals(data, buy_signal_list):
 
 
 # ===================================================================================
-# BUY SIGNALS - VERSION 2: BALANCED (Quality + Quantity)
+# BUY SIGNALS - UPDATED VERSION
 # ===================================================================================
 
 def swing_trade_1(data):
@@ -176,84 +176,6 @@ def swing_trade_2(data):
     }
 
 
-def momentum_breakout(data):
-    """
-    BALANCED: Was too restrictive (16→3 trades)
-
-    Target: 10-15 trades with 65-70% win rate
-
-    LOOSENED:
-    - Consolidation: Made optional (not required)
-    - Volume: 1.6x → 1.4x
-    - Volume surge score: Removed
-    - ADX: 25 → 23
-    - ROC: Removed
-    - OBV: Made optional
-    - Stochastic: Removed
-
-    KEPT:
-    - Breaking 20-day high
-    - EMA alignment
-    - MACD bullish
-    - RSI 48-75
-    - Distance from EMA8 < 6%
-    """
-    close = data.get('close', 0)
-    ema8 = data.get('ema8', 0)
-    ema20 = data.get('ema20', 0)
-    ema50 = data.get('ema50', 0)
-    sma200 = data.get('sma200', 0)
-    rsi = data.get('rsi', 50)
-    adx = data.get('adx', 0)
-    volume_ratio = data.get('volume_ratio', 0)
-    macd = data.get('macd', 0)
-    macd_signal = data.get('macd_signal', 0)
-    macd_hist = data.get('macd_histogram', 0)
-
-    raw_data = data.get('raw', None)
-    if raw_data is None or len(raw_data) < 20:
-        return _no_signal('Insufficient data')
-
-    high_20d = raw_data['high'].iloc[-20:].max()
-
-    # 1. BREAKOUT: Price breaking above 20-day high (within 2%)
-    if close < high_20d * 0.98:
-        return _no_signal('Not breaking out')
-
-    # 2. STRUCTURE: All EMAs bullishly aligned
-    if not (close > ema8 > ema20 > ema50 > sma200):
-        return _no_signal('EMAs not aligned')
-
-    # 3. LOOSENED: ADX > 23 (from 25)
-    if adx < 23:
-        return _no_signal(f'ADX {adx:.0f} too weak')
-
-    # 4. MACD bullish
-    if macd <= macd_signal or macd_hist <= 0:
-        return _no_signal('MACD not bullish')
-
-    # 5. LOOSENED: Volume (1.4x from 1.6x)
-    if volume_ratio < 1.4:
-        return _no_signal(f'Volume {volume_ratio:.1f}x too low')
-
-    # 6. RSI (48-75)
-    if not (48 <= rsi <= 75):
-        return _no_signal(f'RSI {rsi:.0f} outside 48-75 range')
-
-    # 7. Distance from EMA8 (< 6%)
-    distance_from_ema8 = abs((close - ema8) / ema8 * 100) if ema8 > 0 else 100
-    if distance_from_ema8 > 6.0:
-        return _no_signal(f'Too extended from EMA8 ({distance_from_ema8:.1f}%)')
-
-    return {
-        'side': 'buy',
-        'msg': f'🚀 Momentum: ADX {adx:.0f}, Vol {volume_ratio:.1f}x, RSI {rsi:.0f}',
-        'limit_price': close,
-        'stop_loss': None,
-        'signal_type': 'momentum_breakout'
-    }
-
-
 def consolidation_breakout(data):
     """
     REVERTED: My enhancements made it worse (84.8%→74.5%)
@@ -352,14 +274,16 @@ def golden_cross(data):
 
 def bollinger_buy(data):
     """
-    REVERTED TO ORIGINAL: Strict filters that gave 100% win rate
+    KEEPING ORIGINAL - 100% win rate, extremely selective
 
-    Back to original settings:
-    - Bollinger proximity: 3% (NOT 4%)
-    - RSI range: 28-45 (NOT 25-48)
-    - Volume: 1.3x (NOT 1.2x)
+    This signal already has perfect filters:
+    - Strict Bollinger proximity (3%)
+    - Tight RSI range (28-45)
+    - High volume requirement (1.3x)
+    - OBV confirmation
+    - Bounce confirmation
 
-    Goal: 6-10 trades with 90%+ win rate (quality over quantity)
+    Don't fix what isn't broken!
     """
     rsi = data.get('rsi', 50)
     volume_ratio = data.get('volume_ratio', 0)
@@ -369,7 +293,7 @@ def bollinger_buy(data):
     daily_change_pct = data.get('daily_change_pct', 0)
     obv_trending_up = data.get('obv_trending_up', False)
 
-    # ORIGINAL: Price at lower Bollinger (within 3% - STRICT)
+    # Price at lower Bollinger (within 3%)
     if bollinger_lower == 0 or close > bollinger_lower * 1.03:
         return _no_signal('Not at lower Bollinger')
 
@@ -377,11 +301,11 @@ def bollinger_buy(data):
     if close <= sma200:
         return _no_signal('Below 200 SMA')
 
-    # ORIGINAL: RSI oversold (28-45 - STRICT)
+    # RSI oversold (28-45)
     if not (28 <= rsi <= 45):
         return _no_signal(f'RSI not in range')
 
-    # ORIGINAL: Volume confirmation (1.3x - STRICT)
+    # Volume confirmation (1.3x)
     if volume_ratio < 1.3:
         return _no_signal('Volume too low')
 
@@ -414,14 +338,13 @@ def _no_signal(reason):
 
 
 # =======================================================================================================================
-# STRATEGY REGISTRY - BALANCED ORDER
+# STRATEGY REGISTRY
 # =======================================================================================================================
 
 BUY_STRATEGIES = {
-    'consolidation_breakout': consolidation_breakout,  # Reverted to original
-    'swing_trade_1': swing_trade_1,  # Keep enhancements (working)
-    'swing_trade_2': swing_trade_2,  # Fixed (was 0 trades)
-    'golden_cross': golden_cross,  # Simplified
-    'bollinger_buy': bollinger_buy,  # REVERTED to strict original
-    'momentum_breakout': momentum_breakout,  # Loosened
+    'consolidation_breakout': consolidation_breakout,
+    'swing_trade_1': swing_trade_1,
+    'swing_trade_2': swing_trade_2,
+    'golden_cross': golden_cross,
+    'bollinger_buy': bollinger_buy,
 }

@@ -3,10 +3,10 @@ from lumibot.strategies import Strategy
 from config import Config
 
 import stock_data
+import signals
 import position_sizing
 import profit_tracking
 import position_monitoring
-import entry_monitoring
 from ticker_cooldown import TickerCooldown
 from stock_rotation import StockRotator
 
@@ -22,7 +22,6 @@ class SwingTradeStrategy(Strategy):
 
     # Active trading signals (in priority order)
     ACTIVE_SIGNALS = [
-        # 'momentum_breakout',  # High conviction breakouts
         'consolidation_breakout',  # Consolidation breaks
         'swing_trade_1',  # EMA crossover + momentum
         'swing_trade_2',  # Pullback plays
@@ -30,8 +29,11 @@ class SwingTradeStrategy(Strategy):
         'bollinger_buy'
     ]
 
-    # Cooldown configuration - INCREASED TO 3 DAYS
+    # Cooldown configuration
     COOLDOWN_DAYS = 3  # Days between re-purchases of same ticker
+
+    # Fixed position sizing (no adaptive entry sizing)
+    POSITION_SIZE_PCT = 20.0  # 14% of cash per trade
 
     # =========================================================================
 
@@ -52,7 +54,7 @@ class SwingTradeStrategy(Strategy):
         # Ticker cooldown to prevent chasing
         self.ticker_cooldown = TickerCooldown(cooldown_days=self.COOLDOWN_DAYS)
 
-        # STOCK ROTATION - REDUCED TO 12 ACTIVE STOCKS (from 15)
+        # Stock rotation
         self.stock_rotator = StockRotator(max_active=12, rotation_frequency='weekly')
 
         # Track rotation timing
@@ -62,6 +64,7 @@ class SwingTradeStrategy(Strategy):
         print(
             f"✅ Stock Rotation: Max {self.stock_rotator.max_active} active stocks ({self.stock_rotator.rotation_frequency})")
         print(f"✅ Active Signals: {len(self.ACTIVE_SIGNALS)} signals configured")
+        print(f"✅ Fixed Position Size: {self.POSITION_SIZE_PCT}% per trade")
 
     def before_starting_trading(self):
         """
@@ -104,7 +107,7 @@ class SwingTradeStrategy(Strategy):
         print('Portfolio Value:', self.portfolio_value)
         print('Cash Balance:', self.get_cash())
 
-        # NEW: Display active cooldowns
+        # Display active cooldowns
         active_cooldowns = self.ticker_cooldown.get_all_cooldowns(current_date)
         if active_cooldowns:
             print(f"\n⏰ Active Cooldowns:")
@@ -139,10 +142,10 @@ class SwingTradeStrategy(Strategy):
         )
 
         # =====================================================================
-        # STEP 2: STOCK ROTATION - TRUE WEEKLY ROTATION (FIXED)
+        # STEP 2: STOCK ROTATION - TRUE WEEKLY ROTATION
         # =====================================================================
 
-        # FIX: Only rotate on schedule, NOT on position exits
+        # Only rotate on schedule, NOT on position exits
         current_week = current_date.isocalendar()[1]  # ISO week number
         current_year = current_date.year
 
@@ -171,7 +174,7 @@ class SwingTradeStrategy(Strategy):
                 self.last_rotation_week = (current_year, current_week)
 
         # =====================================================================
-        # STEP 3: LOOK FOR NEW BUY SIGNALS (only if we have cash)
+        # STEP 3: LOOK FOR NEW BUY SIGNALS (SIMPLIFIED - NO SCORING)
         # =====================================================================
 
         buy_orders = []
@@ -197,61 +200,55 @@ class SwingTradeStrategy(Strategy):
             if has_position:
                 continue
 
-            # === GET ADAPTIVE PARAMETERS (Cached Daily) ===
+            # === GET ADAPTIVE PARAMETERS FOR EXITS (still used for exit strategy) ===
             adaptive_params = self.position_monitor.get_cached_market_conditions(
                 ticker, current_date_str, data
             )
 
-            # === EVALUATE ALL SIGNALS WITH CONFLUENCE ===
-            signal_evaluation = entry_monitoring.evaluate_all_signals(data, self.ACTIVE_SIGNALS)
+            # === CHECK FOR ANY VALID BUY SIGNAL (SIMPLIFIED) ===
+            buy_signal = signals.buy_signals(data, self.ACTIVE_SIGNALS)
 
-            # Skip if no strong signals
-            if signal_evaluation['recommendation'] == 'skip':
+            # Skip if no buy signal
+            if not buy_signal or buy_signal.get('side') != 'buy':
                 continue
 
-            # Get best signal for entry
-            best_signal = signal_evaluation['best_signal']['signal_data']
-
-            # Size position to buy - PASS ADAPTIVE PARAMETERS
+            # === FIXED POSITION SIZE (NO ADAPTIVE ENTRY SIZING) ===
             buy_position = position_sizing.calculate_buy_size(
                 self,
                 data['close'],
                 account_threshold=20000,
+                max_position_pct=self.POSITION_SIZE_PCT,  # Fixed 14%
                 pending_commitments=pending_cash_commitment,
-                adaptive_params=adaptive_params
+                adaptive_params=None  # No adaptive entry sizing
             )
 
             # Check if we can trade
             if not buy_position['can_trade']:
                 continue
 
-            # Track that we have a position with entry signal AND SCORE
+            # Track position with entry signal (no score)
             self.position_monitor.track_position(
                 ticker,
                 current_date,
-                best_signal.get('signal_type', 'unknown'),
-                entry_score=signal_evaluation['final_score']
+                buy_signal.get('signal_type', 'unknown'),
+                entry_score=0  # No scoring system
             )
 
             # Create order
-            order_sig = best_signal
+            order_sig = buy_signal.copy()
             order_sig['ticker'] = ticker
             order_sig['stop_loss'] = 0.90 * data['close']
             order_sig['quantity'] = buy_position['quantity']
             order_sig['position_value'] = buy_position['position_value']
             order_sig['condition'] = adaptive_params['condition_label']
-            order_sig['signal_score'] = signal_evaluation['final_score']
-            order_sig['confluence'] = signal_evaluation['confluence_count']
             buy_orders.append(order_sig)
 
             # ADD COMMITMENT to prevent over-purchasing
             pending_cash_commitment += buy_position['position_value']
 
-            # Display signal evaluation
-            score = signal_evaluation['final_score']
-            conf = signal_evaluation['confluence_count']
+            # Display pending order
             print(
-                f" * PENDING BUY: {ticker} x{buy_position['quantity']} {adaptive_params['condition_label']} | Score: {score:.0f} ({conf} signals) = ${buy_position['position_value']:,.2f}")
+                f" * PENDING BUY: {ticker} x{buy_position['quantity']} {adaptive_params['condition_label']} | {buy_signal['signal_type']} = ${buy_position['position_value']:,.2f}")
 
         # Submit buy orders
         if len(buy_orders) > 0:
@@ -266,13 +263,9 @@ class SwingTradeStrategy(Strategy):
                 if order['side'] == 'buy':
                     submit_order = self.create_order(order['ticker'], order['quantity'], order['side'])
 
-                    score = order.get('signal_score', 0)
-                    conf = order.get('confluence', 0)
-
                     print(
                         f" * BUY: {order['ticker']} x{order['quantity']} {order['condition']} | {order['signal_type']}")
-                    print(
-                        f"        Score: {score:.0f}/100 ({conf} signals) | Price: ${order['limit_price']:.2f} | Value: ${order['position_value']:,.2f}")
+                    print(f"        Price: ${order['limit_price']:.2f} | Value: ${order['position_value']:,.2f}")
 
                     self.submit_order(submit_order)
 
