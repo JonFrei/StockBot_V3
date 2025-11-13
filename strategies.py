@@ -8,6 +8,7 @@ import profit_tracking
 import position_monitoring
 import entry_monitoring
 from ticker_cooldown import TickerCooldown
+from stock_rotation import StockRotator
 
 from lumibot.brokers import Alpaca
 
@@ -21,7 +22,7 @@ class SwingTradeStrategy(Strategy):
 
     # Active trading signals (in priority order)
     ACTIVE_SIGNALS = [
-        'momentum_breakout',  # High conviction breakouts
+        # 'momentum_breakout',  # High conviction breakouts
         'consolidation_breakout',  # Consolidation breaks
         'swing_trade_1',  # EMA crossover + momentum
         'swing_trade_2',  # Pullback plays
@@ -50,7 +51,12 @@ class SwingTradeStrategy(Strategy):
 
         # Ticker cooldown to prevent chasing
         self.ticker_cooldown = TickerCooldown(cooldown_days=self.COOLDOWN_DAYS)
+
+        # STOCK ROTATION
+        self.stock_rotator = StockRotator(max_active=10, rotation_frequency='weekly')
+
         print(f"✅ Ticker Cooldown Enabled: {self.ticker_cooldown.cooldown_days} days between purchases")
+        print(f"✅ Stock Rotation: Max {self.stock_rotator.max_active} active stocks ({self.stock_rotator.rotation_frequency})")
         print(f"✅ Active Signals: {len(self.ACTIVE_SIGNALS)} signals configured")
 
     def before_starting_trading(self):
@@ -128,7 +134,17 @@ class SwingTradeStrategy(Strategy):
         )
 
         # =====================================================================
-        # STEP 2: LOOK FOR NEW BUY SIGNALS (only if we have cash)
+        # STEP 2: STOCK ROTATION - Get active tickers to trade (NEW)
+        # =====================================================================
+
+        active_tickers = self.stock_rotator.get_active_tickers(
+            strategy=self,
+            all_candidates=self.tickers,
+            current_date=current_date
+        )
+
+        # =====================================================================
+        # STEP 3: LOOK FOR NEW BUY SIGNALS (only if we have cash)
         # =====================================================================
 
         buy_orders = []
@@ -173,6 +189,7 @@ class SwingTradeStrategy(Strategy):
             buy_position = position_sizing.calculate_buy_size(
                 self,
                 data['close'],
+                account_threshold=20000,
                 pending_commitments=pending_cash_commitment,
                 adaptive_params=adaptive_params
             )
@@ -248,5 +265,9 @@ class SwingTradeStrategy(Strategy):
         for ticker, count in list(cooldown_stats['buy_count_by_ticker'].items())[:10]:
             print(f"   {ticker}: {count} purchases")
         print(f"{'=' * 80}\n")
+
+        # Display rotation statistics (NEW)
+        from stock_rotation import print_rotation_report
+        print_rotation_report(self.stock_rotator)
 
         return 0

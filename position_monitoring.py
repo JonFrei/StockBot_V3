@@ -39,7 +39,7 @@ class AdaptiveExitConfig:
     STRONG_PROFIT_TARGET_3 = 60.0  # NEW: Big winner target
     STRONG_PROFIT_TARGET_3_SELL = 25.0  # NEW: Sell 25%, trail remaining 10%
     STRONG_TRAILING_STOP = 11.0  # Wider trail
-    STRONG_TRAILING_STOP_FINAL = 15.0  # NEW: Extra wide trail after Level 3
+    STRONG_TRAILING_STOP_FINAL = 20.0  # NEW: Extra wide trail after Level 3
     STRONG_POSITION_SIZE_PCT = 18.0
 
     # === NEUTRAL CONDITIONS (Score 4-6) ===
@@ -51,7 +51,7 @@ class AdaptiveExitConfig:
     NEUTRAL_PROFIT_TARGET_3 = 50.0  # NEW: Big winner target
     NEUTRAL_PROFIT_TARGET_3_SELL = 20.0  # NEW: Sell 20%, trail remaining 5%
     NEUTRAL_TRAILING_STOP = 8.0
-    NEUTRAL_TRAILING_STOP_FINAL = 12.0  # NEW: Wider trail after Level 3
+    NEUTRAL_TRAILING_STOP_FINAL = 16.0  # NEW: Wider trail after Level 3
     NEUTRAL_POSITION_SIZE_PCT = 14.0
 
     # === WEAK CONDITIONS (Score 0-3) ===
@@ -63,7 +63,7 @@ class AdaptiveExitConfig:
     WEAK_PROFIT_TARGET_3 = 40.0  # NEW: Lower target in weak conditions
     WEAK_PROFIT_TARGET_3_SELL = 15.0  # NEW: Sell 15%, exit completely on trail
     WEAK_TRAILING_STOP = 5.0  # Tight trail
-    WEAK_TRAILING_STOP_FINAL = 8.0  # NEW: Slightly wider trail after Level 3
+    WEAK_TRAILING_STOP_FINAL = 12.0  # NEW: Slightly wider trail after Level 3
     WEAK_POSITION_SIZE_PCT = 10.0
 
 
