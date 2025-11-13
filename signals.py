@@ -5,7 +5,7 @@ tickers = ""
 current_date = datetime.today()
 
 
-def buy_signals(data, buy_signal_list):
+def buy_signals(data, buy_signal_list, spy_data=None):
     """
     Check multiple buy strategies and return first valid signal
     Returns dict or None
@@ -16,8 +16,17 @@ def buy_signals(data, buy_signal_list):
     # Calculate distance from 200 SMA
     distance_from_200 = ((close - sma200) / sma200 * 100) if sma200 > 0 else -100
 
-    # Only block if MORE than 5% below 200 SMA
-    if distance_from_200 < -5.0:
+    # Only block if MORE than 5% below 200 SMA or SPY < 200 SMA
+    spy_close = None
+    spy_sma200 = None
+    if spy_data is not None:
+        spy_close = spy_data.get('close', 0)
+        spy_sma200 = spy_data.get('sma200', 0)
+
+        if spy_sma200 > 0:
+            spy_distance = ((spy_close - spy_sma200) / spy_sma200 * 100)
+
+    if distance_from_200 < -5.0 or spy_close < spy_sma200:
         return {
             'side': 'hold',
             'msg': f'🔴 Bear Market Protection Active ({distance_from_200:.1f}% below 200 SMA)',

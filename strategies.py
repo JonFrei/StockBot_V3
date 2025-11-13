@@ -33,7 +33,7 @@ class SwingTradeStrategy(Strategy):
     COOLDOWN_DAYS = 2  # Days between re-purchases of same ticker
 
     # Fixed position sizing (no adaptive entry sizing)
-    POSITION_SIZE_PCT = 20.0  # 14% of cash per trade
+    POSITION_SIZE_PCT = 15.0  # 14% of cash per trade
 
     MAX_ACTIVE_STOCKS = 12
 
@@ -126,6 +126,8 @@ class SwingTradeStrategy(Strategy):
         all_tickers = list(set(self.tickers + [p.symbol for p in self.get_positions()]))
         all_stock_data = stock_data.process_data(all_tickers, current_date)
 
+        spy_data = all_stock_data.get('SPY', {}).get('indicators', None) if 'SPY' in all_stock_data else None
+
         # =====================================================================
         # STEP 1: CHECK ALL EXISTING POSITIONS FOR EXITS (HIGHEST PRIORITY)
         # =====================================================================
@@ -214,7 +216,7 @@ class SwingTradeStrategy(Strategy):
             )
 
             # === CHECK FOR ANY VALID BUY SIGNAL (SIMPLIFIED) ===
-            buy_signal = signals.buy_signals(data, self.ACTIVE_SIGNALS)
+            buy_signal = signals.buy_signals(data, self.ACTIVE_SIGNALS, spy_data=spy_data)
 
             # Skip if no buy signal
             if not buy_signal or buy_signal.get('side') != 'buy':

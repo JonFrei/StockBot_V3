@@ -157,7 +157,7 @@ class StockRotator:
         else:
             return -20.0
 
-    def calculate_stock_score(self, ticker, data, strategy):
+    def calculate_stock_score(self, ticker, data, strategy, spy_data=None):
         """
         Calculate rotation score for a stock (0-100 scale)
 
@@ -171,6 +171,12 @@ class StockRotator:
         5. BONUS: Recent performance (up to +10 or -10)
         6. NEW: Ticker penalties (Priority 3): -30 to 0 points
         7. NEW: Historical win rate (Priority 5): -20 to +20 points
+
+        Args:
+            ticker: Stock symbol
+            data: Stock data dict
+            strategy: Strategy instance
+            spy_data: SPY data for regime filter (optional)
 
         Returns: float (can be negative due to penalties)
         """
@@ -215,7 +221,7 @@ class StockRotator:
 
         # 4. SIGNAL QUALITY (25 points)
         buy_signal_list = ['swing_trade_1', 'swing_trade_2']
-        buy_signal = signals.buy_signals(indicators, buy_signal_list)
+        buy_signal = signals.buy_signals(indicators, buy_signal_list, spy_data=spy_data)
 
         if buy_signal and buy_signal.get('side') == 'buy':
             market_condition = calculate_market_condition_score(indicators)
@@ -344,6 +350,9 @@ class StockRotator:
         print(f"🔄 STOCK ROTATION - {current_date.strftime('%Y-%m-%d')}")
         print(f"{'=' * 80}")
 
+        # Extract SPY data for regime filter
+        spy_data = all_stock_data.get('SPY', {}).get('indicators', None) if 'SPY' in all_stock_data else None
+
         # PRIORITY 5: Update performance data from profit tracker
         self.update_ticker_performance_from_tracker()
 
@@ -391,8 +400,8 @@ class StockRotator:
                     scores[ticker] = -100.0
                     continue
 
-                # Calculate score (includes penalties and win rate)
-                score = self.calculate_stock_score(ticker, all_stock_data[ticker], strategy)
+                # Calculate score (includes penalties, win rate, and SPY regime filter)
+                score = self.calculate_stock_score(ticker, all_stock_data[ticker], strategy, spy_data=spy_data)
                 scores[ticker] = score
 
             except Exception as e:
