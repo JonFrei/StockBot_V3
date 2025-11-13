@@ -25,6 +25,8 @@ class SwingTradeStrategy(Strategy):
         'consolidation_breakout',  # Consolidation breaks
         'swing_trade_1',  # EMA crossover + momentum
         'swing_trade_2',  # Pullback plays
+        'golden_cross',
+        'bollinger_buy'
     ]
 
     # Cooldown configuration
