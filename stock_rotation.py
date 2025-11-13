@@ -54,10 +54,10 @@ class StockRotator:
             return days_since_rotation >= 1
         elif self.rotation_frequency == 'weekly':
             return days_since_rotation >= 7
+        elif self.rotation_frequency == 'biweekly':  # ADD THIS
+            return days_since_rotation >= 14
         elif self.rotation_frequency == 'monthly':
             return days_since_rotation >= 30
-        else:
-            return False
 
     def calculate_stock_score(self, ticker, data, strategy):
         """
@@ -185,7 +185,7 @@ class StockRotator:
                     continue
 
                 # LOOSENED: Check if it's a winner (was >20%, now >15%)
-                if pnl_pct < 15.0:
+                if pnl_pct < 12.0:  # CHANGED from 15.0
                     continue
 
                 # Check momentum
@@ -197,7 +197,7 @@ class StockRotator:
 
                 # LOOSENED: Lock if has momentum OR trending (was AND)
                 # Either strong ADX (>20) or price structure is good
-                has_momentum = adx > 20  # Was 25
+                has_momentum = adx > 18  # Was 25 -> 20 ->
                 is_trending = close > ema20  # Was close > ema20 > ema50
 
                 if has_momentum or is_trending:
@@ -243,6 +243,26 @@ class StockRotator:
             for winner in locked_winners_data:
                 momentum_label = f"ADX {winner['adx']:.0f}" if winner['adx'] > 20 else "trending"
                 print(f"   🔒 {winner['ticker']}: +{winner['pnl_pct']:.1f}% ({momentum_label}) - LET IT RUN!")
+
+        try:
+            positions = strategy.get_positions()
+            for position in positions:
+                ticker = position.symbol
+                if ticker not in all_stock_data:
+                    continue
+                try:
+                    current_price = strategy.get_last_price(ticker)
+                    entry_price = float(position.avg_fill_price)
+                    pnl_pct = ((current_price - entry_price) / entry_price * 100)
+
+                    # Absolute 20% lock (overrides everything)
+                    if pnl_pct > 20.0 and ticker not in locked_tickers:
+                        locked_tickers.append(ticker)
+                        print(f"   🔒 {ticker}: +{pnl_pct:.1f}% (>20% absolute lock)")
+                except:
+                    continue
+        except:
+            pass
 
         # Calculate available slots for rotation
         available_slots = self.max_active - len(locked_tickers)

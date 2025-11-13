@@ -30,10 +30,12 @@ class SwingTradeStrategy(Strategy):
     ]
 
     # Cooldown configuration
-    COOLDOWN_DAYS = 3  # Days between re-purchases of same ticker
+    COOLDOWN_DAYS = 2  # Days between re-purchases of same ticker
 
     # Fixed position sizing (no adaptive entry sizing)
     POSITION_SIZE_PCT = 20.0  # 14% of cash per trade
+
+    MAX_ACTIVE_STOCKS = 12
 
     # =========================================================================
 
@@ -55,7 +57,7 @@ class SwingTradeStrategy(Strategy):
         self.ticker_cooldown = TickerCooldown(cooldown_days=self.COOLDOWN_DAYS)
 
         # Stock rotation
-        self.stock_rotator = StockRotator(max_active=12, rotation_frequency='weekly')
+        self.stock_rotator = StockRotator(max_active=self.MAX_ACTIVE_STOCKS, rotation_frequency='biweekly')
 
         # Track rotation timing
         self.last_rotation_week = None
@@ -145,12 +147,13 @@ class SwingTradeStrategy(Strategy):
         # STEP 2: STOCK ROTATION - TRUE WEEKLY ROTATION
         # =====================================================================
 
-        # Only rotate on schedule, NOT on position exits
+        # Calculate bi-weekly period (2-week blocks)
         current_week = current_date.isocalendar()[1]  # ISO week number
         current_year = current_date.year
+        biweekly_period = (current_year, current_week // 2)  # Groups weeks into 2-week periods
 
-        # Check if this is a new week
-        if self.last_rotation_week != (current_year, current_week):
+        # Check if this is a new bi-weekly period
+        if self.last_rotation_week != biweekly_period:
             # Time to rotate - perform actual rotation
             active_tickers = self.stock_rotator.rotate_stocks(
                 strategy=self,
@@ -158,7 +161,7 @@ class SwingTradeStrategy(Strategy):
                 current_date=current_date,
                 all_stock_data=all_stock_data
             )
-            self.last_rotation_week = (current_year, current_week)
+            self.last_rotation_week = biweekly_period
         else:
             # NOT time to rotate - use existing active list
             active_tickers = self.stock_rotator.active_tickers
@@ -171,7 +174,7 @@ class SwingTradeStrategy(Strategy):
                     current_date=current_date,
                     all_stock_data=all_stock_data
                 )
-                self.last_rotation_week = (current_year, current_week)
+                self.last_rotation_week = biweekly_period
 
         # =====================================================================
         # STEP 3: LOOK FOR NEW BUY SIGNALS (SIMPLIFIED - NO SCORING)

@@ -32,40 +32,40 @@ class AdaptiveExitConfig:
     """
 
     # === STRONG CONDITIONS (Score 7-10) ===
-    STRONG_EMERGENCY_STOP = -7.0  # More room for volatility
-    STRONG_PROFIT_TARGET_1 = 15.0  # Higher first target
-    STRONG_PROFIT_TARGET_1_SELL = 35.0  # Sell less (keep more)
-    STRONG_PROFIT_TARGET_2 = 32.0  # Higher second target
-    STRONG_PROFIT_TARGET_2_SELL = 30.0  # Sell less (reduced to leave more for Level 3)
-    STRONG_PROFIT_TARGET_3 = 60.0  # NEW: Big winner target
-    STRONG_PROFIT_TARGET_3_SELL = 25.0  # NEW: Sell 25%, trail remaining 10%
-    STRONG_TRAILING_STOP = 11.0  # Wider trail
-    STRONG_TRAILING_STOP_FINAL = 20.0  # NEW: Extra wide trail after Level 3
-    STRONG_POSITION_SIZE_PCT = 18.0
+    STRONG_EMERGENCY_STOP = -7.0  # No change
+    STRONG_PROFIT_TARGET_1 = 15.0  # No change
+    STRONG_PROFIT_TARGET_1_SELL = 35.0  # No change
+    STRONG_PROFIT_TARGET_2 = 40.0  # CHANGED from 32.0
+    STRONG_PROFIT_TARGET_2_SELL = 25.0  # CHANGED from 30.0
+    STRONG_PROFIT_TARGET_3 = 75.0  # CHANGED from 60.0
+    STRONG_PROFIT_TARGET_3_SELL = 25.0  # No change
+    STRONG_TRAILING_STOP = 15.0  # CHANGED from 11.0
+    STRONG_TRAILING_STOP_FINAL = 25.0  # CHANGED from 20.0
+    STRONG_POSITION_SIZE_PCT = 18.0  # No change
 
     # === NEUTRAL CONDITIONS (Score 4-6) ===
-    NEUTRAL_EMERGENCY_STOP = -5.0
-    NEUTRAL_PROFIT_TARGET_1 = 12.0
-    NEUTRAL_PROFIT_TARGET_1_SELL = 40.0
-    NEUTRAL_PROFIT_TARGET_2 = 25.0
-    NEUTRAL_PROFIT_TARGET_2_SELL = 35.0  # Reduced to leave more for Level 3
-    NEUTRAL_PROFIT_TARGET_3 = 50.0  # NEW: Big winner target
-    NEUTRAL_PROFIT_TARGET_3_SELL = 20.0  # NEW: Sell 20%, trail remaining 5%
-    NEUTRAL_TRAILING_STOP = 8.0
-    NEUTRAL_TRAILING_STOP_FINAL = 16.0  # NEW: Wider trail after Level 3
-    NEUTRAL_POSITION_SIZE_PCT = 14.0
+    NEUTRAL_EMERGENCY_STOP = -5.0  # No change
+    NEUTRAL_PROFIT_TARGET_1 = 12.0  # No change
+    NEUTRAL_PROFIT_TARGET_1_SELL = 40.0  # No change
+    NEUTRAL_PROFIT_TARGET_2 = 35.0  # CHANGED from 25.0
+    NEUTRAL_PROFIT_TARGET_2_SELL = 25.0  # CHANGED from 35.0
+    NEUTRAL_PROFIT_TARGET_3 = 65.0  # CHANGED from 50.0
+    NEUTRAL_PROFIT_TARGET_3_SELL = 20.0  # No change
+    NEUTRAL_TRAILING_STOP = 12.0  # CHANGED from 8.0
+    NEUTRAL_TRAILING_STOP_FINAL = 20.0  # CHANGED from 16.0
+    NEUTRAL_POSITION_SIZE_PCT = 14.0  # No change
 
     # === WEAK CONDITIONS (Score 0-3) ===
-    WEAK_EMERGENCY_STOP = -3.5  # Tight stop
-    WEAK_PROFIT_TARGET_1 = 9.0  # Lower first target
-    WEAK_PROFIT_TARGET_1_SELL = 45.0  # Sell more (keep less)
-    WEAK_PROFIT_TARGET_2 = 18.0  # Lower second target
-    WEAK_PROFIT_TARGET_2_SELL = 40.0  # Reduced to leave more for Level 3
-    WEAK_PROFIT_TARGET_3 = 40.0  # NEW: Lower target in weak conditions
-    WEAK_PROFIT_TARGET_3_SELL = 15.0  # NEW: Sell 15%, exit completely on trail
-    WEAK_TRAILING_STOP = 5.0  # Tight trail
-    WEAK_TRAILING_STOP_FINAL = 12.0  # NEW: Slightly wider trail after Level 3
-    WEAK_POSITION_SIZE_PCT = 10.0
+    WEAK_EMERGENCY_STOP = -3.5  # No change
+    WEAK_PROFIT_TARGET_1 = 9.0  # No change
+    WEAK_PROFIT_TARGET_1_SELL = 45.0  # No change
+    WEAK_PROFIT_TARGET_2 = 25.0  # CHANGED from 18.0
+    WEAK_PROFIT_TARGET_2_SELL = 30.0  # CHANGED from 40.0
+    WEAK_PROFIT_TARGET_3 = 50.0  # CHANGED from 40.0
+    WEAK_PROFIT_TARGET_3_SELL = 15.0  # No change
+    WEAK_TRAILING_STOP = 8.0  # CHANGED from 5.0
+    WEAK_TRAILING_STOP_FINAL = 15.0  # CHANGED from 12.0
+    WEAK_POSITION_SIZE_PCT = 10.0  # No change
 
 
 
