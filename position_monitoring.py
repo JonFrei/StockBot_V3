@@ -11,6 +11,7 @@ Combines:
 - 3-LEVEL profit taking (NEW: Level 3 at 50-60%)
 - Max holding period (120 days with momentum exception)
 - Wider trailing stops after Level 3 for huge gains
+- Entry score tracking for performance analysis
 """
 
 from datetime import datetime
@@ -265,23 +266,25 @@ class PositionMonitor:
         self.positions_metadata = {}  # {ticker: {...metadata...}}
         self.market_conditions_cache = {}  # {ticker: {date: str, score: dict, params: dict}}
 
-    def track_position(self, ticker, entry_date, entry_signal='unknown'):
+    def track_position(self, ticker, entry_date, entry_signal='unknown', entry_score=0):
         """
         Record position metadata for monitoring
 
         SIMPLIFIED: No quantity or price tracking - get from broker
+        ENHANCED: Now stores entry_score for analysis
         """
         if ticker not in self.positions_metadata:
             self.positions_metadata[ticker] = {
                 'entry_date': entry_date,
                 'entry_signal': entry_signal,
+                'entry_score': entry_score,
                 'highest_price': self._get_current_price(ticker),
                 'profit_level_1_locked': False,
                 'profit_level_2_locked': False,
-                'profit_level_3_locked': False  # NEW
+                'profit_level_3_locked': False
             }
         else:
-            # If adding to existing position, keep original entry signal
+            # If adding to existing position, keep original entry signal and score
             # Update highest price to current
             self.positions_metadata[ticker]['highest_price'] = max(
                 self.positions_metadata[ticker].get('highest_price', 0),
@@ -535,7 +538,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         # Ensure position is tracked
         metadata = position_monitor.get_position_metadata(ticker)
         if not metadata:
-            position_monitor.track_position(ticker, current_date, 'pre_existing')
+            position_monitor.track_position(ticker, current_date, 'pre_existing', entry_score=0)
             metadata = position_monitor.get_position_metadata(ticker)
 
         # Update highest price
@@ -608,6 +611,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
             exit_signal['pnl_pct'] = pnl_pct
             exit_signal['condition'] = adaptive_params['condition_label']
             exit_signal['entry_signal'] = metadata.get('entry_signal', 'pre_existing')
+            exit_signal['entry_score'] = metadata.get('entry_score', 0)  # NEW
             exit_orders.append(exit_signal)
 
     return exit_orders
@@ -617,7 +621,7 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
     """
     Execute exit orders using BROKER data for P&L calculation
 
-    ENHANCED: Now handles Profit Level 3
+    ENHANCED: Now handles Profit Level 3 and passes entry_score to profit tracker
     """
 
     for order in exit_orders:
@@ -633,6 +637,7 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
         broker_entry_price = order['broker_entry_price']
         current_price = order['current_price']
         entry_signal = order.get('entry_signal', 'pre_existing')
+        entry_score = order.get('entry_score', 0)  # NEW
 
         # Calculate quantity to sell
         sell_quantity = int(broker_quantity * (sell_pct / 100))
@@ -667,7 +672,7 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
             elif profit_level == 3:
                 position_monitor.mark_profit_level_3_locked(ticker)  # NEW
 
-            # === RECORD THE TRADE ===
+            # === RECORD THE TRADE (with entry score) ===
             profit_tracker.record_trade(
                 ticker=ticker,
                 quantity_sold=sell_quantity,
@@ -675,7 +680,8 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
                 exit_price=current_price,
                 exit_date=current_date,
                 entry_signal=entry_signal,
-                exit_signal=order
+                exit_signal=order,
+                entry_score=entry_score  # NEW
             )
 
             # Execute sell
@@ -694,7 +700,7 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
             print(f"Reason: {message}")
             print(f"{'=' * 70}\n")
 
-            # === RECORD THE TRADE ===
+            # === RECORD THE TRADE (with entry score) ===
             profit_tracker.record_trade(
                 ticker=ticker,
                 quantity_sold=sell_quantity,
@@ -702,7 +708,8 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
                 exit_price=current_price,
                 exit_date=current_date,
                 entry_signal=entry_signal,
-                exit_signal=order
+                exit_signal=order,
+                entry_score=entry_score  # NEW
             )
 
             # Clean metadata

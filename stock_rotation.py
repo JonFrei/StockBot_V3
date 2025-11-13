@@ -1,12 +1,14 @@
 """
-In-Memory Stock Rotation System
+In-Memory Stock Rotation System with Winner Lock Protection
 
 Dynamically selects best stocks from core_stocks list without modifying JSON config.
 Rotates based on momentum, signal quality, and market conditions.
 
+NEW: Winner Lock - Don't rotate out stocks that are up >20% with strong momentum
+
 Usage:
-    rotator = StockRotator(max_active=8)
-    active_tickers = rotator.get_active_tickers(strategy, all_candidates)
+    rotator = StockRotator(max_active=15)
+    active_tickers = rotator.get_active_tickers(strategy, all_candidates, current_date, all_stock_data)
 """
 
 from datetime import datetime, timedelta
@@ -17,7 +19,7 @@ from position_monitoring import calculate_market_condition_score
 
 class StockRotator:
     """
-    Manages dynamic stock rotation in memory
+    Manages dynamic stock rotation in memory with winner lock protection
 
     Attributes:
         max_active: Maximum number of stocks to trade simultaneously
@@ -25,15 +27,17 @@ class StockRotator:
         active_tickers: List of currently active tickers
         last_rotation_date: Date of last rotation
         ticker_scores: Historical scores for each ticker
+        locked_winners: Tickers locked due to strong performance
     """
 
-    def __init__(self, max_active=8, rotation_frequency='weekly'):
+    def __init__(self, max_active=15, rotation_frequency='weekly'):
         self.max_active = max_active
         self.rotation_frequency = rotation_frequency
         self.active_tickers = []
         self.last_rotation_date = None
         self.ticker_scores = {}  # Historical tracking
         self.rotation_count = 0
+        self.locked_winners = []  # NEW: Track locked winners
 
     def should_rotate(self, current_date):
         """
@@ -150,14 +154,71 @@ class StockRotator:
         # Ensure score is non-negative
         return max(0.0, score)
 
-    def rotate_stocks(self, strategy, all_candidates, current_date):
+    def check_winner_locks(self, strategy, all_stock_data):
         """
-        Perform stock rotation - select top N stocks from candidates
+        NEW: Check existing positions for winners to lock
+
+        Lock criteria:
+        - Position is up >20% from entry
+        - Strong momentum: ADX > 25
+        - Still trending: Price > EMA20 > EMA50
+
+        Returns: list of tickers to lock
+        """
+        locked = []
+
+        try:
+            positions = strategy.get_positions()
+
+            for position in positions:
+                ticker = position.symbol
+
+                # Only check tickers in our candidate pool
+                if ticker not in all_stock_data:
+                    continue
+
+                # Get position P&L
+                try:
+                    current_price = strategy.get_last_price(ticker)
+                    entry_price = float(position.avg_fill_price)
+                    pnl_pct = ((current_price - entry_price) / entry_price * 100)
+                except:
+                    continue
+
+                # Check if it's a big winner
+                if pnl_pct < 20.0:
+                    continue
+
+                # Check momentum
+                data = all_stock_data[ticker]['indicators']
+                adx = data.get('adx', 0)
+                close = data.get('close', 0)
+                ema20 = data.get('ema20', 0)
+                ema50 = data.get('ema50', 0)
+
+                # LOCK if strong momentum and trending
+                if adx > 25 and close > ema20 > ema50:
+                    locked.append({
+                        'ticker': ticker,
+                        'pnl_pct': pnl_pct,
+                        'adx': adx
+                    })
+        except Exception as e:
+            print(f"   ⚠️ Error checking winner locks: {e}")
+
+        return locked
+
+    def rotate_stocks(self, strategy, all_candidates, current_date, all_stock_data):
+        """
+        Perform stock rotation with WINNER LOCK protection
+
+        NEW: Don't rotate out winning positions that are still trending
 
         Args:
-            strategy: Strategy instance (for data access)
+            strategy: Strategy instance (for position/price access)
             all_candidates: List of all possible tickers from core_stocks
             current_date: Current date
+            all_stock_data: Pre-fetched data for all candidates
 
         Returns:
             list: New active tickers
@@ -165,25 +226,36 @@ class StockRotator:
         if not all_candidates:
             return []
 
-        scores = {}
-
         print(f"\n{'=' * 80}")
         print(f"🔄 STOCK ROTATION - {current_date.strftime('%Y-%m-%d')}")
         print(f"{'=' * 80}")
-        print(f"Evaluating {len(all_candidates)} candidates for {self.max_active} active slots...")
 
-        # Score all candidates
+        # STEP 1: Check for winner locks
+        locked_winners_data = self.check_winner_locks(strategy, all_stock_data)
+        locked_tickers = [w['ticker'] for w in locked_winners_data]
+
+        if locked_winners_data:
+            print(f"\n🔒 WINNER LOCKS - Protecting {len(locked_winners_data)} high-performers:")
+            for winner in locked_winners_data:
+                print(f"   🔒 {winner['ticker']}: +{winner['pnl_pct']:.1f}% (ADX {winner['adx']:.0f}) - LET IT RUN!")
+
+        # Calculate available slots for rotation
+        available_slots = self.max_active - len(locked_tickers)
+        print(f"\nEvaluating {len(all_candidates)} candidates for {available_slots} rotation slots...")
+        print(f"(+ {len(locked_tickers)} locked winners)")
+
+        # STEP 2: Score all candidates
+        scores = {}
+
         for ticker in all_candidates:
             try:
-                # Get stock data
-                data = stock_data.process_data([ticker], current_date)
-
-                if ticker not in data:
+                # Use pre-fetched data
+                if ticker not in all_stock_data:
                     scores[ticker] = 0.0
                     continue
 
                 # Calculate score
-                score = self.calculate_stock_score(ticker, data[ticker], strategy)
+                score = self.calculate_stock_score(ticker, all_stock_data[ticker], strategy)
                 scores[ticker] = score
 
                 # Store in history
@@ -198,24 +270,34 @@ class StockRotator:
                 print(f"   ⚠️ Error scoring {ticker}: {e}")
                 scores[ticker] = 0.0
 
-        # Sort by score (highest first)
+        # STEP 3: Sort by score and build new active list
         sorted_stocks = sorted(scores.items(), key=lambda x: x[1], reverse=True)
 
-        # Select top N
-        new_active = [ticker for ticker, score in sorted_stocks[:self.max_active] if score > 0]
+        # Locked winners are guaranteed in the active list
+        new_active = locked_tickers[:]
 
-        # Display rankings
+        # Fill remaining slots with highest-scored non-locked stocks
+        for ticker, score in sorted_stocks:
+            if ticker not in new_active and len(new_active) < self.max_active:
+                if score > 0:  # Only add if has positive score
+                    new_active.append(ticker)
+
+        # STEP 4: Display rankings
         print(f"\n📊 ROTATION RANKINGS:")
         print(f"{'─' * 80}")
         print(f"{'Rank':<6} {'Ticker':<8} {'Score':<10} {'Status':<15} {'Change'}")
         print(f"{'─' * 80}")
 
-        for idx, (ticker, score) in enumerate(sorted_stocks[:15], 1):  # Show top 15
+        for idx, (ticker, score) in enumerate(sorted_stocks[:20], 1):  # Show top 20
             # Determine status
             was_active = ticker in self.active_tickers
             is_active = ticker in new_active
+            is_locked = ticker in locked_tickers
 
-            if is_active and was_active:
+            if is_locked:
+                status = "🔒 LOCKED"
+                change = "🏆"
+            elif is_active and was_active:
                 status = "✅ ACTIVE"
                 change = "—"
             elif is_active and not was_active:
@@ -232,10 +314,12 @@ class StockRotator:
 
         print(f"{'─' * 80}\n")
 
-        # Show changes summary
-        added = [t for t in new_active if t not in self.active_tickers]
-        removed = [t for t in self.active_tickers if t not in new_active]
+        # STEP 5: Show changes summary
+        added = [t for t in new_active if t not in self.active_tickers and t not in locked_tickers]
+        removed = [t for t in self.active_tickers if t not in new_active and t not in locked_tickers]
 
+        if locked_tickers:
+            print(f"🔒 LOCKED WINNERS: {', '.join(locked_tickers)}")
         if added:
             print(f"🆕 PROMOTED: {', '.join(added)}")
         if removed:
@@ -246,12 +330,13 @@ class StockRotator:
 
         # Update state
         self.active_tickers = new_active
+        self.locked_winners = locked_tickers
         self.last_rotation_date = current_date
         self.rotation_count += 1
 
         return new_active
 
-    def get_active_tickers(self, strategy, all_candidates, current_date):
+    def get_active_tickers(self, strategy, all_candidates, current_date, all_stock_data):
         """
         Get current active tickers, rotating if needed
 
@@ -259,24 +344,25 @@ class StockRotator:
             strategy: Strategy instance
             all_candidates: List of all tickers from core_stocks
             current_date: Current date
+            all_stock_data: Pre-fetched data for all candidates
 
         Returns:
             list: Active tickers for trading
         """
         # First time or time to rotate?
         if self.should_rotate(current_date):
-            return self.rotate_stocks(strategy, all_candidates, current_date)
+            return self.rotate_stocks(strategy, all_candidates, current_date, all_stock_data)
 
         # Not time to rotate - return current active list
         return self.active_tickers
 
-    def force_rotation(self, strategy, all_candidates, current_date):
+    def force_rotation(self, strategy, all_candidates, current_date, all_stock_data):
         """
         Force a rotation regardless of schedule
 
         Useful for manual rotation or after major market events
         """
-        return self.rotate_stocks(strategy, all_candidates, current_date)
+        return self.rotate_stocks(strategy, all_candidates, current_date, all_stock_data)
 
     def get_ticker_history(self, ticker):
         """
@@ -297,6 +383,7 @@ class StockRotator:
             'last_rotation': self.last_rotation_date,
             'active_count': len(self.active_tickers),
             'active_tickers': self.active_tickers,
+            'locked_winners': len(self.locked_winners),
             'total_tracked': len(self.ticker_scores)
         }
 
@@ -305,7 +392,7 @@ class StockRotator:
 # UTILITY FUNCTIONS
 # =============================================================================
 
-def create_default_rotator(max_active=8, frequency='weekly'):
+def create_default_rotator(max_active=15, frequency='weekly'):
     """
     Create a default rotator instance
 
@@ -331,6 +418,7 @@ def print_rotation_report(rotator):
     print(f"Total Rotations: {summary['rotation_count']}")
     print(f"Last Rotation: {summary['last_rotation']}")
     print(f"Active Stocks: {summary['active_count']}/{rotator.max_active}")
+    print(f"Locked Winners: {summary['locked_winners']}")
     print(f"Currently Trading: {', '.join(summary['active_tickers'])}")
     print(f"Total Stocks Tracked: {summary['total_tracked']}")
     print(f"{'=' * 80}\n")

@@ -6,7 +6,7 @@ Does NOT track positions (broker already does that).
 
 Key Fix: Uses broker data for all P&L calculations - no accumulation bugs
 
-ENHANCED: Now includes per-ticker win/loss statistics
+ENHANCED: Now includes per-ticker win/loss statistics and entry scores
 """
 
 from datetime import datetime
@@ -17,7 +17,7 @@ class ProfitTracker:
     Simplified tracker - just records closed trades
     No position tracking (broker handles that)
 
-    ENHANCED: Now tracks per-ticker performance
+    ENHANCED: Now tracks per-ticker performance and entry scores
     """
 
     def __init__(self, strategy):
@@ -25,7 +25,7 @@ class ProfitTracker:
         self.closed_trades = []  # List of completed trades
 
     def record_trade(self, ticker, quantity_sold, entry_price, exit_price,
-                     exit_date, entry_signal, exit_signal):
+                     exit_date, entry_signal, exit_signal, entry_score=0):
         """
         Record a completed trade (full or partial exit)
 
@@ -37,6 +37,7 @@ class ProfitTracker:
             exit_date: Exit date
             entry_signal: Entry signal type
             exit_signal: Exit signal info dict
+            entry_score: Entry signal strength score (0-100)
         """
         # Calculate P&L
         pnl_per_share = exit_price - entry_price
@@ -52,6 +53,7 @@ class ProfitTracker:
             'pnl_dollars': total_pnl,
             'pnl_pct': pnl_pct,
             'entry_signal': entry_signal,
+            'entry_score': entry_score,
             'exit_signal': exit_signal.get('reason', 'unknown'),
             'exit_date': exit_date
         }
@@ -64,7 +66,7 @@ class ProfitTracker:
             f"\n{emoji} TRADE CLOSED: {ticker} | ${total_pnl:+,.2f} ({pnl_pct:+.1f}%) | {quantity_sold} shares @ ${entry_price:.2f} → ${exit_price:.2f}")
 
     def display_final_summary(self):
-        """Display P&L summary at end of backtest - ENHANCED with per-ticker stats"""
+        """Display P&L summary at end of backtest - ENHANCED with per-ticker stats and entry scores"""
         if not self.closed_trades:
             print("\n📊 No closed trades to report")
             return
@@ -95,14 +97,15 @@ class ProfitTracker:
         # Signal performance breakdown
         self._display_signal_performance()
 
-        # NEW: Per-ticker performance breakdown
+        # Per-ticker performance breakdown
         self._display_ticker_performance()
 
-        # Display individual trades
+        # Display individual trades WITH ENTRY SCORES
         print(f"\n📋 Trade Details:")
         for t in self.closed_trades[-50:]:  # Show last 50 trades
+            score_display = f"[{t.get('entry_score', 0):.0f}]"
             print(f"   {t['ticker']:6} | ${t['pnl_dollars']:+9,.2f} ({t['pnl_pct']:+6.2f}%) | "
-                  f"{t['entry_signal']:15} → {t['exit_signal']:20}")
+                  f"{score_display:5} {t['entry_signal']:15} → {t['exit_signal']:20}")
 
         # Display open positions from broker
         self._display_open_positions()
@@ -158,7 +161,7 @@ class ProfitTracker:
 
     def _display_ticker_performance(self):
         """
-        NEW: Display performance breakdown by ticker
+        Display performance breakdown by ticker
         Shows which stocks are performing best/worst
         """
         from collections import defaultdict

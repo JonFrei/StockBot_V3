@@ -31,7 +31,7 @@ class SwingTradeStrategy(Strategy):
     ]
 
     # Cooldown configuration
-    COOLDOWN_DAYS = 1  # Days between re-purchases of same ticker
+    COOLDOWN_DAYS = 2  # Days between re-purchases of same ticker
 
     # =========================================================================
 
@@ -52,8 +52,8 @@ class SwingTradeStrategy(Strategy):
         # Ticker cooldown to prevent chasing
         self.ticker_cooldown = TickerCooldown(cooldown_days=self.COOLDOWN_DAYS)
 
-        # STOCK ROTATION
-        self.stock_rotator = StockRotator(max_active=10, rotation_frequency='weekly')
+        # STOCK ROTATION - INCREASED TO 15 ACTIVE STOCKS
+        self.stock_rotator = StockRotator(max_active=15, rotation_frequency='weekly')
 
         print(f"✅ Ticker Cooldown Enabled: {self.ticker_cooldown.cooldown_days} days between purchases")
         print(f"✅ Stock Rotation: Max {self.stock_rotator.max_active} active stocks ({self.stock_rotator.rotation_frequency})")
@@ -79,7 +79,8 @@ class SwingTradeStrategy(Strategy):
                         self.position_monitor.track_position(
                             ticker,
                             self.get_datetime(),
-                            'pre_existing'
+                            'pre_existing',
+                            entry_score=0
                         )
 
                 print(f"[SYNC] Loaded {len(self.position_monitor.positions_metadata)} positions\n")
@@ -130,17 +131,18 @@ class SwingTradeStrategy(Strategy):
             current_date=current_date,
             position_monitor=self.position_monitor,
             profit_tracker=self.profit_tracker,
-            ticker_cooldown=self.ticker_cooldown  # NEW: Pass ticker cooldown
+            ticker_cooldown=self.ticker_cooldown
         )
 
         # =====================================================================
-        # STEP 2: STOCK ROTATION - Get active tickers to trade (NEW)
+        # STEP 2: STOCK ROTATION - Get active tickers to trade
         # =====================================================================
 
         active_tickers = self.stock_rotator.get_active_tickers(
             strategy=self,
             all_candidates=self.tickers,
-            current_date=current_date
+            current_date=current_date,
+            all_stock_data=all_stock_data
         )
 
         # =====================================================================
@@ -152,7 +154,7 @@ class SwingTradeStrategy(Strategy):
         # Track cash commitments to prevent over-purchasing
         pending_cash_commitment = 0
 
-        for ticker in self.tickers:
+        for ticker in active_tickers:
 
             if ticker not in all_stock_data:
                 self.log_message(f"No data for {ticker}, skipping")
@@ -198,11 +200,12 @@ class SwingTradeStrategy(Strategy):
             if not buy_position['can_trade']:
                 continue
 
-            # Track that we have a position with entry signal
+            # Track that we have a position with entry signal AND SCORE
             self.position_monitor.track_position(
                 ticker,
                 current_date,
-                best_signal.get('signal_type', 'unknown')
+                best_signal.get('signal_type', 'unknown'),
+                entry_score=signal_evaluation['final_score']
             )
 
             # Create order
@@ -254,7 +257,7 @@ class SwingTradeStrategy(Strategy):
     def on_strategy_end(self):
         self.profit_tracker.display_final_summary()
 
-        # NEW: Display cooldown statistics
+        # Display cooldown statistics
         cooldown_stats = self.ticker_cooldown.get_statistics()
         print(f"\n{'=' * 80}")
         print(f"⏰ TICKER COOLDOWN STATISTICS")
@@ -266,7 +269,7 @@ class SwingTradeStrategy(Strategy):
             print(f"   {ticker}: {count} purchases")
         print(f"{'=' * 80}\n")
 
-        # Display rotation statistics (NEW)
+        # Display rotation statistics
         from stock_rotation import print_rotation_report
         print_rotation_report(self.stock_rotator)
 

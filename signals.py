@@ -345,9 +345,12 @@ def golden_cross(data):
 
 def bollinger_buy(data):
     """
-    SIMPLIFIED: Was too complex (0 trades)
+    LOOSENED: Generate more trades (target 15-20 trades, 85%+ win rate)
 
-    Basic oversold bounce with trend confirmation
+    Changes from previous (6 trades, 100% win rate):
+    - Bollinger proximity: 3% → 4% (looser)
+    - RSI range: 28-45 → 25-48 (wider)
+    - Volume: 1.3x → 1.2x (easier to meet)
     """
     rsi = data.get('rsi', 50)
     volume_ratio = data.get('volume_ratio', 0)
@@ -357,20 +360,20 @@ def bollinger_buy(data):
     daily_change_pct = data.get('daily_change_pct', 0)
     obv_trending_up = data.get('obv_trending_up', False)
 
-    # Price at lower Bollinger (within 3%)
-    if bollinger_lower == 0 or close > bollinger_lower * 1.03:
+    # LOOSENED: Price at lower Bollinger (within 4% - was 3%)
+    if bollinger_lower == 0 or close > bollinger_lower * 1.04:
         return _no_signal('Not at lower Bollinger')
 
     # Above 200 SMA (uptrend)
     if close <= sma200:
         return _no_signal('Below 200 SMA')
 
-    # RSI oversold (28-45 - wider range)
-    if not (28 <= rsi <= 45):
+    # LOOSENED: RSI oversold (25-48 - was 28-45)
+    if not (25 <= rsi <= 48):
         return _no_signal(f'RSI not in range')
 
-    # Volume confirmation
-    if volume_ratio < 1.3:
+    # LOOSENED: Volume confirmation (1.2x - was 1.3x)
+    if volume_ratio < 1.2:
         return _no_signal('Volume too low')
 
     # OBV confirmation
@@ -410,6 +413,6 @@ BUY_STRATEGIES = {
     'swing_trade_1': swing_trade_1,  # Keep enhancements (working)
     'swing_trade_2': swing_trade_2,  # Fixed (was 0 trades)
     'golden_cross': golden_cross,  # Simplified
-    'bollinger_buy': bollinger_buy,  # Simplified
+    'bollinger_buy': bollinger_buy,  # LOOSENED for more trades
     'momentum_breakout': momentum_breakout,  # Loosened
 }
