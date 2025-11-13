@@ -30,8 +30,8 @@ class SwingTradeStrategy(Strategy):
         'bollinger_buy'
     ]
 
-    # Cooldown configuration
-    COOLDOWN_DAYS = 2  # Days between re-purchases of same ticker
+    # Cooldown configuration - INCREASED TO 3 DAYS
+    COOLDOWN_DAYS = 3  # Days between re-purchases of same ticker
 
     # =========================================================================
 
@@ -52,11 +52,15 @@ class SwingTradeStrategy(Strategy):
         # Ticker cooldown to prevent chasing
         self.ticker_cooldown = TickerCooldown(cooldown_days=self.COOLDOWN_DAYS)
 
-        # STOCK ROTATION - INCREASED TO 15 ACTIVE STOCKS
-        self.stock_rotator = StockRotator(max_active=15, rotation_frequency='weekly')
+        # STOCK ROTATION - REDUCED TO 12 ACTIVE STOCKS (from 15)
+        self.stock_rotator = StockRotator(max_active=12, rotation_frequency='weekly')
+
+        # Track rotation timing
+        self.last_rotation_week = None
 
         print(f"✅ Ticker Cooldown Enabled: {self.ticker_cooldown.cooldown_days} days between purchases")
-        print(f"✅ Stock Rotation: Max {self.stock_rotator.max_active} active stocks ({self.stock_rotator.rotation_frequency})")
+        print(
+            f"✅ Stock Rotation: Max {self.stock_rotator.max_active} active stocks ({self.stock_rotator.rotation_frequency})")
         print(f"✅ Active Signals: {len(self.ACTIVE_SIGNALS)} signals configured")
 
     def before_starting_trading(self):
@@ -135,15 +139,36 @@ class SwingTradeStrategy(Strategy):
         )
 
         # =====================================================================
-        # STEP 2: STOCK ROTATION - Get active tickers to trade
+        # STEP 2: STOCK ROTATION - TRUE WEEKLY ROTATION (FIXED)
         # =====================================================================
 
-        active_tickers = self.stock_rotator.get_active_tickers(
-            strategy=self,
-            all_candidates=self.tickers,
-            current_date=current_date,
-            all_stock_data=all_stock_data
-        )
+        # FIX: Only rotate on schedule, NOT on position exits
+        current_week = current_date.isocalendar()[1]  # ISO week number
+        current_year = current_date.year
+
+        # Check if this is a new week
+        if self.last_rotation_week != (current_year, current_week):
+            # Time to rotate - perform actual rotation
+            active_tickers = self.stock_rotator.rotate_stocks(
+                strategy=self,
+                all_candidates=self.tickers,
+                current_date=current_date,
+                all_stock_data=all_stock_data
+            )
+            self.last_rotation_week = (current_year, current_week)
+        else:
+            # NOT time to rotate - use existing active list
+            active_tickers = self.stock_rotator.active_tickers
+
+            # First iteration - initialize active list
+            if not active_tickers:
+                active_tickers = self.stock_rotator.rotate_stocks(
+                    strategy=self,
+                    all_candidates=self.tickers,
+                    current_date=current_date,
+                    all_stock_data=all_stock_data
+                )
+                self.last_rotation_week = (current_year, current_week)
 
         # =====================================================================
         # STEP 3: LOOK FOR NEW BUY SIGNALS (only if we have cash)

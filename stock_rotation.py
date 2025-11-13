@@ -4,10 +4,10 @@ In-Memory Stock Rotation System with Winner Lock Protection
 Dynamically selects best stocks from core_stocks list without modifying JSON config.
 Rotates based on momentum, signal quality, and market conditions.
 
-NEW: Winner Lock - Don't rotate out stocks that are up >20% with strong momentum
+NEW: Winner Lock - Don't rotate out stocks that are up >15% with momentum OR trending
 
 Usage:
-    rotator = StockRotator(max_active=15)
+    rotator = StockRotator(max_active=12)
     active_tickers = rotator.get_active_tickers(strategy, all_candidates, current_date, all_stock_data)
 """
 
@@ -30,7 +30,7 @@ class StockRotator:
         locked_winners: Tickers locked due to strong performance
     """
 
-    def __init__(self, max_active=15, rotation_frequency='weekly'):
+    def __init__(self, max_active=12, rotation_frequency='weekly'):
         self.max_active = max_active
         self.rotation_frequency = rotation_frequency
         self.active_tickers = []
@@ -156,12 +156,11 @@ class StockRotator:
 
     def check_winner_locks(self, strategy, all_stock_data):
         """
-        NEW: Check existing positions for winners to lock
+        FIXED: Check existing positions for winners to lock
 
-        Lock criteria:
-        - Position is up >20% from entry
-        - Strong momentum: ADX > 25
-        - Still trending: Price > EMA20 > EMA50
+        LOOSENED Lock criteria (easier to lock):
+        - Position is up >15% (was 20%)
+        - Strong momentum (ADX > 20) OR trending (price > EMA20)
 
         Returns: list of tickers to lock
         """
@@ -185,8 +184,8 @@ class StockRotator:
                 except:
                     continue
 
-                # Check if it's a big winner
-                if pnl_pct < 20.0:
+                # LOOSENED: Check if it's a winner (was >20%, now >15%)
+                if pnl_pct < 15.0:
                     continue
 
                 # Check momentum
@@ -196,12 +195,17 @@ class StockRotator:
                 ema20 = data.get('ema20', 0)
                 ema50 = data.get('ema50', 0)
 
-                # LOCK if strong momentum and trending
-                if adx > 25 and close > ema20 > ema50:
+                # LOOSENED: Lock if has momentum OR trending (was AND)
+                # Either strong ADX (>20) or price structure is good
+                has_momentum = adx > 20  # Was 25
+                is_trending = close > ema20  # Was close > ema20 > ema50
+
+                if has_momentum or is_trending:
                     locked.append({
                         'ticker': ticker,
                         'pnl_pct': pnl_pct,
-                        'adx': adx
+                        'adx': adx,
+                        'above_ema20': close > ema20
                     })
         except Exception as e:
             print(f"   ⚠️ Error checking winner locks: {e}")
@@ -237,7 +241,8 @@ class StockRotator:
         if locked_winners_data:
             print(f"\n🔒 WINNER LOCKS - Protecting {len(locked_winners_data)} high-performers:")
             for winner in locked_winners_data:
-                print(f"   🔒 {winner['ticker']}: +{winner['pnl_pct']:.1f}% (ADX {winner['adx']:.0f}) - LET IT RUN!")
+                momentum_label = f"ADX {winner['adx']:.0f}" if winner['adx'] > 20 else "trending"
+                print(f"   🔒 {winner['ticker']}: +{winner['pnl_pct']:.1f}% ({momentum_label}) - LET IT RUN!")
 
         # Calculate available slots for rotation
         available_slots = self.max_active - len(locked_tickers)
@@ -392,7 +397,7 @@ class StockRotator:
 # UTILITY FUNCTIONS
 # =============================================================================
 
-def create_default_rotator(max_active=15, frequency='weekly'):
+def create_default_rotator(max_active=12, frequency='weekly'):
     """
     Create a default rotator instance
 
