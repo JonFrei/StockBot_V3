@@ -17,37 +17,40 @@
       </list>
     </option>
   </component>
+  <component name="Git.Merge.Settings">
+    <option name="BRANCH" value="origin/master" />
+  </component>
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
-  <component name="GitHubPullRequestSearchHistory"><![CDATA[{
-  "lastFilter": {}
-}]]></component>
-  <component name="GitHubPullRequestState"><![CDATA[{
-  "prStates": [
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {}
+}</component>
+  <component name="GitHubPullRequestState">{
+  &quot;prStates&quot;: [
     {
-      "id": {
-        "id": "PR_kwDOQS7dtc6zhIdT",
-        "number": 3
+      &quot;id&quot;: {
+        &quot;id&quot;: &quot;PR_kwDOQS7dtc6zhIdT&quot;,
+        &quot;number&quot;: 3
       },
-      "lastSeen": 1763147952991
+      &quot;lastSeen&quot;: 1763147952991
     },
     {
-      "id": {
-        "id": "PR_kwDOQS7dtc6zgIMo",
-        "number": 2
+      &quot;id&quot;: {
+        &quot;id&quot;: &quot;PR_kwDOQS7dtc6zgIMo&quot;,
+        &quot;number&quot;: 2
       },
-      "lastSeen": 1763147976377
+      &quot;lastSeen&quot;: 1763147976377
     },
     {
-      "id": {
-        "id": "PR_kwDOQS7dtc6zDOop",
-        "number": 1
+      &quot;id&quot;: {
+        &quot;id&quot;: &quot;PR_kwDOQS7dtc6zDOop&quot;,
+        &quot;number&quot;: 1
       },
-      "lastSeen": 1763148106250
+      &quot;lastSeen&quot;: 1763148106250
     }
   ]
-}]]></component>
+}</component>
   <component name="GithubPullRequestsUISettings">{
   &quot;selectedUrlAndAccountId&quot;: {
     &quot;url&quot;: &quot;https://github.com/JonFrei/StockBot_V3&quot;,
