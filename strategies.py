@@ -47,10 +47,10 @@ class SwingTradeStrategy(Strategy):
     COOLDOWN_DAYS = 1  # Days between re-purchases of same ticker
 
     # Base position sizing (modified by conviction + regime)
-    BASE_POSITION_SIZE_PCT = 18.0  # Will be adjusted by multi-signal + regime
+    # BASE_POSITION_SIZE_PCT = 18.0  # Will be adjusted by multi-signal + regime
 
     # PRIORITY 2B: INCREASED FROM 10 TO 15
-    MAX_ACTIVE_STOCKS = 15
+    # MAX_ACTIVE_STOCKS = 15
 
     # PRIORITY 1: SIGNAL GUARD REMOVED - No longer restricting signals
     IDLE_ROTATION_THRESHOLD = 3
@@ -94,8 +94,7 @@ class SwingTradeStrategy(Strategy):
             recovery_days=5
         )
 
-        print(
-            f"✅ Drawdown Protection: {self.drawdown_protection.threshold_pct:.1f}% threshold, {self.drawdown_protection.recovery_days}d recovery")
+        print(f"✅ Drawdown Protection: {self.drawdown_protection.threshold_pct:.1f}% threshold, {self.drawdown_protection.recovery_days}d recovery")
         print(f"✅ Ticker Cooldown: {self.ticker_cooldown.cooldown_days} days between purchases")
         print(f"✅ Stock Rotation: Weekly award-based system (all stocks tradeable)")
         print(f"✅ Award System: Premium (1.3x), Standard (1.0x), Trial (1.0x), None (0.6x)")
@@ -342,13 +341,13 @@ class SwingTradeStrategy(Strategy):
 
             # Dynamic position sizing based on signal count
             if signal_count >= 3:
-                signal_position_size = 18.0  # High conviction
+                signal_position_size = 21.0  # High conviction
                 conviction_label = '🔥 HIGH'
             elif signal_count == 2:
-                signal_position_size = 15.0  # Medium conviction
+                signal_position_size = 18.0  # Medium conviction
                 conviction_label = '⚡ MEDIUM'
             else:
-                signal_position_size = 12.0  # Single signal
+                signal_position_size = 15.0  # Single signal
                 conviction_label = '• STANDARD'
 
             # ===================================================================
@@ -417,16 +416,6 @@ class SwingTradeStrategy(Strategy):
         # CHECK REGIME-BASED POSITION LIMITS
         # =====================================================================
 
-        current_positions = len(self.get_positions())
-        max_positions_allowed = regime_info['max_positions']
-
-        if current_positions >= max_positions_allowed:
-            self._handle_idle_rotation_feedback(len(buy_orders), current_date)
-            print(
-                f"\n⚠️ Position limit reached ({current_positions}/{max_positions_allowed} due to {regime_info['regime']} market)")
-            print(f"Skipping new entries.\n")
-            return
-
         # Submit buy orders
         if len(buy_orders) > 0:
             print(f"\n{'=' * 70}")
@@ -449,28 +438,6 @@ class SwingTradeStrategy(Strategy):
                     # Record buy in cooldown tracker
                     self.ticker_cooldown.record_buy(order['ticker'], current_date)
 
-        # Update idle rotation tracker
-        self._handle_idle_rotation_feedback(len(buy_orders), current_date)
-
-    def _handle_idle_rotation_feedback(self, buy_order_count, current_date):
-        """
-        Track how many iterations have passed without placing new orders and
-        schedule a forced rotation if we stay idle too long.
-        """
-        if buy_order_count > 0:
-            self.idle_iterations_without_buys = 0
-            self.force_rotation_next_cycle = False
-            return
-
-        self.idle_iterations_without_buys += 1
-
-        if (self.idle_iterations_without_buys >= self.IDLE_ROTATION_THRESHOLD and
-                not self.force_rotation_next_cycle):
-            self.force_rotation_next_cycle = True
-            print(
-                f"\n⚙️  No qualifying entries for {self.idle_iterations_without_buys} iteration(s) "
-                f"- will rotate watchlist early on next loop ({current_date.strftime('%Y-%m-%d')})."
-            )
 
     def on_strategy_end(self):
         """Display final statistics"""

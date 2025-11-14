@@ -44,7 +44,7 @@ class AwardConfig:
     # === TRADE COUNT REQUIREMENTS ===
     TRIAL_TRADE_COUNT = 5  # Trial period duration
     STANDARD_MIN_TRADES = 5  # Minimum for Standard
-    PREMIUM_MIN_TRADES = 10  # Minimum for Premium
+    PREMIUM_MIN_TRADES = 8  # Minimum for Premium
     DEATH_ROW_MIN_TRADES = 10  # Need 10+ trades to freeze
 
     # === SCALING THRESHOLDS ===
