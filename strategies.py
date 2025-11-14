@@ -9,6 +9,7 @@ import profit_tracking
 import position_monitoring
 from ticker_cooldown import TickerCooldown
 from stock_rotation import StockRotator
+import drawdown_protection
 
 from lumibot.brokers import Alpaca
 
@@ -30,12 +31,12 @@ class SwingTradeStrategy(Strategy):
     ]
 
     # Cooldown configuration
-    COOLDOWN_DAYS = 1  # Days between re-purchases of same ticker
+    COOLDOWN_DAYS = 3  # Days between re-purchases of same ticker
 
     # Fixed position sizing (no adaptive entry sizing)
     POSITION_SIZE_PCT = 15.0  # 14% of cash per trade
 
-    MAX_ACTIVE_STOCKS = 15
+    MAX_ACTIVE_STOCKS = 10
 
     # =========================================================================
 
@@ -66,13 +67,20 @@ class SwingTradeStrategy(Strategy):
         # Track rotation timing
         self.last_rotation_week = None
 
+        # Drawdown protection (Priority 5)
+        self.drawdown_protection = drawdown_protection.create_default_protection(
+            threshold_pct=-10.0,  # Trigger at -10% drawdown
+            recovery_days=5  # Wait 5 days before re-entering
+        )
+
+        print(f"✅ Drawdown Protection: {self.drawdown_protection.threshold_pct:.1f}% threshold, {self.drawdown_protection.recovery_days}d recovery")
         print(f"✅ Ticker Cooldown Enabled: {self.ticker_cooldown.cooldown_days} days between purchases")
-        print(
-            f"✅ Stock Rotation: Max {self.stock_rotator.max_active} active stocks ({self.stock_rotator.rotation_frequency})")
+        print(f"✅ Stock Rotation: Max {self.stock_rotator.max_active} active stocks ({self.stock_rotator.rotation_frequency})")
         print(f"✅ Win Rate Tracking: Enabled (Priority 5)")
         print(f"✅ Ticker Penalties: Enabled (Priority 3)")
         print(f"✅ Active Signals: {len(self.ACTIVE_SIGNALS)} signals configured")
         print(f"✅ Fixed Position Size: {self.POSITION_SIZE_PCT}% per trade")
+        print(f"✅ Drawdown Protection: {self.drawdown_protection.threshold_pct:.1f}% threshold, {self.drawdown_protection.recovery_days}d recovery")
 
     def before_starting_trading(self):
         """
@@ -124,60 +132,65 @@ class SwingTradeStrategy(Strategy):
 
         print('\n')
 
-        # all_tickers = list(set(self.tickers + [p.symbol for p in self.get_positions()]))
-        all_tickers = list(set(self.tickers + ['SPY'] + [p.symbol for p in self.get_positions()]))
-        all_stock_data = stock_data.process_data(all_tickers, current_date)
-
-        spy_data = all_stock_data.get('SPY', {}).get('indicators', None) if 'SPY' in all_stock_data else None
-        # spy_data = stock_data.process_data("SPY", current_date)
-        # spy_data = spy.get('indicators', None)
         # =====================================================================
-        # STEP 1: CHECK ALL EXISTING POSITIONS FOR EXITS (HIGHEST PRIORITY)
+        # PORTFOLIO DRAWDOWN PROTECTION - HIGHEST PRIORITY
         # =====================================================================
 
-        # Check positions and get exit orders (uses adaptive parameters)
-        exit_orders = position_monitoring.check_positions_for_exits(
-            strategy=self,
-            current_date=current_date,
-            all_stock_data=all_stock_data,
-            position_monitor=self.position_monitor
-        )
-
-        # Execute all exit orders
-        position_monitoring.execute_exit_orders(
-            strategy=self,
-            exit_orders=exit_orders,
-            current_date=current_date,
-            position_monitor=self.position_monitor,
-            profit_tracker=self.profit_tracker,
-            ticker_cooldown=self.ticker_cooldown
-        )
-
-        # =====================================================================
-        # STEP 2: STOCK ROTATION - TRUE WEEKLY ROTATION
-        # =====================================================================
-
-        # Calculate bi-weekly period (2-week blocks)
-        current_week = current_date.isocalendar()[1]  # ISO week number
-        current_year = current_date.year
-        biweekly_period = (current_year, current_week // 2)  # Groups weeks into 2-week periods
-
-        # Check if this is a new bi-weekly period
-        if self.last_rotation_week != biweekly_period:
-            # Time to rotate - perform actual rotation
-            active_tickers = self.stock_rotator.rotate_stocks(
+        # Check if protection should trigger
+        if self.drawdown_protection.should_trigger(self.portfolio_value):
+            self.drawdown_protection.activate(
                 strategy=self,
-                all_candidates=self.tickers,
                 current_date=current_date,
-                all_stock_data=all_stock_data
+                position_monitor=self.position_monitor,
+                ticker_cooldown=self.ticker_cooldown
             )
-            self.last_rotation_week = biweekly_period
-        else:
-            # NOT time to rotate - use existing active list
-            active_tickers = self.stock_rotator.active_tickers
+            return  # Skip rest of iteration
 
-            # First iteration - initialize active list
-            if not active_tickers:
+        # Check if in recovery period
+        if self.drawdown_protection.is_in_recovery(current_date):
+            self.drawdown_protection.print_status(self.portfolio_value, current_date)
+
+            # all_tickers = list(set(self.tickers + [p.symbol for p in self.get_positions()]))
+            all_tickers = list(set(self.tickers + ['SPY'] + [p.symbol for p in self.get_positions()]))
+            all_stock_data = stock_data.process_data(all_tickers, current_date)
+
+            spy_data = all_stock_data.get('SPY', {}).get('indicators', None) if 'SPY' in all_stock_data else None
+            # spy_data = stock_data.process_data("SPY", current_date)
+            # spy_data = spy.get('indicators', None)
+            # =====================================================================
+            # STEP 1: CHECK ALL EXISTING POSITIONS FOR EXITS (HIGHEST PRIORITY)
+            # =====================================================================
+
+            # Check positions and get exit orders (uses adaptive parameters)
+            exit_orders = position_monitoring.check_positions_for_exits(
+                strategy=self,
+                current_date=current_date,
+                all_stock_data=all_stock_data,
+                position_monitor=self.position_monitor
+            )
+
+            # Execute all exit orders
+            position_monitoring.execute_exit_orders(
+                strategy=self,
+                exit_orders=exit_orders,
+                current_date=current_date,
+                position_monitor=self.position_monitor,
+                profit_tracker=self.profit_tracker,
+                ticker_cooldown=self.ticker_cooldown
+            )
+
+            # =====================================================================
+            # STEP 2: STOCK ROTATION - TRUE WEEKLY ROTATION
+            # =====================================================================
+
+            # Calculate bi-weekly period (2-week blocks)
+            current_week = current_date.isocalendar()[1]  # ISO week number
+            current_year = current_date.year
+            biweekly_period = (current_year, current_week // 2)  # Groups weeks into 2-week periods
+
+            # Check if this is a new bi-weekly period
+            if self.last_rotation_week != biweekly_period:
+                # Time to rotate - perform actual rotation
                 active_tickers = self.stock_rotator.rotate_stocks(
                     strategy=self,
                     all_candidates=self.tickers,
@@ -185,105 +198,118 @@ class SwingTradeStrategy(Strategy):
                     all_stock_data=all_stock_data
                 )
                 self.last_rotation_week = biweekly_period
+            else:
+                # NOT time to rotate - use existing active list
+                active_tickers = self.stock_rotator.active_tickers
 
-        # =====================================================================
-        # STEP 3: LOOK FOR NEW BUY SIGNALS (SIMPLIFIED - NO SCORING)
-        # =====================================================================
+                # First iteration - initialize active list
+                if not active_tickers:
+                    active_tickers = self.stock_rotator.rotate_stocks(
+                        strategy=self,
+                        all_candidates=self.tickers,
+                        current_date=current_date,
+                        all_stock_data=all_stock_data
+                    )
+                    self.last_rotation_week = biweekly_period
 
-        buy_orders = []
+            # =====================================================================
+            # STEP 3: LOOK FOR NEW BUY SIGNALS (SIMPLIFIED - NO SCORING)
+            # =====================================================================
 
-        # Track cash commitments to prevent over-purchasing
-        pending_cash_commitment = 0
+            buy_orders = []
 
-        for ticker in active_tickers:
+            # Track cash commitments to prevent over-purchasing
+            pending_cash_commitment = 0
 
-            if ticker not in all_stock_data:
-                self.log_message(f"No data for {ticker}, skipping")
-                continue
+            for ticker in active_tickers:
 
-            # Get stocks and indicators
-            data = all_stock_data[ticker]['indicators']
+                if ticker not in all_stock_data:
+                    self.log_message(f"No data for {ticker}, skipping")
+                    continue
 
-            # === CHECK COOLDOWN BEFORE PROCESSING ===
-            if not self.ticker_cooldown.can_buy(ticker, current_date):
-                continue
+                # Get stocks and indicators
+                data = all_stock_data[ticker]['indicators']
 
-            # Skip if we already have a position
-            has_position = ticker in self.positions
-            if has_position:
-                continue
+                # === CHECK COOLDOWN BEFORE PROCESSING ===
+                if not self.ticker_cooldown.can_buy(ticker, current_date):
+                    continue
 
-            # === GET ADAPTIVE PARAMETERS FOR EXITS (still used for exit strategy) ===
-            adaptive_params = self.position_monitor.get_cached_market_conditions(
-                ticker, current_date_str, data
-            )
+                # Skip if we already have a position
+                has_position = ticker in self.positions
+                if has_position:
+                    continue
 
-            # === CHECK FOR ANY VALID BUY SIGNAL (SIMPLIFIED) ===
-            buy_signal = signals.buy_signals(data, self.ACTIVE_SIGNALS, spy_data=spy_data)
+                # === GET ADAPTIVE PARAMETERS FOR EXITS (still used for exit strategy) ===
+                adaptive_params = self.position_monitor.get_cached_market_conditions(
+                    ticker, current_date_str, data
+                )
 
-            # Skip if no buy signal
-            if not buy_signal or buy_signal.get('side') != 'buy':
-                continue
+                # === CHECK FOR ANY VALID BUY SIGNAL (SIMPLIFIED) ===
+                buy_signal = signals.buy_signals(data, self.ACTIVE_SIGNALS, spy_data=spy_data)
 
-            # === FIXED POSITION SIZE (NO ADAPTIVE ENTRY SIZING) ===
-            buy_position = position_sizing.calculate_buy_size(
-                self,
-                data['close'],
-                account_threshold=20000,
-                max_position_pct=self.POSITION_SIZE_PCT,  # Fixed 14%
-                pending_commitments=pending_cash_commitment,
-                adaptive_params=None  # No adaptive entry sizing
-            )
+                # Skip if no buy signal
+                if not buy_signal or buy_signal.get('side') != 'buy':
+                    continue
 
-            # Check if we can trade
-            if not buy_position['can_trade']:
-                continue
+                # === FIXED POSITION SIZE (NO ADAPTIVE ENTRY SIZING) ===
+                buy_position = position_sizing.calculate_buy_size(
+                    self,
+                    data['close'],
+                    account_threshold=20000,
+                    max_position_pct=self.POSITION_SIZE_PCT,  # Fixed 14%
+                    pending_commitments=pending_cash_commitment,
+                    adaptive_params=None  # No adaptive entry sizing
+                )
 
-            # Track position with entry signal (no score)
-            self.position_monitor.track_position(
-                ticker,
-                current_date,
-                buy_signal.get('signal_type', 'unknown'),
-                entry_score=0  # No scoring system
-            )
+                # Check if we can trade
+                if not buy_position['can_trade']:
+                    continue
 
-            # Create order
-            order_sig = buy_signal.copy()
-            order_sig['ticker'] = ticker
-            order_sig['stop_loss'] = 0.90 * data['close']
-            order_sig['quantity'] = buy_position['quantity']
-            order_sig['position_value'] = buy_position['position_value']
-            order_sig['condition'] = adaptive_params['condition_label']
-            buy_orders.append(order_sig)
+                # Track position with entry signal (no score)
+                self.position_monitor.track_position(
+                    ticker,
+                    current_date,
+                    buy_signal.get('signal_type', 'unknown'),
+                    entry_score=0  # No scoring system
+                )
 
-            # ADD COMMITMENT to prevent over-purchasing
-            pending_cash_commitment += buy_position['position_value']
+                # Create order
+                order_sig = buy_signal.copy()
+                order_sig['ticker'] = ticker
+                order_sig['stop_loss'] = 0.90 * data['close']
+                order_sig['quantity'] = buy_position['quantity']
+                order_sig['position_value'] = buy_position['position_value']
+                order_sig['condition'] = adaptive_params['condition_label']
+                buy_orders.append(order_sig)
 
-            # Display pending order
-            print(
-                f" * PENDING BUY: {ticker} x{buy_position['quantity']} {adaptive_params['condition_label']} | {buy_signal['signal_type']} = ${buy_position['position_value']:,.2f}")
+                # ADD COMMITMENT to prevent over-purchasing
+                pending_cash_commitment += buy_position['position_value']
 
-        # Submit buy orders
-        if len(buy_orders) > 0:
-            print(f"\n{'=' * 70}")
-            print(f"📊 BUY ORDERS SUMMARY - {len(buy_orders)} order(s)")
-            print(f"{'=' * 70}")
-            print(f"Total Cash Commitment: ${pending_cash_commitment:,.2f}")
-            print(f"Cash After Orders: ${self.get_cash() - pending_cash_commitment:,.2f}")
-            print(f"{'=' * 70}\n")
+                # Display pending order
+                print(
+                    f" * PENDING BUY: {ticker} x{buy_position['quantity']} {adaptive_params['condition_label']} | {buy_signal['signal_type']} = ${buy_position['position_value']:,.2f}")
 
-            for order in buy_orders:
-                if order['side'] == 'buy':
-                    submit_order = self.create_order(order['ticker'], order['quantity'], order['side'])
+            # Submit buy orders
+            if len(buy_orders) > 0:
+                print(f"\n{'=' * 70}")
+                print(f"📊 BUY ORDERS SUMMARY - {len(buy_orders)} order(s)")
+                print(f"{'=' * 70}")
+                print(f"Total Cash Commitment: ${pending_cash_commitment:,.2f}")
+                print(f"Cash After Orders: ${self.get_cash() - pending_cash_commitment:,.2f}")
+                print(f"{'=' * 70}\n")
 
-                    print(
-                        f" * BUY: {order['ticker']} x{order['quantity']} {order['condition']} | {order['signal_type']}")
-                    print(f"        Price: ${order['limit_price']:.2f} | Value: ${order['position_value']:,.2f}")
+                for order in buy_orders:
+                    if order['side'] == 'buy':
+                        submit_order = self.create_order(order['ticker'], order['quantity'], order['side'])
 
-                    self.submit_order(submit_order)
+                        print(
+                            f" * BUY: {order['ticker']} x{order['quantity']} {order['condition']} | {order['signal_type']}")
+                        print(f"        Price: ${order['limit_price']:.2f} | Value: ${order['position_value']:,.2f}")
 
-                    # Record buy in cooldown tracker
-                    self.ticker_cooldown.record_buy(order['ticker'], current_date)
+                        self.submit_order(submit_order)
+
+                        # Record buy in cooldown tracker
+                        self.ticker_cooldown.record_buy(order['ticker'], current_date)
 
     def on_strategy_end(self):
         self.profit_tracker.display_final_summary()

@@ -44,7 +44,7 @@ class AdaptiveExitConfig:
     STRONG_POSITION_SIZE_PCT = 18.0  # No change
 
     # === NEUTRAL CONDITIONS (Score 4-6) ===
-    NEUTRAL_EMERGENCY_STOP = -5.0  # No change
+    NEUTRAL_EMERGENCY_STOP = -4.0  # No change
     NEUTRAL_PROFIT_TARGET_1 = 12.0  # No change
     NEUTRAL_PROFIT_TARGET_1_SELL = 40.0  # No change
     NEUTRAL_PROFIT_TARGET_2 = 35.0  # CHANGED from 25.0
@@ -56,7 +56,7 @@ class AdaptiveExitConfig:
     NEUTRAL_POSITION_SIZE_PCT = 14.0  # No change
 
     # === WEAK CONDITIONS (Score 0-3) ===
-    WEAK_EMERGENCY_STOP = -3.5  # No change
+    WEAK_EMERGENCY_STOP = -2.5  # No change
     WEAK_PROFIT_TARGET_1 = 9.0  # No change
     WEAK_PROFIT_TARGET_1_SELL = 45.0  # No change
     WEAK_PROFIT_TARGET_2 = 25.0  # CHANGED from 18.0
