@@ -49,6 +49,10 @@ class SwingTradeStrategy(Strategy):
     BASE_POSITION_SIZE_PCT = 12.0  # Will be adjusted by multi-signal + regime
 
     MAX_ACTIVE_STOCKS = 10
+    SIGNAL_GUARD_MIN_TRADES = 6
+    SIGNAL_GUARD_WIN_RATE = 45.0
+    SIGNAL_GUARD_LOOKBACK = 30
+    IDLE_ROTATION_THRESHOLD = 3
 
     # =========================================================================
 
@@ -76,6 +80,11 @@ class SwingTradeStrategy(Strategy):
             rotation_frequency='biweekly',
             profit_tracker=self.profit_tracker  # Blacklist automatic
         )
+
+        # Dynamic signal + rotation controls
+        self.signal_suspensions = {}
+        self.idle_iterations_without_buys = 0
+        self.force_rotation_next_cycle = False
 
         # Track rotation timing
         self.last_rotation_week = None
@@ -219,6 +228,9 @@ class SwingTradeStrategy(Strategy):
             print(f"No new positions will be opened.\n")
             return
 
+        # Dynamically disable underperforming signals to preserve quality
+        active_signal_list = self._get_active_signal_list(current_date)
+
         # =====================================================================
         # STEP 2: STOCK ROTATION - BI-WEEKLY ROTATION
         # =====================================================================
@@ -228,21 +240,31 @@ class SwingTradeStrategy(Strategy):
         current_year = current_date.year
         biweekly_period = (current_year, current_week // 2)  # Groups weeks into 2-week periods
 
-        # Check if this is a new bi-weekly period
-        if self.last_rotation_week != biweekly_period:
-            # Time to rotate - perform actual rotation
+        force_rotation = False
+        if self.force_rotation_next_cycle:
+            force_rotation = True
+            print(
+                f"\n🌀 FORCED ROTATION: No new entries for {self.idle_iterations_without_buys} iteration(s) → refreshing active pool early")
+
+        if self.last_rotation_week != biweekly_period or force_rotation:
+            # Time to rotate - perform actual rotation (scheduled or forced)
             active_tickers = self.stock_rotator.rotate_stocks(
                 strategy=self,
                 all_candidates=self.tickers,
                 current_date=current_date,
                 all_stock_data=all_stock_data
             )
-            self.last_rotation_week = biweekly_period
+
+            if self.last_rotation_week != biweekly_period:
+                self.last_rotation_week = biweekly_period
+
+            self.force_rotation_next_cycle = False
+            self.idle_iterations_without_buys = 0
         else:
             # NOT time to rotate - use existing active list
             active_tickers = self.stock_rotator.active_tickers
 
-            # First iteration - initialize active list
+            # First iteration or empty pool - initialize active list
             if not active_tickers:
                 active_tickers = self.stock_rotator.rotate_stocks(
                     strategy=self,
@@ -251,6 +273,7 @@ class SwingTradeStrategy(Strategy):
                     all_stock_data=all_stock_data
                 )
                 self.last_rotation_week = biweekly_period
+                self.idle_iterations_without_buys = 0
 
         # =====================================================================
         # STEP 3: LOOK FOR NEW BUY SIGNALS WITH MULTI-SIGNAL CONVICTION
@@ -299,7 +322,7 @@ class SwingTradeStrategy(Strategy):
             # CHECK FOR BUY SIGNAL (regime filter now in drawdown_protection)
             # ===================================================================
 
-            buy_signal = signals.buy_signals(data, self.ACTIVE_SIGNALS, spy_data=spy_data)
+            buy_signal = signals.buy_signals(data, active_signal_list, spy_data=spy_data)
 
             # Skip if no buy signal
             if not buy_signal or buy_signal.get('side') != 'buy':
@@ -311,7 +334,7 @@ class SwingTradeStrategy(Strategy):
             # ===================================================================
 
             signal_count = 0
-            for test_signal_name in self.ACTIVE_SIGNALS:
+            for test_signal_name in active_signal_list:
                 test_signal_func = signals.BUY_STRATEGIES[test_signal_name]
                 test_result = test_signal_func(data)
                 if test_result and test_result.get('side') == 'buy':
@@ -382,6 +405,7 @@ class SwingTradeStrategy(Strategy):
         max_positions_allowed = regime_info['max_positions']
 
         if current_positions >= max_positions_allowed:
+            self._handle_idle_rotation_feedback(len(buy_orders), current_date)
             print(
                 f"\n⚠️ Position limit reached ({current_positions}/{max_positions_allowed} due to {regime_info['regime']} market)")
             print(f"Skipping new entries.\n")
@@ -408,6 +432,76 @@ class SwingTradeStrategy(Strategy):
 
                     # Record buy in cooldown tracker
                     self.ticker_cooldown.record_buy(order['ticker'], current_date)
+
+        # Update idle rotation tracker
+        self._handle_idle_rotation_feedback(len(buy_orders), current_date)
+
+    def _get_active_signal_list(self, current_date):
+        """
+        Dynamically disable signals that are underperforming based on recent stats.
+        """
+        if not hasattr(self, 'profit_tracker'):
+            return self.ACTIVE_SIGNALS
+
+        underperformers = self.profit_tracker.get_underperforming_signals(
+            min_trades=self.SIGNAL_GUARD_MIN_TRADES,
+            win_rate_threshold=self.SIGNAL_GUARD_WIN_RATE,
+            lookback=self.SIGNAL_GUARD_LOOKBACK
+        )
+
+        relevant_underperformers = {
+            name: stats for name, stats in underperformers.items()
+            if name in self.ACTIVE_SIGNALS
+        }
+
+        # Pause newly underperforming signals
+        for signal_name, stats in relevant_underperformers.items():
+            if signal_name in self.signal_suspensions:
+                continue
+
+            self.signal_suspensions[signal_name] = {
+                'since': current_date,
+                'stats': stats
+            }
+            print(
+                f"\n⏸️  Signal paused: {signal_name} | win rate {stats['win_rate']:.1f}% "
+                f"over {stats['trade_count']} trades (lookback {self.SIGNAL_GUARD_LOOKBACK})"
+            )
+
+        # Resume signals once their stats recover
+        for signal_name in list(self.signal_suspensions.keys()):
+            if signal_name in relevant_underperformers:
+                continue
+
+            info = self.signal_suspensions.pop(signal_name)
+            latest_stats = self.profit_tracker.get_signal_stats(signal_name)
+            print(
+                f"\n▶️  Signal resumed: {signal_name} | latest win rate {latest_stats['win_rate']:.1f}% "
+                f"across {latest_stats['trade_count']} trades (paused since {info['since'].strftime('%Y-%m-%d')})"
+            )
+
+        active = [sig for sig in self.ACTIVE_SIGNALS if sig not in self.signal_suspensions]
+        return active if active else self.ACTIVE_SIGNALS
+
+    def _handle_idle_rotation_feedback(self, buy_order_count, current_date):
+        """
+        Track how many iterations have passed without placing new orders and
+        schedule a forced rotation if we stay idle too long.
+        """
+        if buy_order_count > 0:
+            self.idle_iterations_without_buys = 0
+            self.force_rotation_next_cycle = False
+            return
+
+        self.idle_iterations_without_buys += 1
+
+        if (self.idle_iterations_without_buys >= self.IDLE_ROTATION_THRESHOLD and
+                not self.force_rotation_next_cycle):
+            self.force_rotation_next_cycle = True
+            print(
+                f"\n⚙️  No qualifying entries for {self.idle_iterations_without_buys} iteration(s) "
+                f"- will rotate watchlist early on next loop ({current_date.strftime('%Y-%m-%d')})."
+            )
 
     def on_strategy_end(self):
         """Display final statistics"""

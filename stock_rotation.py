@@ -63,24 +63,61 @@ class TickerBlacklist:
 
             # Check for blacklist triggers
             if self.consecutive_losses[ticker] >= 3:
-                self._apply_temporary_blacklist(ticker, current_date)
+                self._apply_temporary_blacklist(
+                    ticker,
+                    current_date,
+                    days=21,
+                    reason='3 consecutive losses'
+                )
+
+            # Check aggregate P&L damage even if losses were not consecutive
+            self._check_recent_loss_pnl(ticker, current_date)
 
         # Check for permanent blacklist
         self._check_permanent_blacklist(ticker)
 
-    def _apply_temporary_blacklist(self, ticker, current_date):
+    def _apply_temporary_blacklist(self, ticker, current_date, days=21, reason='3 consecutive losses'):
         """
         Apply 2-4 week temporary blacklist
 
         Args:
             ticker: Stock symbol
             current_date: Current date
+            days: Duration of blacklist
+            reason: Description shown in logs
         """
         if ticker not in self.permanent_blacklist:
-            # 3 weeks blacklist
-            expiry = current_date + timedelta(days=21)
-            self.temporary_blacklist[ticker] = expiry
-            print(f"\n⛔ TEMPORARY BLACKLIST: {ticker} (3 consecutive losses) - Until {expiry.strftime('%Y-%m-%d')}")
+            expiry = current_date + timedelta(days=days)
+            previous_expiry = self.temporary_blacklist.get(ticker)
+
+            # Only extend/announce if the new expiry is later
+            if previous_expiry is None or expiry > previous_expiry:
+                self.temporary_blacklist[ticker] = expiry
+                print(f"\n⛔ TEMPORARY BLACKLIST: {ticker} ({reason}) - Until {expiry.strftime('%Y-%m-%d')}")
+
+    def _check_recent_loss_pnl(self, ticker, current_date, trades_to_check=3, loss_threshold=-1000.0):
+        """
+        Apply a shorter temporary blacklist if cumulative P&L over the recent window
+        is deeply negative, even without consecutive losses. Helps cut off names
+        like NFLX sooner.
+        """
+        if not self.profit_tracker:
+            return
+
+        ticker_trades = [t for t in self.profit_tracker.closed_trades if t['ticker'] == ticker]
+        if len(ticker_trades) < trades_to_check:
+            return
+
+        recent_trades = ticker_trades[-trades_to_check:]
+        total_recent_pnl = sum(t['pnl_dollars'] for t in recent_trades)
+
+        if total_recent_pnl <= loss_threshold:
+            self._apply_temporary_blacklist(
+                ticker,
+                current_date,
+                days=14,
+                reason=f'{total_recent_pnl:+,.0f} over last {trades_to_check} trades'
+            )
 
     def _check_permanent_blacklist(self, ticker):
         """
