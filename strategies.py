@@ -18,6 +18,8 @@ import position_sizing
 import profit_tracking
 import position_monitoring
 from ticker_cooldown import TickerCooldown
+from state_persistence import save_state_safe, load_state_safe  # Crash recovery
+
 
 # INTEGRATED IMPORTS (consolidated modules)
 from stock_rotation import StockRotator  # Has integrated blacklist
@@ -106,11 +108,13 @@ class SwingTradeStrategy(Strategy):
 
     def before_starting_trading(self):
         """
-        Sync existing positions - SIMPLIFIED
-        Just track metadata, broker has quantity/price
+        Sync existing positions - WITH CRASH RECOVERY
         """
         if Config.BACKTESTING:
             return
+
+        # LOAD SAVED STATE FIRST (if exists)
+        load_state_safe(self)
 
         try:
             broker_positions = self.get_positions()
@@ -120,15 +124,17 @@ class SwingTradeStrategy(Strategy):
                     ticker = position.symbol
 
                     if ticker in self.tickers:
-                        # Just track metadata (no quantity/price needed)
-                        self.position_monitor.track_position(
-                            ticker,
-                            self.get_datetime(),
-                            'pre_existing',
-                            entry_score=0
-                        )
+                        # Check if we already have metadata (from loaded state)
+                        if ticker not in self.position_monitor.positions_metadata:
+                            # No metadata - track as pre_existing
+                            self.position_monitor.track_position(
+                                ticker,
+                                self.get_datetime(),
+                                'pre_existing',
+                                entry_score=0
+                            )
 
-                print(f"[SYNC] Loaded {len(self.position_monitor.positions_metadata)} positions\n")
+            print(f"[SYNC] Loaded {len(self.position_monitor.positions_metadata)} positions\n")
 
         except Exception as e:
             print(f"[ERROR] Failed to sync positions: {e}")
