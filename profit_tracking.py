@@ -65,6 +65,93 @@ class ProfitTracker:
         print(
             f"\n{emoji} TRADE CLOSED: {ticker} | ${total_pnl:+,.2f} ({pnl_pct:+.1f}%) | {quantity_sold} shares @ ${entry_price:.2f} → ${exit_price:.2f}")
 
+        # Update blacklist/rotation systems immediately
+        self._notify_blacklist(ticker, total_pnl > 0, exit_date)
+
+    def _notify_blacklist(self, ticker, is_winner, exit_date):
+        """
+        Inform the stock rotator's blacklist about the latest trade outcome so it can
+        react in near real-time (e.g., consecutive loss tracking, P&L based bans).
+        """
+        stock_rotator = getattr(self.strategy, 'stock_rotator', None)
+        if not stock_rotator:
+            return
+
+        blacklist = getattr(stock_rotator, 'blacklist', None)
+        if not blacklist:
+            return
+
+        try:
+            blacklist.update_from_trade(ticker, is_winner, exit_date)
+        except Exception as err:
+            print(f"[WARN] Could not notify blacklist for {ticker}: {err}")
+
+    def get_signal_stats(self, signal_name, lookback=None):
+        """
+        Return win/loss stats for a specific entry signal.
+
+        Args:
+            signal_name: Name of the entry signal
+            lookback: Optional integer limiting analysis to most recent trades
+
+        Returns:
+            dict with trade_count, win_rate, avg_pnl, total_pnl
+        """
+        trades = [t for t in self.closed_trades if t['entry_signal'] == signal_name]
+        if lookback is not None and lookback > 0:
+            trades = trades[-lookback:]
+
+        trade_count = len(trades)
+        if trade_count == 0:
+            return {
+                'signal': signal_name,
+                'trade_count': 0,
+                'win_rate': 0.0,
+                'total_pnl': 0.0,
+                'avg_pnl': 0.0
+            }
+
+        wins = [t for t in trades if t['pnl_dollars'] > 0]
+        total_pnl = sum(t['pnl_dollars'] for t in trades)
+        avg_pnl = total_pnl / trade_count if trade_count else 0.0
+        win_rate = (len(wins) / trade_count * 100) if trade_count else 0.0
+
+        return {
+            'signal': signal_name,
+            'trade_count': trade_count,
+            'win_rate': round(win_rate, 2),
+            'total_pnl': round(total_pnl, 2),
+            'avg_pnl': round(avg_pnl, 2)
+        }
+
+    def get_underperforming_signals(self, min_trades=6, win_rate_threshold=45.0, lookback=30):
+        """
+        Identify signals that are currently underperforming so the strategy can
+        temporarily pause them.
+
+        Args:
+            min_trades: Minimum number of trades required before evaluation
+            win_rate_threshold: Disable signals below this win rate (%)
+            lookback: Evaluate only the most recent N trades per signal
+
+        Returns:
+            dict of {signal_name: stats_dict}
+        """
+        if not self.closed_trades:
+            return {}
+
+        signals = set(trade['entry_signal'] for trade in self.closed_trades)
+        underperformers = {}
+
+        for signal_name in signals:
+            stats = self.get_signal_stats(signal_name, lookback=lookback)
+            if stats['trade_count'] < min_trades:
+                continue
+            if stats['win_rate'] < win_rate_threshold:
+                underperformers[signal_name] = stats
+
+        return underperformers
+
     def display_final_summary(self):
         """Display P&L summary at end of backtest - ENHANCED with per-ticker stats and entry scores"""
         if not self.closed_trades:
