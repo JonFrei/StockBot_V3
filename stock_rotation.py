@@ -20,18 +20,6 @@ import stock_data
 import signals
 from position_monitoring import calculate_market_condition_score
 
-# PRIORITY 3: Ticker Blacklist/Penalty System
-TICKER_PENALTIES = {
-    # Based on backtest results - tickers with poor win rates or consistent losses
-    'SHOP': -25,  # 16.7% win rate, -$3,883 (avoid)
-    'V': -30,  # 0% win rate, -$3,523 (avoid)
-    'AMZN': -30,  # 0% win rate, -$1,074 (avoid)
-    'TSLA': -25,  # 20% win rate, -$3,320 (avoid)
-    'COIN': -20,  # 28.6% win rate, -$1,786 (reduce exposure)
-    'PYPL': -15,  # 50% win rate but consistent small losses
-    'META': -10,  # 50% win rate, slight losses
-}
-
 
 class StockRotator:
     """
@@ -252,11 +240,6 @@ class StockRotator:
         except:
             pass
 
-        # PRIORITY 3: Apply ticker penalties
-        if ticker in TICKER_PENALTIES:
-            penalty = TICKER_PENALTIES[ticker]
-            score += penalty  # Add negative value
-
         # PRIORITY 5: Apply historical win rate bonus/penalty
         historical_score = self.get_historical_performance_score(ticker)
         score += historical_score
@@ -434,10 +417,6 @@ class StockRotator:
                 if perf['total_trades'] >= 3:
                     win_rate_str = f"{perf['win_rate']:.0f}% ({perf['wins']}W/{perf['losses']}L)"
 
-            # Get penalty
-            penalty_str = ""
-            if ticker in TICKER_PENALTIES:
-                penalty_str = f"{TICKER_PENALTIES[ticker]:+d}"
 
             # Determine status
             was_active = ticker in self.active_tickers
@@ -460,7 +439,7 @@ class StockRotator:
                 status = "⚪ BENCH"
                 change = "—"
 
-            print(f"{idx:<6} {ticker:<8} {score:>6.1f}     {win_rate_str:<12} {penalty_str:<12} {status:<15} {change}")
+            print(f"{idx:<6} {ticker:<8} {score:>6.1f}     {win_rate_str:<12} {status:<15} {change}")
 
         print(f"{'─' * 100}\n")
 

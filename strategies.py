@@ -30,12 +30,12 @@ class SwingTradeStrategy(Strategy):
     ]
 
     # Cooldown configuration
-    COOLDOWN_DAYS = 2  # Days between re-purchases of same ticker
+    COOLDOWN_DAYS = 1  # Days between re-purchases of same ticker
 
     # Fixed position sizing (no adaptive entry sizing)
     POSITION_SIZE_PCT = 15.0  # 14% of cash per trade
 
-    MAX_ACTIVE_STOCKS = 12
+    MAX_ACTIVE_STOCKS = 15
 
     # =========================================================================
 
@@ -67,7 +67,8 @@ class SwingTradeStrategy(Strategy):
         self.last_rotation_week = None
 
         print(f"✅ Ticker Cooldown Enabled: {self.ticker_cooldown.cooldown_days} days between purchases")
-        print(f"✅ Stock Rotation: Max {self.stock_rotator.max_active} active stocks ({self.stock_rotator.rotation_frequency})")
+        print(
+            f"✅ Stock Rotation: Max {self.stock_rotator.max_active} active stocks ({self.stock_rotator.rotation_frequency})")
         print(f"✅ Win Rate Tracking: Enabled (Priority 5)")
         print(f"✅ Ticker Penalties: Enabled (Priority 3)")
         print(f"✅ Active Signals: {len(self.ACTIVE_SIGNALS)} signals configured")
@@ -123,11 +124,13 @@ class SwingTradeStrategy(Strategy):
 
         print('\n')
 
-        all_tickers = list(set(self.tickers + [p.symbol for p in self.get_positions()]))
+        # all_tickers = list(set(self.tickers + [p.symbol for p in self.get_positions()]))
+        all_tickers = list(set(self.tickers + ['SPY'] + [p.symbol for p in self.get_positions()]))
         all_stock_data = stock_data.process_data(all_tickers, current_date)
 
         spy_data = all_stock_data.get('SPY', {}).get('indicators', None) if 'SPY' in all_stock_data else None
-
+        # spy_data = stock_data.process_data("SPY", current_date)
+        # spy_data = spy.get('indicators', None)
         # =====================================================================
         # STEP 1: CHECK ALL EXISTING POSITIONS FOR EXITS (HIGHEST PRIORITY)
         # =====================================================================
