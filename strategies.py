@@ -49,7 +49,7 @@ class SwingTradeStrategy(Strategy):
     # Base position sizing (modified by conviction + regime)
     BASE_POSITION_SIZE_PCT = 12.0  # Will be adjusted by multi-signal + regime
 
-    MAX_ACTIVE_STOCKS = 10
+    MAX_ACTIVE_STOCKS = 7
     SIGNAL_GUARD_MIN_TRADES = 6
     SIGNAL_GUARD_WIN_RATE = 45.0
     SIGNAL_GUARD_LOOKBACK = 30

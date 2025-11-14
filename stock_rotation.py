@@ -256,6 +256,7 @@ class StockRotator:
         self.ticker_scores = {}  # Historical tracking
         self.rotation_count = 0
         self.locked_winners = []
+        self.initial_order = {}
 
         # Win rate tracking
         self.profit_tracker = profit_tracker
@@ -472,6 +473,44 @@ class StockRotator:
         })
 
         return score
+
+    def _seed_initial_order(self, candidates):
+        """
+        Store the original ordering of the ticker universe so we can
+        default to it before sufficient trade history exists.
+        """
+        for ticker in candidates:
+            if ticker not in self.initial_order:
+                self.initial_order[ticker] = len(self.initial_order)
+
+    def _rank_tickers_for_competition(self, candidates):
+        """
+        Rank tickers by the amount of trade history and win rate so that
+        only the strongest performers occupy the top slots.
+        """
+        ranking = []
+
+        for ticker in candidates:
+            perf = self.ticker_performance.get(ticker, {})
+            total_trades = perf.get('total_trades', 0)
+            win_rate = perf.get('win_rate', 0.0)
+            seed_idx = self.initial_order.get(ticker, len(self.initial_order))
+            is_blacklisted = bool(self.blacklist and self.blacklist.is_blacklisted(ticker))
+
+            score = (total_trades * 10) + win_rate
+
+            ranking.append({
+                'ticker': ticker,
+                'trades': total_trades,
+                'win_rate': win_rate,
+                'seed_idx': seed_idx,
+                'is_blacklisted': is_blacklisted,
+                'score': score,
+                'sort_key': (0 if is_blacklisted else 1, total_trades, win_rate, -seed_idx)
+            })
+
+        ranking.sort(key=lambda item: item['sort_key'], reverse=True)
+        return ranking
 
     def check_winner_locks(self, strategy, all_stock_data):
         """
