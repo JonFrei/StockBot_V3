@@ -37,7 +37,7 @@ class SwingTradeStrategy(Strategy):
     ACTIVE_SIGNALS = [
         'consolidation_breakout',  # 75% win rate - LOOSENED
         'golden_cross',  # 77% win rate - LOOSENED
-        'bollinger_buy'
+        'bollinger_buy',
         'swing_trade_1',  # EMA crossover + momentum
         'swing_trade_2',  # Pullback plays
 
@@ -47,7 +47,7 @@ class SwingTradeStrategy(Strategy):
     COOLDOWN_DAYS = 3  # Days between re-purchases of same ticker
 
     # Base position sizing (modified by conviction + regime)
-    BASE_POSITION_SIZE_PCT = 12.0  # Will be adjusted by multi-signal + regime
+    BASE_POSITION_SIZE_PCT = 18.0  # Will be adjusted by multi-signal + regime
 
     MAX_ACTIVE_STOCKS = 10
     SIGNAL_GUARD_MIN_TRADES = 6
