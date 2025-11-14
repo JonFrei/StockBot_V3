@@ -6,7 +6,7 @@ Does NOT track positions (broker already does that).
 
 Key Fix: Uses broker data for all P&L calculations - no accumulation bugs
 
-ENHANCED: Now includes per-ticker win/loss statistics and entry scores
+ENHANCED: Now includes per-ticker win/loss statistics, entry scores, and award display
 """
 
 from datetime import datetime
@@ -17,7 +17,7 @@ class ProfitTracker:
     Simplified tracker - just records closed trades
     No position tracking (broker handles that)
 
-    ENHANCED: Now tracks per-ticker performance and entry scores
+    ENHANCED: Now tracks per-ticker performance, entry scores, and displays awards
     """
 
     def __init__(self, strategy):
@@ -153,7 +153,7 @@ class ProfitTracker:
         return underperformers
 
     def display_final_summary(self):
-        """Display P&L summary at end of backtest - ENHANCED with per-ticker stats and entry scores"""
+        """Display P&L summary at end of backtest - ENHANCED with per-ticker stats and awards"""
         if not self.closed_trades:
             print("\n📊 No closed trades to report")
             return
@@ -184,11 +184,11 @@ class ProfitTracker:
         # Signal performance breakdown
         self._display_signal_performance()
 
-        # Per-ticker performance breakdown
+        # Per-ticker performance breakdown (WITH AWARDS)
         self._display_ticker_performance()
 
         # Display individual trades WITH ENTRY SCORES
-        print(f"\n📋 Trade Details:")
+        print(f"\n📋 Trade Details (Last 50):")
         for t in self.closed_trades[-50:]:  # Show last 50 trades
             score_display = f"[{t.get('entry_score', 0):.0f}]"
             print(f"   {t['ticker']:6} | ${t['pnl_dollars']:+9,.2f} ({t['pnl_pct']:+6.2f}%) | "
@@ -250,6 +250,7 @@ class ProfitTracker:
         """
         Display performance breakdown by ticker
         Shows which stocks are performing best/worst
+        ENHANCED: Now shows award status
         """
         from collections import defaultdict
 
@@ -272,14 +273,25 @@ class ProfitTracker:
             else:
                 ticker_stats[ticker]['losses'] += 1
 
-        print(f"\n💰 PERFORMANCE BY TICKER:")
-        print(f"{'─' * 80}")
+        print(f"\n💰 PERFORMANCE BY TICKER (WITH AWARDS):")
+        print(f"{'─' * 100}")
 
         # Sort by total P&L (highest first)
         sorted_tickers = sorted(ticker_stats.items(), key=lambda x: x[1]['total_pnl'], reverse=True)
 
-        print(f"{'Ticker':<8} {'Trades':<10} {'W/L':<10} {'Win Rate':<12} {'Total P&L':<15} {'Avg P&L':<15}")
-        print(f"{'─' * 80}")
+        # Try to get award info from stock_rotator (if available via strategy)
+        award_info = {}
+        try:
+            if hasattr(self.strategy, 'stock_rotator'):
+                rotator = self.strategy.stock_rotator
+                for ticker in ticker_stats.keys():
+                    award = rotator.get_award(ticker)
+                    award_info[ticker] = award
+        except:
+            pass  # No rotator available
+
+        print(f"{'Ticker':<8} {'Award':<10} {'Trades':<8} {'W/L':<10} {'Win Rate':<10} {'Total P&L':<15} {'Avg P&L'}")
+        print(f"{'─' * 100}")
 
         for ticker, stats in sorted_tickers:
             total_trades = len(stats['trades'])
@@ -289,19 +301,36 @@ class ProfitTracker:
 
             w_l_str = f"{stats['wins']}W/{stats['losses']}L"
 
-            print(f"{ticker:<8} {total_trades:<10} {w_l_str:<10} {win_rate:>6.1f}%      "
+            # Get award emoji and name
+            award = award_info.get(ticker, 'unknown')
+            award_emoji = {
+                'premium': '🥇',
+                'standard': '🥈',
+                'trial': '🔬',
+                'none': '⚪',
+                'frozen': '❄️',
+                'unknown': '❓'
+            }.get(award, '❓')
+
+            award_display = f"{award_emoji} {award[:7]}"
+
+            print(f"{ticker:<8} {award_display:<10} {total_trades:<8} {w_l_str:<10} {win_rate:>5.1f}%     "
                   f"${stats['total_pnl']:>+10,.2f}   ${avg_pnl:>+8,.2f} ({avg_pnl_pct:>+5.1f}%)")
 
-        print(f"{'─' * 80}")
+        print(f"{'─' * 100}")
 
         # Display best and worst performers
         if sorted_tickers:
             best = sorted_tickers[0]
             worst = sorted_tickers[-1]
 
-            print(f"\n🏆 BEST PERFORMER: {best[0]} (${best[1]['total_pnl']:+,.2f} from {len(best[1]['trades'])} trades)")
+            best_award = award_info.get(best[0], 'unknown')
+            worst_award = award_info.get(worst[0], 'unknown')
+
             print(
-                f"⚠️  WORST PERFORMER: {worst[0]} (${worst[1]['total_pnl']:+,.2f} from {len(worst[1]['trades'])} trades)")
+                f"\n🏆 BEST PERFORMER: {best[0]} [{best_award}] (${best[1]['total_pnl']:+,.2f} from {len(best[1]['trades'])} trades)")
+            print(
+                f"⚠️  WORST PERFORMER: {worst[0]} [{worst_award}] (${worst[1]['total_pnl']:+,.2f} from {len(worst[1]['trades'])} trades)")
 
     def _display_open_positions(self):
         """Display current open positions from broker"""

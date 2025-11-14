@@ -43,16 +43,16 @@ class SwingTradeStrategy(Strategy):
 
     ]
 
-    # Cooldown configuration
-    COOLDOWN_DAYS = 3  # Days between re-purchases of same ticker
+    # Cooldown configuration - PRIORITY 2A: REDUCED FROM 3 TO 1
+    COOLDOWN_DAYS = 1  # Days between re-purchases of same ticker
 
     # Base position sizing (modified by conviction + regime)
     BASE_POSITION_SIZE_PCT = 18.0  # Will be adjusted by multi-signal + regime
 
-    MAX_ACTIVE_STOCKS = 10
-    SIGNAL_GUARD_MIN_TRADES = 6
-    SIGNAL_GUARD_WIN_RATE = 45.0
-    SIGNAL_GUARD_LOOKBACK = 30
+    # PRIORITY 2B: INCREASED FROM 10 TO 15
+    MAX_ACTIVE_STOCKS = 15
+
+    # PRIORITY 1: SIGNAL GUARD REMOVED - No longer restricting signals
     IDLE_ROTATION_THRESHOLD = 3
 
     # =========================================================================
@@ -77,13 +77,11 @@ class SwingTradeStrategy(Strategy):
 
         # PRIORITY 2 & 5: Stock rotation WITH integrated blacklist + profit tracker
         self.stock_rotator = StockRotator(
-            max_active=self.MAX_ACTIVE_STOCKS,
-            rotation_frequency='biweekly',
+            rotation_frequency='weekly',  # Changed from biweekly
             profit_tracker=self.profit_tracker  # Blacklist automatic
         )
 
-        # Dynamic signal + rotation controls
-        self.signal_suspensions = {}
+        # Dynamic rotation controls
         self.idle_iterations_without_buys = 0
         self.force_rotation_next_cycle = False
 
@@ -99,12 +97,13 @@ class SwingTradeStrategy(Strategy):
         print(
             f"✅ Drawdown Protection: {self.drawdown_protection.threshold_pct:.1f}% threshold, {self.drawdown_protection.recovery_days}d recovery")
         print(f"✅ Ticker Cooldown: {self.ticker_cooldown.cooldown_days} days between purchases")
-        print(
-            f"✅ Stock Rotation: Max {self.stock_rotator.max_active} active stocks ({self.stock_rotator.rotation_frequency})")
+        print(f"✅ Stock Rotation: Weekly award-based system (all stocks tradeable)")
+        print(f"✅ Award System: Premium (1.3x), Standard (1.0x), Trial (1.0x), None (0.6x)")
         print(f"✅ Integrated Blacklist: Automatic (part of rotation)")
         print(f"✅ Market Regime Detection: Integrated (per-ticker + global)")
         print(f"✅ Multi-Signal Conviction: Enabled (12-18% position sizing)")
         print(f"✅ Active Signals: {len(self.ACTIVE_SIGNALS)} signals configured")
+        print(f"✅ Signal Guard: DISABLED - All signals active without restriction")
 
     def before_starting_trading(self):
         """
@@ -229,17 +228,17 @@ class SwingTradeStrategy(Strategy):
             print(f"No new positions will be opened.\n")
             return
 
-        # Dynamically disable underperforming signals to preserve quality
-        active_signal_list = self._get_active_signal_list(current_date)
+        # PRIORITY 1: SIGNAL GUARD REMOVED - Use all configured signals
+        active_signal_list = self.ACTIVE_SIGNALS
 
         # =====================================================================
-        # STEP 2: STOCK ROTATION - BI-WEEKLY ROTATION
+        # STEP 2: STOCK ROTATION - WEEKLY AWARD EVALUATION
         # =====================================================================
 
-        # Calculate bi-weekly period (2-week blocks)
+        # Calculate weekly period
         current_week = current_date.isocalendar()[1]  # ISO week number
         current_year = current_date.year
-        biweekly_period = (current_year, current_week // 2)  # Groups weeks into 2-week periods
+        weekly_period = (current_year, current_week)
 
         force_rotation = False
         if self.force_rotation_next_cycle:
@@ -247,7 +246,7 @@ class SwingTradeStrategy(Strategy):
             print(
                 f"\n🌀 FORCED ROTATION: No new entries for {self.idle_iterations_without_buys} iteration(s) → refreshing active pool early")
 
-        if self.last_rotation_week != biweekly_period or force_rotation:
+        if self.last_rotation_week != weekly_period or force_rotation:
             # Time to rotate - perform actual rotation (scheduled or forced)
             active_tickers = self.stock_rotator.rotate_stocks(
                 strategy=self,
@@ -256,8 +255,8 @@ class SwingTradeStrategy(Strategy):
                 all_stock_data=all_stock_data
             )
 
-            if self.last_rotation_week != biweekly_period:
-                self.last_rotation_week = biweekly_period
+            if self.last_rotation_week != weekly_period:
+                self.last_rotation_week = weekly_period
 
             self.force_rotation_next_cycle = False
             self.idle_iterations_without_buys = 0
@@ -273,7 +272,7 @@ class SwingTradeStrategy(Strategy):
                     current_date=current_date,
                     all_stock_data=all_stock_data
                 )
-                self.last_rotation_week = biweekly_period
+                self.last_rotation_week = weekly_period
                 self.idle_iterations_without_buys = 0
 
         # =====================================================================
@@ -353,14 +352,22 @@ class SwingTradeStrategy(Strategy):
                 conviction_label = '• STANDARD'
 
             # ===================================================================
-            # APPLY REGIME + TIER MULTIPLIERS
+            # APPLY REGIME + AWARD MULTIPLIERS
             # ===================================================================
 
-            tier_label = self.stock_rotator.get_ticker_tier(ticker)
-            tier_multiplier = self.stock_rotator.get_size_multiplier(ticker)
-            tier_display = f"{tier_label.upper()} x{tier_multiplier:.2f}"
+            award = self.stock_rotator.get_award(ticker)
+            award_multiplier = self.stock_rotator.get_award_multiplier(ticker)
+            award_emoji = {
+                'premium': '🥇',
+                'standard': '🥈',
+                'trial': '🔬',
+                'none': '⚪',
+                'frozen': '❄️'
+            }.get(award, '❓')
+            award_display = f"{award_emoji} {award.upper()}"
+
             regime_multiplier = ticker_regime.get('position_size_multiplier', 1.0)
-            final_position_pct = signal_position_size * regime_multiplier * tier_multiplier
+            final_position_pct = signal_position_size * regime_multiplier * award_multiplier
 
             # === CALCULATE POSITION SIZE ===
             buy_position = position_sizing.calculate_buy_size(
@@ -393,8 +400,8 @@ class SwingTradeStrategy(Strategy):
             order_sig['condition'] = adaptive_params['condition_label']
             order_sig['conviction'] = conviction_label
             order_sig['signal_count'] = signal_count
-            order_sig['tier'] = tier_label
-            order_sig['tier_multiplier'] = tier_multiplier
+            order_sig['award'] = award
+            order_sig['award_multiplier'] = award_multiplier
             buy_orders.append(order_sig)
 
             # ADD COMMITMENT to prevent over-purchasing
@@ -402,7 +409,7 @@ class SwingTradeStrategy(Strategy):
 
             # Display pending order with conviction
             print(
-                f" * PENDING BUY: {ticker} x{buy_position['quantity']} {conviction_label} [{tier_display}] "
+                f" * PENDING BUY: {ticker} x{buy_position['quantity']} {conviction_label} [{award_display}] "
                 f"({signal_count} signals) {adaptive_params['condition_label']} | {buy_signal['signal_type']} "
                 f"= ${buy_position['position_value']:,.2f}")
 
@@ -444,53 +451,6 @@ class SwingTradeStrategy(Strategy):
 
         # Update idle rotation tracker
         self._handle_idle_rotation_feedback(len(buy_orders), current_date)
-
-    def _get_active_signal_list(self, current_date):
-        """
-        Dynamically disable signals that are underperforming based on recent stats.
-        """
-        if not hasattr(self, 'profit_tracker'):
-            return self.ACTIVE_SIGNALS
-
-        underperformers = self.profit_tracker.get_underperforming_signals(
-            min_trades=self.SIGNAL_GUARD_MIN_TRADES,
-            win_rate_threshold=self.SIGNAL_GUARD_WIN_RATE,
-            lookback=self.SIGNAL_GUARD_LOOKBACK
-        )
-
-        relevant_underperformers = {
-            name: stats for name, stats in underperformers.items()
-            if name in self.ACTIVE_SIGNALS
-        }
-
-        # Pause newly underperforming signals
-        for signal_name, stats in relevant_underperformers.items():
-            if signal_name in self.signal_suspensions:
-                continue
-
-            self.signal_suspensions[signal_name] = {
-                'since': current_date,
-                'stats': stats
-            }
-            print(
-                f"\n⏸️  Signal paused: {signal_name} | win rate {stats['win_rate']:.1f}% "
-                f"over {stats['trade_count']} trades (lookback {self.SIGNAL_GUARD_LOOKBACK})"
-            )
-
-        # Resume signals once their stats recover
-        for signal_name in list(self.signal_suspensions.keys()):
-            if signal_name in relevant_underperformers:
-                continue
-
-            info = self.signal_suspensions.pop(signal_name)
-            latest_stats = self.profit_tracker.get_signal_stats(signal_name)
-            print(
-                f"\n▶️  Signal resumed: {signal_name} | latest win rate {latest_stats['win_rate']:.1f}% "
-                f"across {latest_stats['trade_count']} trades (paused since {info['since'].strftime('%Y-%m-%d')})"
-            )
-
-        active = [sig for sig in self.ACTIVE_SIGNALS if sig not in self.signal_suspensions]
-        return active if active else self.ACTIVE_SIGNALS
 
     def _handle_idle_rotation_feedback(self, buy_order_count, current_date):
         """

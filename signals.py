@@ -31,13 +31,14 @@ def buy_signals(data, buy_signal_list, spy_data=None):
 
 def swing_trade_1(data):
     """
-    PRIORITY 4: TIGHTENED for better win rate
+    PRIORITY 3A: LOOSENED from restrictive requirements
 
     Changes:
-    - RSI: 50-70 → 52-68 (slightly tighter)
-    - Volume: 1.3x → 1.4x (require stronger conviction)
+    - RSI: 52-68 → 48-70 (wider range)
+    - Volume: 1.4x → 1.2x (easier to meet)
+    - ADX: 20 → 18 (allow slightly weaker trends)
 
-    Target: Maintain high volume, improve from 60.5% to 70%+ win rate
+    Goal: Increase trade frequency while maintaining quality
     """
     ema20 = data.get('ema20', 0)
     ema50 = data.get('ema50', 0)
@@ -58,12 +59,12 @@ def swing_trade_1(data):
     if not (close > ema20 and close > sma200):
         return _no_signal('Price below key levels')
 
-    # TIGHTENED: RSI sweet spot (52-68 from 50-70)
-    if not (52 <= rsi <= 68):
-        return _no_signal(f'RSI {rsi:.0f} not in 52-68 range')
+    # LOOSENED: RSI sweet spot (48-70 from 52-68)
+    if not (48 <= rsi <= 70):
+        return _no_signal(f'RSI {rsi:.0f} not in 48-70 range')
 
-    # TIGHTENED: Volume (1.4x from 1.3x)
-    if volume_ratio < 1.4:
+    # LOOSENED: Volume (1.2x from 1.4x)
+    if volume_ratio < 1.2:
         return _no_signal(f'Volume {volume_ratio:.1f}x too low')
 
     # MACD bullish
@@ -74,8 +75,8 @@ def swing_trade_1(data):
     if not obv_trending_up:
         return _no_signal('OBV not confirming')
 
-    # ADX requirement (trend strength)
-    if adx < 20:
+    # LOOSENED: ADX requirement (18 from 20)
+    if adx < 18:
         return _no_signal(f'ADX {adx:.0f} too weak')
 
     return {
@@ -89,14 +90,15 @@ def swing_trade_1(data):
 
 def swing_trade_2(data):
     """
-    PRIORITY 1: TIGHTENED for 70%+ win rate
+    PRIORITY 3B: LOOSENED for higher volume (76.2% WR, only 21 trades)
 
-    Changes from 56.7% → Target 70%+:
-    - RSI: 35-72 → 40-68 (avoid extremes)
-    - Volume: 1.1x → 1.25x (require stronger volume)
-    - Pullback: 2-12% → 3-10% (tighter range)
-    - Added: ADX > 18 (trend strength requirement)
-    - Daily change: -5% → -4% (stricter stabilization)
+    Changes:
+    - Pullback: 3-10% → 2-12% (catch more pullbacks)
+    - Volume: 1.25x → 1.15x (easier to meet)
+    - RSI: 40-68 (unchanged - already good)
+    - ADX: 18 (unchanged)
+
+    Goal: Increase trade frequency on best-performing signal
     """
     close = data.get('close', 0)
     ema20 = data.get('ema20', 0)
@@ -118,18 +120,18 @@ def swing_trade_2(data):
     if ema20 <= ema50:
         return _no_signal('EMA20 not above EMA50')
 
-    # 3. TIGHTENED: Pullback depth (3-10% from 2-12%)
+    # 3. LOOSENED: Pullback depth (2-12% from 3-10%)
     ema20_distance = abs((close - ema20) / ema20 * 100) if ema20 > 0 else 100
-    if not (3.0 <= ema20_distance <= 10.0):
-        return _no_signal(f'Pullback {ema20_distance:.1f}% not in 3-10% range')
+    if not (2.0 <= ema20_distance <= 12.0):
+        return _no_signal(f'Pullback {ema20_distance:.1f}% not in 2-12% range')
 
-    # 4. TIGHTENED: RSI (40-68 from 35-72)
+    # 4. RSI (40-68 unchanged)
     if not (40 <= rsi <= 68):
         return _no_signal(f'RSI {rsi:.0f} outside 40-68')
 
-    # 5. TIGHTENED: Volume (1.25x from 1.1x)
-    if volume_ratio < 1.25:
-        return _no_signal(f'Volume {volume_ratio:.1f}x below 1.25x')
+    # 5. LOOSENED: Volume (1.15x from 1.25x)
+    if volume_ratio < 1.15:
+        return _no_signal(f'Volume {volume_ratio:.1f}x below 1.15x')
 
     # 6. MACD momentum
     if macd <= macd_signal:
@@ -139,11 +141,11 @@ def swing_trade_2(data):
     if not obv_trending_up:
         return _no_signal('OBV not confirming')
 
-    # 8. NEW: ADX requirement (trend strength)
+    # 8. ADX requirement (18 unchanged)
     if adx < 18:
         return _no_signal(f'ADX {adx:.0f} too weak')
 
-    # 9. TIGHTENED: Price stabilization (-4% from -5%)
+    # 9. Price stabilization (-4% unchanged)
     if daily_change_pct < -4.0:
         return _no_signal(f'Price dropping too fast ({daily_change_pct:.1f}%)')
 

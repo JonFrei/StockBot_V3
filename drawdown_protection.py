@@ -12,6 +12,8 @@ Protects portfolio from deep drawdowns by:
 
 PLUS: Market regime detection for adaptive position sizing
 
+PRIORITY 4: ADJUSTED - Bear market now allows 30% position sizing instead of blocking entirely
+
 Usage:
     protection = DrawdownProtection(
         threshold_pct=-10.0,
@@ -43,6 +45,7 @@ def detect_market_regime(spy_data, stock_data=None):
     Detect current market regime from SPY indicators
 
     INTEGRATED: Now includes 200 SMA / SPY regime filter (moved from signals.py)
+    PRIORITY 4: Bear market now allows 30% sizing instead of blocking (was 0%)
 
     Uses ADX (trend strength), ATR (volatility), price vs SMA50/200
     to categorize market conditions.
@@ -54,7 +57,7 @@ def detect_market_regime(spy_data, stock_data=None):
     Returns:
         dict: {
             'regime': str ('trending', 'choppy', 'volatile', 'bear_market'),
-            'position_size_multiplier': float (0-1.0),
+            'position_size_multiplier': float (0.3-1.0),
             'emergency_stop_multiplier': float (0.75-1.0),
             'max_positions': int (0-10),
             'description': str,
@@ -63,7 +66,7 @@ def detect_market_regime(spy_data, stock_data=None):
     """
     # =======================================================================
     # PRIORITY CHECK: BEAR MARKET PROTECTION (moved from signals.py)
-    # Block trading if stock < 200 SMA OR SPY < 200 SMA
+    # PRIORITY 4: Now allows 30% sizing instead of blocking
     # =======================================================================
 
     if stock_data:
@@ -80,15 +83,15 @@ def detect_market_regime(spy_data, stock_data=None):
     else:
         spy_below_200 = False
 
-    # BEAR MARKET: Block if stock >5% below 200 SMA OR SPY below 200 SMA
+    # BEAR MARKET: PRIORITY 4 - Allow 30% sizing instead of blocking
     if (stock_data and distance_from_200 < -5.0) or spy_below_200:
         return {
             'regime': 'bear_market',
-            'position_size_multiplier': 0.0,
+            'position_size_multiplier': 0.3,  # CHANGED FROM 0.0 TO 0.3
             'emergency_stop_multiplier': 1.0,
-            'max_positions': 0,
-            'description': f'🔴 BEAR MARKET: No new positions (Stock: {distance_from_200:.1f}% from 200 SMA, SPY below 200 SMA: {spy_below_200})',
-            'allow_trading': False
+            'max_positions': 5,  # CHANGED FROM 0 TO 5
+            'description': f'🔴 BEAR MARKET: Reduced sizing (Stock: {distance_from_200:.1f}% from 200 SMA, SPY below 200 SMA: {spy_below_200})',
+            'allow_trading': True  # CHANGED FROM False TO True
         }
 
     # =======================================================================
@@ -141,13 +144,14 @@ def detect_market_regime(spy_data, stock_data=None):
     # =======================================================================
     # REGIME 2: VOLATILE
     # High ATR OR weak trend with significant price swings
+    # PRIORITY 4: Reduced from 0.5 to 0.4 multiplier
     # =======================================================================
     elif (atr_pct > 3.0 or
           (adx < 20 and atr_pct > 2.0)):
 
         return {
             'regime': 'volatile',
-            'position_size_multiplier': 0.5,  # Half size
+            'position_size_multiplier': 0.4,  # CHANGED FROM 0.5 TO 0.4
             'emergency_stop_multiplier': 0.75,  # Tighter stops (-3% becomes -2.25%)
             'max_positions': 6,
             'description': f'🔴 VOLATILE: ATR {atr_pct:.1f}% of price, ADX {adx:.0f}',
