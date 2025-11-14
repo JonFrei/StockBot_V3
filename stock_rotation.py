@@ -235,6 +235,7 @@ class StockRotator:
     """
     Manages dynamic stock rotation in memory with winner lock protection
     INTEGRATED: Now includes TickerBlacklist functionality
+        NEW: Tiered sizing so top-ranked tickers receive higher allocation
 
     Attributes:
         max_active: Maximum number of stocks to trade simultaneously
@@ -257,6 +258,11 @@ class StockRotator:
         self.rotation_count = 0
         self.locked_winners = []
         self.initial_order = {}
+        self.ticker_tiers = {}
+        self.ticker_rankings = {}
+        self.tier_size_overrides = {}
+        self.premium_rank_boosts = [1.20, 1.17, 1.14, 1.11, 1.08, 1.05, 1.02]
+        self.reduced_tier_multiplier = 0.7
 
         # Win rate tracking
         self.profit_tracker = profit_tracker
@@ -485,32 +491,91 @@ class StockRotator:
 
     def _rank_tickers_for_competition(self, candidates):
         """
-        Rank tickers by the amount of trade history and win rate so that
-        only the strongest performers occupy the top slots.
+        Rank tickers by trade volume (count) and win rate so the most
+        battle-tested names control the boosted slots.
         """
         ranking = []
 
         for ticker in candidates:
             perf = self.ticker_performance.get(ticker, {})
             total_trades = perf.get('total_trades', 0)
-            win_rate = perf.get('win_rate', 0.0)
+            win_rate = perf.get('win_rate', 0.0) if total_trades > 0 else 0.0
             seed_idx = self.initial_order.get(ticker, len(self.initial_order))
             is_blacklisted = bool(self.blacklist and self.blacklist.is_blacklisted(ticker))
-
-            score = (total_trades * 10) + win_rate
 
             ranking.append({
                 'ticker': ticker,
                 'trades': total_trades,
                 'win_rate': win_rate,
                 'seed_idx': seed_idx,
-                'is_blacklisted': is_blacklisted,
-                'score': score,
-                'sort_key': (0 if is_blacklisted else 1, total_trades, win_rate, -seed_idx)
+                'is_blacklisted': is_blacklisted
             })
 
-        ranking.sort(key=lambda item: item['sort_key'], reverse=True)
+        ranking.sort(key=lambda item: (
+            item['is_blacklisted'],
+            -item['trades'],
+            -item['win_rate'],
+            item['seed_idx']
+        ))
         return ranking
+
+    def _assign_tiers(self, ranking, locked_tickers):
+        """
+        Convert ranking output into tier labels and sizing multipliers.
+        Locked winners always receive boosted sizing.
+        """
+        tiers = {}
+        size_map = {}
+
+        non_blacklisted = [entry for entry in ranking if not entry['is_blacklisted']]
+
+        prioritized = []
+        seen = set()
+
+        # Locked winners first (preserve their order)
+        for ticker in locked_tickers:
+            entry = next((item for item in non_blacklisted if item['ticker'] == ticker), None)
+            if entry and entry['ticker'] not in seen:
+                prioritized.append(entry)
+                seen.add(entry['ticker'])
+
+        # Remaining contenders keep their ranking order
+        for entry in non_blacklisted:
+            if entry['ticker'] not in seen:
+                prioritized.append(entry)
+                seen.add(entry['ticker'])
+
+        premium_cap = min(len(self.premium_rank_boosts), len(prioritized))
+
+        for idx in range(premium_cap):
+            entry = prioritized[idx]
+            tiers[entry['ticker']] = 'premium'
+            size_map[entry['ticker']] = self.premium_rank_boosts[idx]
+
+        for entry in prioritized[premium_cap:]:
+            ticker = entry['ticker']
+            if entry['trades'] == 0 or entry['win_rate'] > 0:
+                tiers[ticker] = 'base'
+                size_map[ticker] = 1.0
+            else:
+                tiers[ticker] = 'reduced'
+                size_map[ticker] = self.reduced_tier_multiplier
+
+        # Blacklisted tickers get explicitly tagged so we can skip them
+        for entry in ranking:
+            if entry['is_blacklisted']:
+                tiers[entry['ticker']] = 'blacklisted'
+                size_map[entry['ticker']] = 0.0
+
+        # Build ordered watchlist grouped by tier priority
+        ordered_watchlist = []
+        for tier_name in ['premium', 'base', 'reduced']:
+            for entry in prioritized:
+                ticker = entry['ticker']
+                if tiers.get(ticker) == tier_name and ticker not in ordered_watchlist:
+                    ordered_watchlist.append(ticker)
+
+        return tiers, size_map, ordered_watchlist
 
     def check_winner_locks(self, strategy, all_stock_data):
         """
@@ -585,6 +650,8 @@ class StockRotator:
         if not all_candidates:
             return []
 
+        self._seed_initial_order(all_candidates)
+
         print(f"\n{'=' * 80}")
         print(f"🔄 STOCK ROTATION - {current_date.strftime('%Y-%m-%d')}")
         print(f"{'=' * 80}")
@@ -594,6 +661,7 @@ class StockRotator:
 
         # Update performance data from profit tracker
         self.update_ticker_performance_from_tracker()
+        previous_tiers = dict(self.ticker_tiers)
 
         # STEP 1: Check for winner locks
         locked_winners_data = self.check_winner_locks(strategy, all_stock_data)
@@ -625,10 +693,9 @@ class StockRotator:
         except:
             pass
 
-        # Calculate available slots for rotation
-        available_slots = self.max_active - len(locked_tickers)
-        print(f"\nEvaluating {len(all_candidates)} candidates for {available_slots} rotation slots...")
-        print(f"(+ {len(locked_tickers)} locked winners)")
+        premium_slots = min(len(self.premium_rank_boosts), len(all_candidates))
+        print(f"\nEvaluating {len(all_candidates)} candidates | {premium_slots} boosted slots | "
+              f"{len(locked_tickers)} locked winners")
 
         # STEP 2: Score all candidates
         scores = {}
@@ -656,66 +723,80 @@ class StockRotator:
         # STEP 3: Sort by score and build new active list
         sorted_stocks = sorted(scores.items(), key=lambda x: x[1], reverse=True)
 
-        # Locked winners are guaranteed in the active list
-        new_active = locked_tickers[:]
+        # Build tier map + watchlist order
+        competition_rankings = self._rank_tickers_for_competition(all_candidates)
+        tiers, size_overrides, ordered_watchlist = self._assign_tiers(competition_rankings, locked_tickers)
+        self.ticker_tiers = tiers
+        self.tier_size_overrides = size_overrides
+        self.ticker_rankings = {
+            entry['ticker']: idx + 1
+            for idx, entry in enumerate(competition_rankings)
+            if not entry['is_blacklisted']
+        }
 
-        # Fill remaining slots with highest-scored non-locked stocks
-        for ticker, score in sorted_stocks:
-            if ticker not in new_active and len(new_active) < self.max_active:
-                if score > -50:  # Only add if score isn't terrible
-                    new_active.append(ticker)
+        new_active = ordered_watchlist[:]
+        for ticker in locked_tickers:
+            if ticker not in new_active and tiers.get(ticker) != 'blacklisted':
+                new_active.insert(0, ticker)
 
         # STEP 4: Display rankings
-        print(f"\n📊 ROTATION RANKINGS (with penalties & win rates):")
-        print(f"{'─' * 100}")
-        print(f"{'Rank':<6} {'Ticker':<8} {'Score':<10} {'WinRate':<12} {'Penalty':<12} {'Status':<15} {'Change'}")
-        print(f"{'─' * 100}")
+        print(f"\n📊 ROTATION RANKINGS (score + tier sizing):")
+        print(f"{'─' * 120}")
+        print(f"{'Rank':<6} {'Ticker':<8} {'Score':<8} {'Trades':<8} {'WinRate':<14} {'Tier':<14} {'SizeX':<8} {'Status'}")
+        print(f"{'─' * 120}")
 
-        for idx, (ticker, score) in enumerate(sorted_stocks[:20], 1):
-            # Get win rate
-            win_rate_str = "N/A"
-            if ticker in self.ticker_performance:
-                perf = self.ticker_performance[ticker]
-                if perf['total_trades'] >= 3:
-                    win_rate_str = f"{perf['win_rate']:.0f}% ({perf['wins']}W/{perf['losses']}L)"
+        for idx, (ticker, score) in enumerate(sorted_stocks[:30], 1):
+            perf = self.ticker_performance.get(ticker, {})
+            trades = perf.get('total_trades', 0)
+            if trades > 0:
+                win_rate_str = f"{perf.get('win_rate', 0):.0f}% ({perf.get('wins', 0)}W/{perf.get('losses', 0)}L)"
+            else:
+                win_rate_str = "N/A"
 
-            # Determine status
-            was_active = ticker in self.active_tickers
-            is_active = ticker in new_active
-            is_locked = ticker in locked_tickers
-
-            if is_locked:
+            tier_label = self.ticker_tiers.get(ticker, 'base').upper()
+            size_mult = self.tier_size_overrides.get(ticker, 1.0)
+            status = ""
+            if ticker in locked_tickers:
                 status = "🔒 LOCKED"
-                change = "🏆"
-            elif is_active and was_active:
+            elif tier_label == 'BLACKLISTED':
+                status = "⛔ BLACKLIST"
+            elif ticker in new_active:
                 status = "✅ ACTIVE"
-                change = "—"
-            elif is_active and not was_active:
-                status = "🆕 PROMOTED"
-                change = "↑"
-            elif not is_active and was_active:
-                status = "📤 ROTATED OUT"
-                change = "↓"
             else:
                 status = "⚪ BENCH"
-                change = "—"
 
-            print(f"{idx:<6} {ticker:<8} {score:>6.1f}     {win_rate_str:<12} {status:<15} {change}")
+            print(f"{idx:<6} {ticker:<8} {score:>6.1f}   {trades:<8} {win_rate_str:<14} "
+                  f"{tier_label:<14} x{size_mult:>4.2f}   {status}")
 
-        print(f"{'─' * 100}\n")
+        print(f"{'─' * 120}\n")
 
-        # STEP 5: Show changes summary
-        added = [t for t in new_active if t not in self.active_tickers and t not in locked_tickers]
-        removed = [t for t in self.active_tickers if t not in new_active and t not in locked_tickers]
+        current_premium = [t for t, tier in self.ticker_tiers.items() if tier == 'premium']
+        previous_premium = [t for t, tier in previous_tiers.items() if tier == 'premium']
+        promoted = [t for t in current_premium if t not in previous_premium]
+        demoted = [t for t in previous_premium if self.ticker_tiers.get(t) != 'premium']
 
         if locked_tickers:
             print(f"🔒 LOCKED WINNERS: {', '.join(locked_tickers)}")
-        if added:
-            print(f"🆕 PROMOTED: {', '.join(added)}")
-        if removed:
-            print(f"📤 ROTATED OUT: {', '.join(removed)}")
+        if promoted:
+            print(f"⬆️ BOOSTED INTO TOP 7: {', '.join(promoted)}")
+        if demoted:
+            print(f"⬇️ LOST BOOSTED SLOT: {', '.join(demoted)}")
 
-        print(f"\n✅ ACTIVE POOL ({len(new_active)}): {', '.join(new_active)}")
+        base_list = [t for t, tier in self.ticker_tiers.items() if tier == 'base']
+        reduced_list = [t for t, tier in self.ticker_tiers.items() if tier == 'reduced']
+
+        def preview_list(items):
+            if not items:
+                return "None"
+            preview = items[:10]
+            suffix = " ..." if len(items) > 10 else ""
+            return ", ".join(preview) + suffix
+
+        print(f"\n🏆 PREMIUM ({len(current_premium)}): {preview_list(current_premium)}")
+        print(f"⚖️  BASE ({len(base_list)}): {preview_list(base_list)}")
+        print(f"🔻 REDUCED ({len(reduced_list)}): {preview_list(reduced_list)}")
+
+        print(f"\n✅ TIERED WATCHLIST ({len(new_active)} tradable tickers): {', '.join(new_active)}")
         print(f"{'=' * 80}\n")
 
         # Update state
@@ -746,19 +827,52 @@ class StockRotator:
         # Not time to rotate - return current active list
         return self.active_tickers
 
+    def get_ticker_tier(self, ticker):
+        """
+        Return the current tier label for a ticker (premium/base/reduced).
+        """
+        return self.ticker_tiers.get(ticker, 'base')
+
+    def get_size_multiplier(self, ticker):
+        """
+        Return the tier-based sizing multiplier for the ticker.
+
+        Premium names get >1.0, reduced names <1.0, everyone else 1.0.
+        """
+        return self.tier_size_overrides.get(ticker, 1.0)
+
+    def get_tier_summary(self):
+        """
+        Provide a quick breakdown of tickers in each tier (excluding blacklist).
+        """
+        summary = {
+            'premium': [],
+            'base': [],
+            'reduced': []
+        }
+
+        for ticker, tier in self.ticker_tiers.items():
+            if tier in summary:
+                summary[tier].append(ticker)
+
+        return summary
+
     def get_rotation_summary(self):
         """
         Get summary statistics about rotation
 
         Returns: dict with stats
         """
+        tier_summary = self.get_tier_summary()
         return {
             'rotation_count': self.rotation_count,
             'last_rotation': self.last_rotation_date,
             'active_count': len(self.active_tickers),
             'active_tickers': self.active_tickers,
             'locked_winners': len(self.locked_winners),
-            'total_tracked': len(self.ticker_scores)
+            'total_tracked': len(self.ticker_scores),
+            'tier_summary': tier_summary,
+            'premium_slots': len(self.premium_rank_boosts)
         }
 
 
@@ -777,10 +891,25 @@ def print_rotation_report(rotator):
     print(f"{'=' * 80}")
     print(f"Total Rotations: {summary['rotation_count']}")
     print(f"Last Rotation: {summary['last_rotation']}")
-    print(f"Active Stocks: {summary['active_count']}/{rotator.max_active}")
+    print(f"Active Stocks (tradable): {summary['active_count']}")
+    print(f"Boosted Slots (Top Tier): {summary['premium_slots']}")
     print(f"Locked Winners: {summary['locked_winners']}")
-    print(f"Currently Trading: {', '.join(summary['active_tickers'])}")
+    print(f"Currently Trading (tier order): {', '.join(summary['active_tickers'])}")
     print(f"Total Stocks Tracked: {summary['total_tracked']}")
+
+    tier_summary = summary['tier_summary']
+
+    def describe_tier(label):
+        members = tier_summary.get(label, [])
+        if not members:
+            return "None"
+        preview = members[:12]
+        suffix = " ..." if len(members) > 12 else ""
+        return f"{', '.join(preview)}{suffix}"
+
+    print(f"\n🏆 Premium Tier ({len(tier_summary.get('premium', []))}): {describe_tier('premium')}")
+    print(f"⚖️  Base Tier ({len(tier_summary.get('base', []))}): {describe_tier('base')}")
+    print(f"🔻 Reduced Tier ({len(tier_summary.get('reduced', []))}): {describe_tier('reduced')}")
     print(f"{'=' * 80}\n")
 
     # INTEGRATED: Display blacklist stats
