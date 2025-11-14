@@ -353,10 +353,14 @@ class SwingTradeStrategy(Strategy):
                 conviction_label = '• STANDARD'
 
             # ===================================================================
-            # APPLY REGIME MULTIPLIER (from ticker-specific regime)
+            # APPLY REGIME + TIER MULTIPLIERS
             # ===================================================================
 
-            final_position_pct = signal_position_size * ticker_regime['position_size_multiplier']
+            tier_label = self.stock_rotator.get_ticker_tier(ticker)
+            tier_multiplier = self.stock_rotator.get_size_multiplier(ticker)
+            tier_display = f"{tier_label.upper()} x{tier_multiplier:.2f}"
+            regime_multiplier = ticker_regime.get('position_size_multiplier', 1.0)
+            final_position_pct = signal_position_size * regime_multiplier * tier_multiplier
 
             # === CALCULATE POSITION SIZE ===
             buy_position = position_sizing.calculate_buy_size(
@@ -389,6 +393,8 @@ class SwingTradeStrategy(Strategy):
             order_sig['condition'] = adaptive_params['condition_label']
             order_sig['conviction'] = conviction_label
             order_sig['signal_count'] = signal_count
+            order_sig['tier'] = tier_label
+            order_sig['tier_multiplier'] = tier_multiplier
             buy_orders.append(order_sig)
 
             # ADD COMMITMENT to prevent over-purchasing
@@ -396,7 +402,9 @@ class SwingTradeStrategy(Strategy):
 
             # Display pending order with conviction
             print(
-                f" * PENDING BUY: {ticker} x{buy_position['quantity']} {conviction_label} ({signal_count} signals) {adaptive_params['condition_label']} | {buy_signal['signal_type']} = ${buy_position['position_value']:,.2f}")
+                f" * PENDING BUY: {ticker} x{buy_position['quantity']} {conviction_label} [{tier_display}] "
+                f"({signal_count} signals) {adaptive_params['condition_label']} | {buy_signal['signal_type']} "
+                f"= ${buy_position['position_value']:,.2f}")
 
         # =====================================================================
         # CHECK REGIME-BASED POSITION LIMITS
