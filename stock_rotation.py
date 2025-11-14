@@ -1,18 +1,17 @@
 """
-In-Memory Stock Rotation System with Winner Lock Protection + Ticker Quality Scoring
+In-Memory Stock Rotation System with Integrated Blacklist
 
-ENHANCED WITH:
-- Priority 3: Penalty system for consistently losing tickers
-- Priority 5: Per-ticker historical win rate tracking for scoring
+INTEGRATED FEATURES:
+- Stock rotation with winner lock protection
+- Ticker quality scoring with historical win rate tracking
+- INTEGRATED: Proactive ticker blacklisting (was separate file)
 
 Dynamically selects best stocks from core_stocks list without modifying JSON config.
 Rotates based on momentum, signal quality, market conditions, AND historical performance.
 
-NEW: Winner Lock - Don't rotate out stocks that are up >15% with momentum OR trending
-
 Usage:
     rotator = StockRotator(max_active=12, profit_tracker=None)
-    active_tickers = rotator.get_active_tickers(strategy, all_candidates, current_date, all_stock_data)
+    active_tickers = rotator.rotate_stocks(strategy, all_candidates, current_date, all_stock_data)
 """
 
 from datetime import datetime, timedelta
@@ -21,10 +20,184 @@ import signals
 from position_monitoring import calculate_market_condition_score
 
 
+# =============================================================================
+# INTEGRATED TICKER BLACKLIST SYSTEM
+# =============================================================================
+
+class TickerBlacklist:
+    """
+    Proactive ticker quality monitoring system
+
+    Integrates with profit_tracker to analyze historical performance
+    and penalize/blacklist poor performers
+    """
+
+    def __init__(self, profit_tracker):
+        """
+        Initialize blacklist system
+
+        Args:
+            profit_tracker: Reference to ProfitTracker instance
+        """
+        self.profit_tracker = profit_tracker
+        self.consecutive_losses = {}  # {ticker: count}
+        self.temporary_blacklist = {}  # {ticker: expiry_date}
+        self.permanent_blacklist = set()
+
+    def update_from_trade(self, ticker, is_winner, current_date):
+        """
+        Update tracker when a trade closes
+
+        Args:
+            ticker: Stock symbol
+            is_winner: True if profitable, False if loss
+            current_date: Trade close date
+        """
+        if is_winner:
+            # Reset consecutive losses on win
+            self.consecutive_losses[ticker] = 0
+        else:
+            # Increment consecutive losses
+            current_count = self.consecutive_losses.get(ticker, 0)
+            self.consecutive_losses[ticker] = current_count + 1
+
+            # Check for blacklist triggers
+            if self.consecutive_losses[ticker] >= 3:
+                self._apply_temporary_blacklist(ticker, current_date)
+
+        # Check for permanent blacklist
+        self._check_permanent_blacklist(ticker)
+
+    def _apply_temporary_blacklist(self, ticker, current_date):
+        """
+        Apply 2-4 week temporary blacklist
+
+        Args:
+            ticker: Stock symbol
+            current_date: Current date
+        """
+        if ticker not in self.permanent_blacklist:
+            # 3 weeks blacklist
+            expiry = current_date + timedelta(days=21)
+            self.temporary_blacklist[ticker] = expiry
+            print(f"\n⛔ TEMPORARY BLACKLIST: {ticker} (3 consecutive losses) - Until {expiry.strftime('%Y-%m-%d')}")
+
+    def _check_permanent_blacklist(self, ticker):
+        """
+        Check if ticker should be permanently blacklisted
+
+        Criteria: Win rate < 30% over 5+ trades
+        """
+        trades = [t for t in self.profit_tracker.closed_trades if t['ticker'] == ticker]
+
+        if len(trades) < 5:
+            return  # Not enough data
+
+        wins = sum(1 for t in trades if t['pnl_dollars'] > 0)
+        win_rate = wins / len(trades) * 100
+
+        if win_rate < 30.0:
+            self.permanent_blacklist.add(ticker)
+            # Remove from temporary if present
+            if ticker in self.temporary_blacklist:
+                del self.temporary_blacklist[ticker]
+            print(f"\n🚫 PERMANENT BLACKLIST: {ticker} ({win_rate:.1f}% win rate over {len(trades)} trades)")
+
+    def clean_expired_blacklists(self, current_date):
+        """
+        Remove expired temporary blacklists
+
+        Args:
+            current_date: Current date
+        """
+        expired = [ticker for ticker, expiry in self.temporary_blacklist.items()
+                   if current_date >= expiry]
+
+        for ticker in expired:
+            del self.temporary_blacklist[ticker]
+            # Reset consecutive losses
+            self.consecutive_losses[ticker] = 0
+            print(f"\n✅ BLACKLIST EXPIRED: {ticker} - Back in rotation pool")
+
+    def get_ticker_penalty(self, ticker):
+        """
+        Calculate penalty score for stock rotation
+
+        Returns: float (-100 to 0)
+            -100: Blacklisted
+            -50: Very poor performance
+            -30: Poor performance
+            -20: 2 consecutive losses
+            -15: Win rate < 50%
+            0: No penalty
+        """
+        # Permanent blacklist = full penalty
+        if ticker in self.permanent_blacklist:
+            return -100.0
+
+        # Temporary blacklist = full penalty
+        if ticker in self.temporary_blacklist:
+            return -100.0
+
+        # Get historical performance
+        trades = [t for t in self.profit_tracker.closed_trades if t['ticker'] == ticker]
+
+        if len(trades) < 3:
+            return 0.0  # Not enough data for penalty
+
+        wins = sum(1 for t in trades if t['pnl_dollars'] > 0)
+        win_rate = wins / len(trades) * 100
+        consecutive = self.consecutive_losses.get(ticker, 0)
+
+        penalty = 0.0
+
+        # Win rate penalties
+        if win_rate < 30.0:
+            penalty -= 50.0
+        elif win_rate < 40.0:
+            penalty -= 30.0
+        elif win_rate < 50.0:
+            penalty -= 15.0
+
+        # Consecutive loss penalties
+        if consecutive >= 2:
+            penalty -= 20.0
+
+        return penalty
+
+    def is_blacklisted(self, ticker):
+        """
+        Check if ticker is currently blacklisted
+
+        Returns: bool
+        """
+        return ticker in self.permanent_blacklist or ticker in self.temporary_blacklist
+
+    def get_statistics(self):
+        """
+        Get blacklist statistics
+
+        Returns: dict with stats
+        """
+        return {
+            'permanent_blacklist': list(self.permanent_blacklist),
+            'temporary_blacklist': len(self.temporary_blacklist),
+            'temp_blacklist_tickers': list(self.temporary_blacklist.keys()),
+            'tickers_with_consecutive_losses': {
+                ticker: count for ticker, count in self.consecutive_losses.items()
+                if count > 0
+            }
+        }
+
+
+# =============================================================================
+# STOCK ROTATION SYSTEM
+# =============================================================================
+
 class StockRotator:
     """
     Manages dynamic stock rotation in memory with winner lock protection
-    ENHANCED: Now includes historical win rate tracking (Priority 5)
+    INTEGRATED: Now includes TickerBlacklist functionality
 
     Attributes:
         max_active: Maximum number of stocks to trade simultaneously
@@ -33,8 +206,9 @@ class StockRotator:
         last_rotation_date: Date of last rotation
         ticker_scores: Historical scores for each ticker
         locked_winners: Tickers locked due to strong performance
-        profit_tracker: Reference to profit tracker for win rate data (NEW)
-        ticker_performance: Historical performance tracking (NEW)
+        profit_tracker: Reference to profit tracker for win rate data
+        ticker_performance: Historical performance tracking
+        blacklist: Integrated TickerBlacklist instance
     """
 
     def __init__(self, max_active=12, rotation_frequency='weekly', profit_tracker=None):
@@ -46,9 +220,12 @@ class StockRotator:
         self.rotation_count = 0
         self.locked_winners = []
 
-        # PRIORITY 5: Win rate tracking
+        # Win rate tracking
         self.profit_tracker = profit_tracker
         self.ticker_performance = {}  # {ticker: {'wins': int, 'losses': int, 'win_rate': float}}
+
+        # INTEGRATED: Blacklist system
+        self.blacklist = TickerBlacklist(profit_tracker) if profit_tracker else None
 
     def should_rotate(self, current_date):
         """
@@ -72,7 +249,7 @@ class StockRotator:
 
     def update_ticker_performance_from_tracker(self):
         """
-        PRIORITY 5: Update ticker performance from profit tracker
+        Update ticker performance from profit tracker
 
         Extracts win/loss data from closed trades to inform rotation scoring
         """
@@ -111,7 +288,7 @@ class StockRotator:
 
     def get_historical_performance_score(self, ticker):
         """
-        PRIORITY 5: Calculate score bonus/penalty based on historical win rate
+        Calculate score bonus/penalty based on historical win rate
 
         Returns: float (-20 to +20 points)
             +20: Excellent (>80% win rate)
@@ -149,7 +326,7 @@ class StockRotator:
         """
         Calculate rotation score for a stock (0-100 scale)
 
-        ENHANCED: Now includes Priority 3 (penalties) and Priority 5 (historical win rate)
+        INTEGRATED: Now includes blacklist penalties
 
         Scoring Components:
         1. Trend Strength (30 points) - Distance above 200 SMA
@@ -157,8 +334,8 @@ class StockRotator:
         3. Volume Activity (20 points) - Recent volume
         4. Signal Quality (25 points) - Current buy signal strength
         5. BONUS: Recent performance (up to +10 or -10)
-        6. NEW: Ticker penalties (Priority 3): -30 to 0 points
-        7. NEW: Historical win rate (Priority 5): -20 to +20 points
+        6. Historical win rate: -20 to +20 points
+        7. INTEGRATED: Blacklist penalties: -100 to 0 points
 
         Args:
             ticker: Stock symbol
@@ -240,9 +417,14 @@ class StockRotator:
         except:
             pass
 
-        # PRIORITY 5: Apply historical win rate bonus/penalty
+        # 6. Historical win rate bonus/penalty
         historical_score = self.get_historical_performance_score(ticker)
         score += historical_score
+
+        # 7. INTEGRATED: Apply blacklist penalties
+        if self.blacklist:
+            blacklist_penalty = self.blacklist.get_ticker_penalty(ticker)
+            score += blacklist_penalty
 
         # Store in history
         if ticker not in self.ticker_scores:
@@ -256,11 +438,11 @@ class StockRotator:
 
     def check_winner_locks(self, strategy, all_stock_data):
         """
-        FIXED: Check existing positions for winners to lock
+        Check existing positions for winners to lock
 
-        LOOSENED Lock criteria (easier to lock):
-        - Position is up >15% (was 20%)
-        - Strong momentum (ADX > 20) OR trending (price > EMA20)
+        Lock criteria:
+        - Position is up >12%
+        - Strong momentum (ADX > 18) OR trending (price > EMA20)
 
         Returns: list of tickers to lock
         """
@@ -284,7 +466,7 @@ class StockRotator:
                 except:
                     continue
 
-                # LOOSENED: Check if it's a winner (was >20%, now >15%)
+                # Check if it's a winner
                 if pnl_pct < 12.0:
                     continue
 
@@ -294,7 +476,7 @@ class StockRotator:
                 close = data.get('close', 0)
                 ema20 = data.get('ema20', 0)
 
-                # LOOSENED: Lock if has momentum OR trending (was AND)
+                # Lock if has momentum OR trending
                 has_momentum = adx > 18
                 is_trending = close > ema20
 
@@ -313,9 +495,7 @@ class StockRotator:
     def rotate_stocks(self, strategy, all_candidates, current_date, all_stock_data):
         """
         Perform stock rotation with WINNER LOCK protection
-        ENHANCED: Now uses Priority 3 (penalties) and Priority 5 (win rate) in scoring
-
-        NEW: Don't rotate out winning positions that are still trending
+        INTEGRATED: Uses built-in blacklist system
 
         Args:
             strategy: Strategy instance (for position/price access)
@@ -336,7 +516,7 @@ class StockRotator:
         # Extract SPY data for regime filter
         spy_data = all_stock_data.get('SPY', {}).get('indicators', None) if 'SPY' in all_stock_data else None
 
-        # PRIORITY 5: Update performance data from profit tracker
+        # Update performance data from profit tracker
         self.update_ticker_performance_from_tracker()
 
         # STEP 1: Check for winner locks
@@ -374,7 +554,7 @@ class StockRotator:
         print(f"\nEvaluating {len(all_candidates)} candidates for {available_slots} rotation slots...")
         print(f"(+ {len(locked_tickers)} locked winners)")
 
-        # STEP 2: Score all candidates (NOW WITH PENALTIES AND WIN RATE)
+        # STEP 2: Score all candidates
         scores = {}
 
         for ticker in all_candidates:
@@ -383,13 +563,19 @@ class StockRotator:
                     scores[ticker] = -100.0
                     continue
 
-                # Calculate score (includes penalties, win rate, and SPY regime filter)
+                # Calculate score (includes blacklist penalties)
                 score = self.calculate_stock_score(ticker, all_stock_data[ticker], strategy, spy_data=spy_data)
                 scores[ticker] = score
 
             except Exception as e:
                 print(f"   ⚠️ Error scoring {ticker}: {e}")
                 scores[ticker] = -100.0
+
+        # INTEGRATED: Filter blacklisted tickers
+        if self.blacklist:
+            for ticker in list(scores.keys()):
+                if self.blacklist.is_blacklisted(ticker):
+                    scores[ticker] = -200.0  # Force to bottom
 
         # STEP 3: Sort by score and build new active list
         sorted_stocks = sorted(scores.items(), key=lambda x: x[1], reverse=True)
@@ -403,7 +589,7 @@ class StockRotator:
                 if score > -50:  # Only add if score isn't terrible
                     new_active.append(ticker)
 
-        # STEP 4: Display rankings WITH PENALTIES AND WIN RATES
+        # STEP 4: Display rankings
         print(f"\n📊 ROTATION RANKINGS (with penalties & win rates):")
         print(f"{'─' * 100}")
         print(f"{'Rank':<6} {'Ticker':<8} {'Score':<10} {'WinRate':<12} {'Penalty':<12} {'Status':<15} {'Change'}")
@@ -416,7 +602,6 @@ class StockRotator:
                 perf = self.ticker_performance[ticker]
                 if perf['total_trades'] >= 3:
                     win_rate_str = f"{perf['win_rate']:.0f}% ({perf['wins']}W/{perf['losses']}L)"
-
 
             # Determine status
             was_active = ticker in self.active_tickers
@@ -485,22 +670,6 @@ class StockRotator:
         # Not time to rotate - return current active list
         return self.active_tickers
 
-    def force_rotation(self, strategy, all_candidates, current_date, all_stock_data):
-        """
-        Force a rotation regardless of schedule
-
-        Useful for manual rotation or after major market events
-        """
-        return self.rotate_stocks(strategy, all_candidates, current_date, all_stock_data)
-
-    def get_ticker_history(self, ticker):
-        """
-        Get historical scores for a ticker
-
-        Returns: list of {date, score} dicts
-        """
-        return self.ticker_scores.get(ticker, [])
-
     def get_rotation_summary(self):
         """
         Get summary statistics about rotation
@@ -521,24 +690,9 @@ class StockRotator:
 # UTILITY FUNCTIONS
 # =============================================================================
 
-def create_default_rotator(max_active=12, frequency='weekly', profit_tracker=None):
-    """
-    Create a default rotator instance
-
-    Args:
-        max_active: Number of stocks to keep active
-        frequency: 'daily', 'weekly', or 'monthly'
-        profit_tracker: Reference to profit tracker for win rate data
-
-    Returns:
-        StockRotator instance
-    """
-    return StockRotator(max_active=max_active, rotation_frequency=frequency, profit_tracker=profit_tracker)
-
-
 def print_rotation_report(rotator):
     """
-    Print detailed rotation report
+    Print detailed rotation report including blacklist stats
     """
     summary = rotator.get_rotation_summary()
 
@@ -552,3 +706,25 @@ def print_rotation_report(rotator):
     print(f"Currently Trading: {', '.join(summary['active_tickers'])}")
     print(f"Total Stocks Tracked: {summary['total_tracked']}")
     print(f"{'=' * 80}\n")
+
+    # INTEGRATED: Display blacklist stats
+    if rotator.blacklist:
+        blacklist_stats = rotator.blacklist.get_statistics()
+        print(f"{'=' * 80}")
+        print(f"⛔ TICKER BLACKLIST SUMMARY")
+        print(f"{'=' * 80}")
+        if blacklist_stats['permanent_blacklist']:
+            print(f"Permanent Blacklist: {', '.join(blacklist_stats['permanent_blacklist'])}")
+        else:
+            print(f"Permanent Blacklist: None")
+
+        if blacklist_stats['temp_blacklist_tickers']:
+            print(f"Temporary Blacklist: {', '.join(blacklist_stats['temp_blacklist_tickers'])}")
+        else:
+            print(f"Temporary Blacklist: None")
+
+        if blacklist_stats['tickers_with_consecutive_losses']:
+            print(f"\nTickers with Consecutive Losses:")
+            for ticker, count in blacklist_stats['tickers_with_consecutive_losses'].items():
+                print(f"   {ticker}: {count} loss(es)")
+        print(f"{'=' * 80}\n")

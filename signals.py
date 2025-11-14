@@ -9,32 +9,9 @@ def buy_signals(data, buy_signal_list, spy_data=None):
     """
     Check multiple buy strategies and return first valid signal
     Returns dict or None
+
+    NOTE: 200 SMA / SPY regime check is now handled in market_regime.py
     """
-    close = data['close']
-    sma200 = data['sma200']
-
-    # Calculate distance from 200 SMA
-    distance_from_200 = ((close - sma200) / sma200 * 100) if sma200 > 0 else -100
-
-    # Only block if MORE than 5% below 200 SMA or SPY < 200 SMA
-    spy_close = None
-    spy_sma200 = None
-    if spy_data is not None:
-        spy_close = spy_data.get('close', 0)
-        spy_sma200 = spy_data.get('sma200', 0)
-
-        if spy_sma200 > 0:
-            spy_distance = ((spy_close - spy_sma200) / spy_sma200 * 100)
-
-    if distance_from_200 < -5.0 or spy_close < spy_sma200:
-        return {
-            'side': 'hold',
-            'msg': f'🔴 Bear Market Protection Active ({distance_from_200:.1f}% below 200 SMA)',
-            'limit_price': None,
-            'stop_loss': None,
-            'signal_type': 'regime_filter'
-        }
-
     for strategy_name in buy_signal_list:
         if strategy_name in BUY_STRATEGIES:
             strategy_func = BUY_STRATEGIES[strategy_name]
@@ -49,7 +26,7 @@ def buy_signals(data, buy_signal_list, spy_data=None):
 
 
 # ===================================================================================
-# BUY SIGNALS - IMPROVED VERSION
+# BUY SIGNALS - PRIORITY 1 IMPROVEMENTS
 # ===================================================================================
 
 def swing_trade_1(data):
@@ -181,7 +158,11 @@ def swing_trade_2(data):
 
 def consolidation_breakout(data):
     """
-    KEEPING ORIGINAL - Already 72% win rate (above target!)
+    ⭐ PRIORITY 1: LOOSENED - 75% win rate, increase trade frequency
+
+    Changes:
+    - Range: 12% → 15% (allow slightly wider consolidations)
+    - Volume: 1.2x → 1.15x (slightly lower volume requirement)
     """
     close = data.get('close', 0)
     ema20 = data.get('ema20', 0)
@@ -201,8 +182,8 @@ def consolidation_breakout(data):
 
     high_10d = max(recent_highs)
 
-    # ORIGINAL LOGIC (no changes)
-    if consolidation_range > 12.0:
+    # ⭐ LOOSENED: Range 15% (from 12%)
+    if consolidation_range > 15.0:
         return _no_signal(f'Range {consolidation_range:.1f}% too wide')
 
     if close <= sma200 or ema20 <= ema50:
@@ -211,7 +192,8 @@ def consolidation_breakout(data):
     if close < high_10d * 0.995:
         return _no_signal('Not breaking out')
 
-    if volume_ratio < 1.2:
+    # ⭐ LOOSENED: Volume 1.15x (from 1.2x)
+    if volume_ratio < 1.15:
         return _no_signal(f'Volume {volume_ratio:.1f}x too low')
 
     if not (45 <= rsi <= 72):
@@ -232,7 +214,10 @@ def consolidation_breakout(data):
 
 def golden_cross(data):
     """
-    KEEPING ORIGINAL - Already 81.8% win rate (excellent!)
+    ⭐ PRIORITY 1: LOOSENED - 81.8% win rate, get more trades
+
+    Changes:
+    - Distance range: 0-8% → 0-10% (catch slightly later crosses)
     """
     ema20 = data.get('ema20', 0)
     ema50 = data.get('ema50', 0)
@@ -245,8 +230,8 @@ def golden_cross(data):
     # Calculate distance of EMA50 from SMA200
     distance_pct = ((ema50 - sma200) / sma200 * 100) if sma200 > 0 else -100
 
-    # SIMPLIFIED: Just look for fresh cross (0-8% above)
-    if not (0 <= distance_pct <= 8.0):
+    # ⭐ LOOSENED: Fresh cross 0-10% (from 0-8%)
+    if not (0 <= distance_pct <= 10.0):
         return _no_signal('No fresh golden cross')
 
     # Basic confirmations only

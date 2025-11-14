@@ -1,5 +1,7 @@
 """
-Portfolio Drawdown Protection System
+Portfolio Drawdown Protection System + Market Regime Detection
+
+INTEGRATED: Market regime detection now part of this module
 
 Protects portfolio from deep drawdowns by:
 1. Tracking portfolio peak (highest value achieved)
@@ -7,6 +9,8 @@ Protects portfolio from deep drawdowns by:
 3. Triggering circuit breaker when threshold exceeded
 4. Closing all positions and going to cash
 5. Enforcing recovery period before allowing new entries
+
+PLUS: Market regime detection for adaptive position sizing
 
 Usage:
     protection = DrawdownProtection(
@@ -22,10 +26,200 @@ Usage:
     if protection.is_in_recovery(current_date):
         # Only process exits, no new entries
         return
+
+    # Market regime detection
+    regime_info = detect_market_regime(spy_data, stock_data)
 """
 
 from datetime import timedelta
 
+
+# =============================================================================
+# INTEGRATED: MARKET REGIME DETECTION
+# =============================================================================
+
+def detect_market_regime(spy_data, stock_data=None):
+    """
+    Detect current market regime from SPY indicators
+
+    INTEGRATED: Now includes 200 SMA / SPY regime filter (moved from signals.py)
+
+    Uses ADX (trend strength), ATR (volatility), price vs SMA50/200
+    to categorize market conditions.
+
+    Args:
+        spy_data: Dictionary with SPY indicators
+        stock_data: Optional dict with stock indicators (for 200 SMA check)
+
+    Returns:
+        dict: {
+            'regime': str ('trending', 'choppy', 'volatile', 'bear_market'),
+            'position_size_multiplier': float (0-1.0),
+            'emergency_stop_multiplier': float (0.75-1.0),
+            'max_positions': int (0-10),
+            'description': str,
+            'allow_trading': bool
+        }
+    """
+    # =======================================================================
+    # PRIORITY CHECK: BEAR MARKET PROTECTION (moved from signals.py)
+    # Block trading if stock < 200 SMA OR SPY < 200 SMA
+    # =======================================================================
+
+    if stock_data:
+        stock_close = stock_data.get('close', 0)
+        stock_sma200 = stock_data.get('sma200', 0)
+        distance_from_200 = ((stock_close - stock_sma200) / stock_sma200 * 100) if stock_sma200 > 0 else -100
+    else:
+        distance_from_200 = 0
+
+    if spy_data:
+        spy_close = spy_data.get('close', 0)
+        spy_sma200 = spy_data.get('sma200', 0)
+        spy_below_200 = spy_close < spy_sma200 if spy_sma200 > 0 else False
+    else:
+        spy_below_200 = False
+
+    # BEAR MARKET: Block if stock >5% below 200 SMA OR SPY below 200 SMA
+    if (stock_data and distance_from_200 < -5.0) or spy_below_200:
+        return {
+            'regime': 'bear_market',
+            'position_size_multiplier': 0.0,
+            'emergency_stop_multiplier': 1.0,
+            'max_positions': 0,
+            'description': f'🔴 BEAR MARKET: No new positions (Stock: {distance_from_200:.1f}% from 200 SMA, SPY below 200 SMA: {spy_below_200})',
+            'allow_trading': False
+        }
+
+    # =======================================================================
+    # NORMAL REGIME DETECTION
+    # =======================================================================
+
+    if not spy_data:
+        # Default to cautious if no SPY data
+        return {
+            'regime': 'unknown',
+            'position_size_multiplier': 0.7,
+            'emergency_stop_multiplier': 0.85,
+            'max_positions': 8,
+            'description': 'No SPY data - Cautious mode',
+            'allow_trading': True
+        }
+
+    # Extract indicators
+    adx = spy_data.get('adx', 0)
+    atr = spy_data.get('atr_14', 0)
+    sma50 = spy_data.get('sma50', 0)
+    close = spy_data.get('close', 0)
+    ema20 = spy_data.get('ema20', 0)
+    ema50 = spy_data.get('ema50', 0)
+
+    # Calculate relative volatility (ATR as % of price)
+    atr_pct = (atr / close * 100) if close > 0 else 0
+
+    # Calculate distance from SMA50
+    distance_from_sma50 = ((close - sma50) / sma50 * 100) if sma50 > 0 else 0
+
+    # =======================================================================
+    # REGIME 1: TRENDING
+    # Strong directional movement, price above moving averages
+    # =======================================================================
+    if (adx > 25 and
+            close > ema20 and
+            ema20 > ema50 and
+            distance_from_sma50 > 1.0):
+
+        return {
+            'regime': 'trending',
+            'position_size_multiplier': 1.0,
+            'emergency_stop_multiplier': 1.0,
+            'max_positions': 10,
+            'description': f'🟢 TRENDING: ADX {adx:.0f}, Price > EMAs, +{distance_from_sma50:.1f}% from SMA50',
+            'allow_trading': True
+        }
+
+    # =======================================================================
+    # REGIME 2: VOLATILE
+    # High ATR OR weak trend with significant price swings
+    # =======================================================================
+    elif (atr_pct > 3.0 or
+          (adx < 20 and atr_pct > 2.0)):
+
+        return {
+            'regime': 'volatile',
+            'position_size_multiplier': 0.5,  # Half size
+            'emergency_stop_multiplier': 0.75,  # Tighter stops (-3% becomes -2.25%)
+            'max_positions': 6,
+            'description': f'🔴 VOLATILE: ATR {atr_pct:.1f}% of price, ADX {adx:.0f}',
+            'allow_trading': True
+        }
+
+    # =======================================================================
+    # REGIME 3: CHOPPY (Default catch-all)
+    # Low ADX, sideways movement
+    # =======================================================================
+    else:
+        return {
+            'regime': 'choppy',
+            'position_size_multiplier': 0.7,
+            'emergency_stop_multiplier': 0.85,  # Slightly tighter
+            'max_positions': 8,
+            'description': f'🟡 CHOPPY: ADX {adx:.0f}, ATR {atr_pct:.1f}%, Sideways action',
+            'allow_trading': True
+        }
+
+
+def get_regime_adjusted_params(base_params, regime_info):
+    """
+    Adjust trading parameters based on market regime
+
+    Args:
+        base_params: Base parameters dict (e.g., from adaptive exit config)
+        regime_info: Regime info from detect_market_regime()
+
+    Returns:
+        dict: Adjusted parameters
+    """
+    adjusted = base_params.copy()
+
+    # Adjust position size
+    if 'position_size_pct' in adjusted:
+        adjusted['position_size_pct'] *= regime_info['position_size_multiplier']
+
+    # Adjust emergency stop
+    if 'emergency_stop_pct' in adjusted:
+        adjusted['emergency_stop_pct'] *= regime_info['emergency_stop_multiplier']
+
+    # Add regime info
+    adjusted['regime'] = regime_info['regime']
+    adjusted['regime_description'] = regime_info['description']
+    adjusted['max_positions_allowed'] = regime_info['max_positions']
+
+    return adjusted
+
+
+def format_regime_display(regime_info):
+    """
+    Format regime info for console display
+
+    Args:
+        regime_info: Regime dict from detect_market_regime()
+
+    Returns:
+        str: Formatted display string
+    """
+    return (f"\n{'=' * 80}\n"
+            f"{regime_info['description']}\n"
+            f"{'=' * 80}\n"
+            f"Position Size: {regime_info['position_size_multiplier'] * 100:.0f}% of normal\n"
+            f"Emergency Stops: {regime_info['emergency_stop_multiplier'] * 100:.0f}% of normal\n"
+            f"Max Positions: {regime_info['max_positions']}\n"
+            f"{'=' * 80}\n")
+
+
+# =============================================================================
+# DRAWDOWN PROTECTION SYSTEM
+# =============================================================================
 
 class DrawdownProtection:
     """
