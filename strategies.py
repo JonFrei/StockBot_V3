@@ -11,6 +11,8 @@ Integrated Features:
 
 from lumibot.strategies import Strategy
 from config import Config
+# from datetime import time
+# import pytz
 
 import stock_data
 import signals
@@ -20,10 +22,10 @@ import position_monitoring
 from ticker_cooldown import TickerCooldown
 from state_persistence import save_state_safe, load_state_safe  # Crash recovery
 
-
 # INTEGRATED IMPORTS (consolidated modules)
 from stock_rotation import StockRotator  # Has integrated blacklist
 import drawdown_protection  # Has integrated market regime
+import daily_reports  # Trading window and daily summary
 
 from lumibot.brokers import Alpaca
 
@@ -48,12 +50,6 @@ class SwingTradeStrategy(Strategy):
     # Cooldown configuration - PRIORITY 2A: REDUCED FROM 3 TO 1
     COOLDOWN_DAYS = 1  # Days between re-purchases of same ticker
 
-    # Base position sizing (modified by conviction + regime)
-    # BASE_POSITION_SIZE_PCT = 18.0  # Will be adjusted by multi-signal + regime
-
-    # PRIORITY 2B: INCREASED FROM 10 TO 15
-    # MAX_ACTIVE_STOCKS = 15
-
     # PRIORITY 1: SIGNAL GUARD REMOVED - No longer restricting signals
     IDLE_ROTATION_THRESHOLD = 3
 
@@ -67,6 +63,9 @@ class SwingTradeStrategy(Strategy):
             self.sleeptime = "10M"
 
         self.tickers = self.parameters.get("tickers", [])
+
+        # Track if we've traded today (for live mode)
+        self.last_trade_date = None
 
         # SIMPLIFIED: Tracker just logs completed trades
         self.profit_tracker = profit_tracking.ProfitTracker(self)
@@ -96,7 +95,8 @@ class SwingTradeStrategy(Strategy):
             recovery_days=5
         )
 
-        print(f"✅ Drawdown Protection: {self.drawdown_protection.threshold_pct:.1f}% threshold, {self.drawdown_protection.recovery_days}d recovery")
+        print(
+            f"✅ Drawdown Protection: {self.drawdown_protection.threshold_pct:.1f}% threshold, {self.drawdown_protection.recovery_days}d recovery")
         print(f"✅ Ticker Cooldown: {self.ticker_cooldown.cooldown_days} days between purchases")
         print(f"✅ Stock Rotation: Weekly award-based system (all stocks tradeable)")
         print(f"✅ Award System: Premium (1.3x), Standard (1.0x), Trial (1.0x), None (0.6x)")
@@ -105,6 +105,11 @@ class SwingTradeStrategy(Strategy):
         print(f"✅ Multi-Signal Conviction: Enabled (12-18% position sizing)")
         print(f"✅ Active Signals: {len(self.ACTIVE_SIGNALS)} signals configured")
         print(f"✅ Signal Guard: DISABLED - All signals active without restriction")
+
+        if not Config.BACKTESTING:
+            window_info = daily_reports.get_trading_window_info()
+            print(f"✅ LIVE TRADING WINDOW: {window_info['start_time_str']} - {window_info['end_time_str']} EST")
+            print(f"✅ Trading Frequency: Once per day")
 
     def before_starting_trading(self):
         """
@@ -125,14 +130,14 @@ class SwingTradeStrategy(Strategy):
 
                     if ticker in self.tickers:
                         # Check if we already have metadata (from loaded state)
-                        if ticker not in self.position_monitor.positions_metadata:
-                            # No metadata - track as pre_existing
-                            self.position_monitor.track_position(
-                                ticker,
-                                self.get_datetime(),
-                                'pre_existing',
-                                entry_score=0
-                            )
+                        # if ticker not in self.position_monitor.positions_metadata:
+                        # No metadata - track as pre_existing
+                        self.position_monitor.track_position(
+                            ticker,
+                            self.get_datetime(),
+                            'pre_existing',
+                            entry_score=0
+                        )
 
             print(f"[SYNC] Loaded {len(self.position_monitor.positions_metadata)} positions\n")
 
@@ -140,8 +145,22 @@ class SwingTradeStrategy(Strategy):
             print(f"[ERROR] Failed to sync positions: {e}")
 
     def on_trading_iteration(self):
-        if not broker.is_market_open() and Config.BACKTESTING == 'False':
-            return
+        if not Config.BACKTESTING:
+            # Check market status
+            try:
+                if not self.broker.is_market_open():
+                    print(f"[INFO] Market is closed - skipping iteration")
+                    return
+            except Exception as e:
+                print(f"[WARN] Could not check market status: {e}")
+
+            # Check if already traded today
+            if daily_reports.has_traded_today(self, self.last_trade_date):
+                return
+
+            # Check trading window
+            if not daily_reports.is_within_trading_window(self):
+                return
 
         current_date = self.get_datetime()
         current_date_str = current_date.strftime('%Y-%m-%d')
@@ -172,6 +191,11 @@ class SwingTradeStrategy(Strategy):
                 position_monitor=self.position_monitor,
                 ticker_cooldown=self.ticker_cooldown
             )
+
+            # Print summary before exiting
+            if not Config.BACKTESTING:
+                daily_reports.print_daily_summary(self, current_date)
+
             return  # Skip rest of iteration
 
         # Check if in recovery period
@@ -226,11 +250,20 @@ class SwingTradeStrategy(Strategy):
 
         if self.drawdown_protection.is_in_recovery(current_date):
             print(f"⚠️ In drawdown recovery - no new positions")
+            # Print summary before exiting
+            if not Config.BACKTESTING:
+                daily_reports.print_daily_summary(self, current_date)
+
             return
 
         if not regime_info.get('allow_trading', True):
             print(f"\n⚠️ {regime_info['description']}")
             print(f"No new positions will be opened.\n")
+
+            # Print summary before exiting
+            if not Config.BACKTESTING:
+                daily_reports.print_daily_summary(self, current_date)
+
             return
 
         # PRIORITY 1: SIGNAL GUARD REMOVED - Use all configured signals
@@ -419,7 +452,7 @@ class SwingTradeStrategy(Strategy):
                 f"= ${buy_position['position_value']:,.2f}")
 
         # =====================================================================
-        # CHECK REGIME-BASED POSITION LIMITS
+        # SUBMIT BUY ORDERS
         # =====================================================================
 
         # Submit buy orders
@@ -444,6 +477,19 @@ class SwingTradeStrategy(Strategy):
                     # Record buy in cooldown tracker
                     self.ticker_cooldown.record_buy(order['ticker'], current_date)
 
+        # =====================================================================
+        # MARK THAT WE'VE TRADED TODAY
+        # =====================================================================
+
+        if not Config.BACKTESTING:
+            self.last_trade_date = current_date.date()
+
+        # =====================================================================
+        # PRINT DAILY SUMMARY
+        # =====================================================================
+
+        if not Config.BACKTESTING:
+            daily_reports.print_daily_summary(self, current_date)
 
     def on_strategy_end(self):
         """Display final statistics"""
