@@ -19,6 +19,11 @@ from strategies import SwingTradeStrategy
 
 import logging
 
+import warnings
+import pandas as pd
+
+warnings.filterwarnings('ignore', category=pd.errors.SettingWithCopyWarning)
+
 # Set the logging level for the root logger to WARNING or ERROR
 # Alternatively, set the level for specific loggers if known (e.g., 'lumibot.brokers.alpaca')
 # You might need to experiment with the exact logger name
@@ -112,6 +117,7 @@ def main():
                 "send_emails": False
             },
             benchmark_asset='SPY',
+            config=ALPACA_CONFIG
         )
     else:
 
