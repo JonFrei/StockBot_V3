@@ -89,6 +89,8 @@ def main():
     if Config.BACKTESTING:
         # BACKTESTING
         from lumibot.backtesting import YahooDataBacktesting
+        from lumibot.backtesting import AlpacaBacktesting
+
         start = datetime(2024, 1, 8)
         end = datetime(2025, 11, 6)
 
@@ -102,7 +104,7 @@ def main():
         )'''
 
         SwingTradeStrategy.backtest(
-            datasource_class=YahooDataBacktesting,
+            datasource_class=AlpacaBacktesting,
             backtesting_start=start,
             backtesting_end=end,
             parameters={

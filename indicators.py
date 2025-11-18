@@ -595,19 +595,6 @@ def calculate_volatility_score(data, df):
         score += 1  # Medium
     # else: 0 points (low volatility)
 
-    # 3. Bollinger Width (0-3 points)
-    # Current market condition volatility
-    bb_width = get_volatility_from_bollinger(data)
-
-    # LOOSENED: Higher thresholds
-    if bb_width > 20:  # Was 15
-        score += 3  # Very wide bands
-    elif bb_width > 15:  # Was 10
-        score += 2  # Wide bands
-    elif bb_width > 10:  # Was 7
-        score += 1  # Medium bands
-    # else: 0 points (narrow bands)
-
     # Classification and Risk Management (UPDATED)
     if score >= 9:  # CHANGED from >= 8
         risk_class = 'extreme'
@@ -636,6 +623,5 @@ def calculate_volatility_score(data, df):
         'position_multiplier': position_multiplier,
         'allow_trading': allow_trading,
         'atr_pct': round(atr_pct, 2),
-        'hist_vol': hist_vol,
-        'bb_width': round(bb_width, 2)
+        'hist_vol': hist_vol
     }
