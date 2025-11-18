@@ -167,6 +167,8 @@ def _fetch_alpaca_batch_data(symbols, current_date, days=250):
     Fetch historical data for multiple symbols using Alpaca API
     Similar interface to Twelve Data batch fetching
 
+    ENHANCED: Split-adjusted data validation to prevent NFLX-style disasters
+
     Args:
         symbols: List of stock symbols or single symbol string
         days: Number of days of historical data (default: 500)
@@ -174,74 +176,6 @@ def _fetch_alpaca_batch_data(symbols, current_date, days=250):
     Returns:
         Dictionary: {symbol: processed_data_dict}
     """
-    '''
-    if isinstance(symbols, str):
-        symbols = [symbols]
-
-    if not symbols:
-        return {}
-
-    try:
-        client = StockHistoricalDataClient(
-            Config.ALPACA_API_KEY,
-            Config.ALPACA_API_SECRET
-        )
-
-        # Ensure days is integer
-        if not isinstance(days, int):
-            days = int(days)
-
-        start_date = current_date - timedelta(days=days)
-
-        request = StockBarsRequest(
-            symbol_or_symbols=symbols,
-            timeframe=TimeFrame.Day,
-            start=start_date,
-            end=current_date,
-            adjustment='split',
-
-        )
-
-        bars = client.get_stock_bars(request)
-        stock_data = {}
-
-        for symbol in symbols:
-            try:
-                if symbol not in bars.data:
-                    continue
-
-                symbol_bars = bars.data[symbol]
-                if not symbol_bars:
-                    continue
-
-                # Create DataFrame
-                df = pd.DataFrame([{
-                    'open': bar.open,
-                    'high': bar.high,
-                    'low': bar.low,
-                    'close': bar.close,
-                    'volume': bar.volume,
-                    'timestamp': bar.timestamp
-                } for bar in symbol_bars])
-
-                df.set_index('timestamp', inplace=True)
-                df.sort_index(inplace=True)
-
-                if len(df) < 200:
-                    continue
-
-                stock_data[symbol] = df
-
-            except Exception as e:
-                print(f"[ERROR] Processing {symbol}: {e}")
-                continue
-
-        return stock_data
-
-    except Exception as e:
-        print(f"[ERROR] Alpaca batch request failed: {e}")
-        return {}
-    '''
     if isinstance(symbols, str):
         symbols = [symbols]
 
@@ -303,6 +237,39 @@ def _fetch_alpaca_batch_data(symbols, current_date, days=250):
 
                 if len(df) < 200:
                     continue
+
+                # ========================================================================
+                # CRITICAL FIX: Split-Adjusted Data Validation (Prevents NFLX Disasters)
+                # ========================================================================
+
+                if len(df) >= 2:
+                    recent_prices = df['close'].tail(20)
+                    price_changes = recent_prices.pct_change()
+
+                    # Flag 1: Detect single-day drops > 50% (likely split not adjusted properly)
+                    extreme_drops = price_changes[price_changes < -0.5]
+                    if not extreme_drops.empty:
+                        max_drop = extreme_drops.min() * 100
+                        print(
+                            f"⚠️  [DATA ERROR] {symbol}: Detected {max_drop:.1f}% single-day drop - SPLIT ADJUSTMENT ERROR - SKIPPING")
+                        continue
+
+                    # Flag 2: Current price < 20% of recent high (severe data issue)
+                    recent_high = recent_prices.max()
+                    current_price = df['close'].iloc[-1]
+                    if current_price < (recent_high * 0.2):
+                        drop_pct = ((current_price - recent_high) / recent_high) * 100
+                        print(
+                            f"⚠️  [DATA ERROR] {symbol}: Current ${current_price:.2f} is {drop_pct:.1f}% below recent high ${recent_high:.2f} - DATA QUALITY ISSUE - SKIPPING")
+                        continue
+
+                    # Flag 3: Unrealistic price (< $0.50 or > $100,000 per share)
+                    if current_price < 0.50:
+                        print(f"⚠️  [DATA ERROR] {symbol}: Price ${current_price:.2f} unrealistically low - SKIPPING")
+                        continue
+                    if current_price > 100000:
+                        print(f"⚠️  [DATA ERROR] {symbol}: Price ${current_price:.2f} unrealistically high - SKIPPING")
+                        continue
 
                 stock_data[symbol] = df
 

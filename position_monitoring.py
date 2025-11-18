@@ -1,21 +1,23 @@
 """
-Adaptive Position Monitoring System - OPTION B: MODERATE RECYCLING
+Adaptive Position Monitoring System - TIGHTENED EXIT STRATEGY
 
-CHANGES FOR OPTION B:
-- Max holding period: 120 → 60 days
-- Profit Level 1: 15% → 12% (sell 40%)
-- Profit Level 2: 40% → 25% (sell 30%)
-- Profit Level 3: 75% → 40% (sell 20%)
+CHANGES FOR IMPROVED PERFORMANCE:
+- Profit Level 1: 12% → 10% (faster profit taking)
+- Profit Level 1 Sell: 40% → 45% (lock in more gains)
+- Profit Level 2: 25% → 22% (faster)
+- Profit Level 3: 40% → 35% (faster)
+- Trailing stops: Tightened 2-3% across all conditions
+- NEW: Peak stop protection after Level 1 (-5% instead of -7%)
 
-Goal: Faster capital recycling, ~180+ trades/year
+Goal: Take profits faster, protect gains better, reduce small losses
 
 Combines:
 - Market condition scoring (0-10 scale) for adaptive parameters
 - Simplified tracking (broker is source of truth for qty/price)
 - Daily caching of market conditions
 - 3-LEVEL profit taking with FASTER targets
-- 60-day max holding period (REDUCED from 120)
-- Wider trailing stops after Level 3 for huge gains
+- 60-day max holding period
+- Tighter trailing stops and peak protection
 - Entry score tracking for performance analysis
 """
 
@@ -23,50 +25,58 @@ from datetime import datetime
 
 
 # =============================================================================
-# ADAPTIVE CONFIGURATION - OPTION B ADJUSTMENTS
+# ADAPTIVE CONFIGURATION - TIGHTENED FOR BETTER PROTECTION
 # =============================================================================
 
 class AdaptiveExitConfig:
     """
     Dynamic exit parameters based on market conditions
 
-    OPTION B: Adjusted for faster capital recycling
+    TIGHTENED: Faster profit taking + tighter stops to protect gains
+
+    Changes:
+    - Level 1: 12% → 10% (take profits faster)
+    - Level 1 sell: 40% → 45% (sell more to lock in gains)
+    - Peak stop after Level 1: -7% → -5% (tighter to protect gains)
+    - Level 2: 25% → 22% (faster second profit take)
+    - Level 3: 40% → 35% (faster final profit take)
+    - Trailing stops: All tightened 2-3%
     """
 
     # === STRONG CONDITIONS (Score 7-10) ===
     STRONG_EMERGENCY_STOP = -7.0
-    STRONG_PROFIT_TARGET_1 = 12.0  # CHANGED from 15.0 (OPTION B)
-    STRONG_PROFIT_TARGET_1_SELL = 40.0  # CHANGED from 35.0 (OPTION B)
-    STRONG_PROFIT_TARGET_2 = 25.0  # CHANGED from 40.0 (OPTION B)
-    STRONG_PROFIT_TARGET_2_SELL = 30.0  # CHANGED from 25.0 (OPTION B)
-    STRONG_PROFIT_TARGET_3 = 40.0  # CHANGED from 75.0 (OPTION B)
-    STRONG_PROFIT_TARGET_3_SELL = 20.0  # CHANGED from 25.0 (OPTION B)
-    STRONG_TRAILING_STOP = 15.0
-    STRONG_TRAILING_STOP_FINAL = 25.0
+    STRONG_PROFIT_TARGET_1 = 10.0  # CHANGED from 12.0 (faster profit taking)
+    STRONG_PROFIT_TARGET_1_SELL = 45.0  # CHANGED from 40.0 (lock in more gains)
+    STRONG_PROFIT_TARGET_2 = 22.0  # CHANGED from 25.0 (faster)
+    STRONG_PROFIT_TARGET_2_SELL = 30.0  # UNCHANGED
+    STRONG_PROFIT_TARGET_3 = 35.0  # CHANGED from 40.0 (faster)
+    STRONG_PROFIT_TARGET_3_SELL = 20.0  # UNCHANGED
+    STRONG_TRAILING_STOP = 12.0  # CHANGED from 15.0 (tighter)
+    STRONG_TRAILING_STOP_FINAL = 20.0  # CHANGED from 25.0 (tighter)
     STRONG_POSITION_SIZE_PCT = 18.0
 
     # === NEUTRAL CONDITIONS (Score 4-6) ===
     NEUTRAL_EMERGENCY_STOP = -4.0
-    NEUTRAL_PROFIT_TARGET_1 = 10.0  # CHANGED from 12.0 (OPTION B)
-    NEUTRAL_PROFIT_TARGET_1_SELL = 40.0
-    NEUTRAL_PROFIT_TARGET_2 = 20.0  # CHANGED from 35.0 (OPTION B)
-    NEUTRAL_PROFIT_TARGET_2_SELL = 30.0  # CHANGED from 25.0 (OPTION B)
-    NEUTRAL_PROFIT_TARGET_3 = 35.0  # CHANGED from 65.0 (OPTION B)
-    NEUTRAL_PROFIT_TARGET_3_SELL = 20.0
-    NEUTRAL_TRAILING_STOP = 12.0
-    NEUTRAL_TRAILING_STOP_FINAL = 20.0
+    NEUTRAL_PROFIT_TARGET_1 = 8.0  # CHANGED from 10.0 (faster)
+    NEUTRAL_PROFIT_TARGET_1_SELL = 45.0  # CHANGED from 40.0 (lock in more)
+    NEUTRAL_PROFIT_TARGET_2 = 18.0  # CHANGED from 20.0 (faster)
+    NEUTRAL_PROFIT_TARGET_2_SELL = 30.0  # UNCHANGED
+    NEUTRAL_PROFIT_TARGET_3 = 30.0  # CHANGED from 35.0 (faster)
+    NEUTRAL_PROFIT_TARGET_3_SELL = 20.0  # UNCHANGED
+    NEUTRAL_TRAILING_STOP = 10.0  # CHANGED from 12.0 (tighter)
+    NEUTRAL_TRAILING_STOP_FINAL = 18.0  # CHANGED from 20.0 (tighter)
     NEUTRAL_POSITION_SIZE_PCT = 14.0
 
     # === WEAK CONDITIONS (Score 0-3) ===
     WEAK_EMERGENCY_STOP = -2.5
-    WEAK_PROFIT_TARGET_1 = 8.0  # CHANGED from 9.0 (OPTION B)
-    WEAK_PROFIT_TARGET_1_SELL = 40.0  # CHANGED from 45.0 (OPTION B)
-    WEAK_PROFIT_TARGET_2 = 18.0  # CHANGED from 25.0 (OPTION B)
-    WEAK_PROFIT_TARGET_2_SELL = 30.0
-    WEAK_PROFIT_TARGET_3 = 30.0  # CHANGED from 50.0 (OPTION B)
-    WEAK_PROFIT_TARGET_3_SELL = 20.0  # CHANGED from 15.0 (OPTION B)
-    WEAK_TRAILING_STOP = 8.0
-    WEAK_TRAILING_STOP_FINAL = 15.0
+    WEAK_PROFIT_TARGET_1 = 6.0  # CHANGED from 8.0 (faster - get out quick)
+    WEAK_PROFIT_TARGET_1_SELL = 50.0  # CHANGED from 40.0 (sell half immediately)
+    WEAK_PROFIT_TARGET_2 = 15.0  # CHANGED from 18.0 (faster)
+    WEAK_PROFIT_TARGET_2_SELL = 30.0  # UNCHANGED
+    WEAK_PROFIT_TARGET_3 = 25.0  # CHANGED from 30.0 (faster)
+    WEAK_PROFIT_TARGET_3_SELL = 20.0  # UNCHANGED
+    WEAK_TRAILING_STOP = 6.0  # CHANGED from 8.0 (much tighter)
+    WEAK_TRAILING_STOP_FINAL = 12.0  # CHANGED from 15.0 (tighter)
     WEAK_POSITION_SIZE_PCT = 10.0
 
 
@@ -385,7 +395,7 @@ def check_profit_taking_adaptive(pnl_pct, profit_target_1, profit_target_2, prof
                                  sell_pct_1, sell_pct_2, sell_pct_3,
                                  profit_level_1_locked, profit_level_2_locked, profit_level_3_locked):
     """
-    3-level adaptive profit taking with OPTION B targets
+    3-level adaptive profit taking with TIGHTENED targets
     """
 
     # Level 1
@@ -424,6 +434,44 @@ def check_profit_taking_adaptive(pnl_pct, profit_target_1, profit_target_2, prof
     return None
 
 
+def check_peak_stop_after_level_1(profit_level_1_locked, highest_price, current_price, pnl_pct):
+    """
+    NEW: Tighter peak stop after Level 1 locked to protect gains
+
+    After locking in profits at Level 1, we want to protect remaining position
+    from giving back too much. Exit if profit drops below +3% and down -5% from peak.
+
+    This replaces the old -7% peak stop with a tighter -5% stop AFTER we've locked
+    in Level 1 profits.
+
+    Args:
+        profit_level_1_locked: Whether Level 1 profit was taken
+        highest_price: Highest price achieved
+        current_price: Current price
+        pnl_pct: Current P&L percentage
+
+    Returns:
+        Exit signal dict or None
+    """
+    if not profit_level_1_locked:
+        return None
+
+    # Only trigger if we're still profitable but declining
+    if pnl_pct < 3.0:  # Below +3% after having reached +10%
+        drawdown_from_peak = ((current_price - highest_price) / highest_price * 100)
+
+        # Exit if down -5% from peak (was -7% in original peak_stop)
+        if drawdown_from_peak <= -5.0:
+            return {
+                'type': 'full_exit',
+                'reason': 'peak_stop',
+                'sell_pct': 100.0,
+                'message': f'📉 Peak Stop -5% (Post-Level 1): Down {drawdown_from_peak:.1f}% from ${highest_price:.2f}'
+            }
+
+    return None
+
+
 def check_trailing_stop(profit_level_2_locked, profit_level_3_locked, highest_price,
                         current_price, trail_pct, trail_pct_final, pnl_pct):
     """
@@ -454,7 +502,7 @@ def check_trailing_stop(profit_level_2_locked, profit_level_3_locked, highest_pr
 
 def check_max_holding_period(position_monitor, ticker, current_date, data, max_days=60):
     """
-    OPTION B: Exit positions held longer than 60 days (REDUCED from 120)
+    Exit positions held longer than 60 days
 
     Still allows momentum exception:
     - If stock still has strong trend (ADX > 25, above EMAs, MACD bullish), let it ride
@@ -498,15 +546,16 @@ def check_max_holding_period(position_monitor, ticker, current_date, data, max_d
 
 def check_positions_for_exits(strategy, current_date, all_stock_data, position_monitor):
     """
-    OPTION B: Adaptive exit checking with faster profit targets and 60-day max hold
+    TIGHTENED: Adaptive exit checking with faster profit targets and tighter stops
 
     Exit Priority Order:
-    1. Max holding period (60 days with momentum exception) - REDUCED
+    1. Max holding period (60 days with momentum exception)
     2. Emergency stops (adaptive based on conditions)
-    3. Profit taking level 1 (FASTER: 8-12%)
-    4. Profit taking level 2 (FASTER: 18-25%)
-    5. Profit taking level 3 (FASTER: 30-40%)
-    6. Trailing stops (adaptive distance, wider after Level 3)
+    3. Profit taking level 1 (FASTER: 6-10%)
+    4. Profit taking level 2 (FASTER: 15-22%)
+    5. Profit taking level 3 (FASTER: 25-35%)
+    6. Peak stop after Level 1 (NEW: -5% protection)
+    7. Trailing stops (adaptive distance, wider after Level 3)
     """
     exit_orders = []
 
@@ -560,7 +609,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
             ticker=ticker,
             current_date=current_date,
             data=data,
-            max_days=60  # OPTION B: REDUCED from 120
+            max_days=60
         )
 
         # 2. Emergency stop (adaptive)
@@ -572,7 +621,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
                 stop_pct=adaptive_params['emergency_stop_pct']
             )
 
-        # 3. Profit taking (3 LEVELS - OPTION B: faster targets)
+        # 3. Profit taking (3 LEVELS - TIGHTENED targets)
         if not exit_signal:
             exit_signal = check_profit_taking_adaptive(
                 pnl_pct=pnl_pct,
@@ -587,7 +636,16 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
                 profit_level_3_locked=metadata.get('profit_level_3_locked', False)
             )
 
-        # 4. Trailing stop (adaptive distance, WIDER after Level 3)
+        # 4. NEW: Peak stop protection after Level 1 (TIGHTER -5% stop)
+        if not exit_signal:
+            exit_signal = check_peak_stop_after_level_1(
+                profit_level_1_locked=metadata.get('profit_level_1_locked', False),
+                highest_price=metadata.get('highest_price', broker_entry_price),
+                current_price=current_price,
+                pnl_pct=pnl_pct
+            )
+
+        # 5. Trailing stop (adaptive distance, WIDER after Level 3)
         if not exit_signal:
             exit_signal = check_trailing_stop(
                 profit_level_2_locked=metadata.get('profit_level_2_locked', False),

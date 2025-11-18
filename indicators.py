@@ -500,17 +500,15 @@ def get_historical_volatility(df, period=20):
     """
     Calculate annualized historical volatility
 
-    Uses standard deviation of returns over specified period
-
     Args:
         df: DataFrame with 'close' column
         period: Lookback period (default 20)
 
     Returns:
-        float: Volatility as percentage (e.g., 25.5 = 25.5% annual volatility)
+        float: Annualized volatility percentage (e.g., 65.0 = 65% annual volatility)
     """
     if len(df) < period + 1:
-        return 0
+        return 0.0
 
     # Calculate daily returns
     returns = df['close'].pct_change().dropna()
@@ -519,45 +517,23 @@ def get_historical_volatility(df, period=20):
     recent_returns = returns.tail(period)
 
     if len(recent_returns) < 2:
-        return 0
+        return 0.0
 
     # Calculate standard deviation and annualize
+    # 252 = trading days per year
     daily_vol = recent_returns.std()
-    annual_vol = daily_vol * (252 ** 0.5) * 100  # 252 trading days
+    annual_vol = daily_vol * (252 ** 0.5) * 100
 
     return round(annual_vol, 2)
-
-
-def get_volatility_from_bollinger(data):
-    """
-    Use Bollinger Band width as volatility proxy
-
-    Wider bands = higher volatility
-
-    Args:
-        data: Dictionary with bollinger band indicators
-
-    Returns:
-        float: Band width as percentage of mean
-    """
-    upper = data.get('bollinger_upper', 0)
-    lower = data.get('bollinger_lower', 0)
-    mean = data.get('bollinger_mean', 1)
-
-    if mean <= 0:
-        return 0
-
-    # Band width as percentage of mean
-    band_width_pct = ((upper - lower) / mean * 100)
-
-    return round(band_width_pct, 2)
 
 
 def calculate_volatility_score(data, df):
     """
     Multi-factor volatility assessment (0-10 scale)
 
-    Prevents trading excessively volatile stocks like NFLX, TSLA
+    LOOSENED: Allow high-performing tech stocks (NVDA, META, AMD) to trade
+
+    Prevents trading excessively volatile stocks like extreme TSLA moves
     and reduces position sizes for medium-volatility stocks
 
     Components:
@@ -565,11 +541,12 @@ def calculate_volatility_score(data, df):
     - Historical Volatility (0-3 points): 20-day annualized vol
     - Bollinger Width (0-3 points): Band width indicator
 
-    Score Interpretation:
+    Score Interpretation (UPDATED):
     - 0-3: Low volatility (normal trading, 100% size)
-    - 4-5: Medium volatility (75% position size)
-    - 6-7: High volatility (50% position size)
-    - 8+: Extreme volatility (BLOCKED - too risky)
+    - 4-5: Medium volatility (100% position size - CHANGED from 75%)
+    - 6-7: High volatility (75% position size - CHANGED from 50%)
+    - 8: Very High volatility (50% position size - NEW tier)
+    - 9+: Extreme volatility (BLOCKED - too risky, was 8+)
 
     Args:
         data: Dictionary with calculated indicators
@@ -578,7 +555,7 @@ def calculate_volatility_score(data, df):
     Returns:
         dict: {
             'volatility_score': float (0-10),
-            'risk_class': str ('low', 'medium', 'high', 'extreme'),
+            'risk_class': str ('low', 'medium', 'high', 'very_high', 'extreme'),
             'position_multiplier': float (0.0-1.0),
             'allow_trading': bool,
             'atr_pct': float,
@@ -594,13 +571,14 @@ def calculate_volatility_score(data, df):
     close = data.get('close', 0)
     atr_pct = (atr / close * 100) if close > 0 else 0
 
-    if atr_pct > 5.0:
-        score += 4  # Extreme (NFLX territory)
-    elif atr_pct > 3.5:
+    # LOOSENED: Higher thresholds allow more stocks through
+    if atr_pct > 6.0:  # Was 5.0
+        score += 4  # Extreme
+    elif atr_pct > 4.5:  # Was 3.5
         score += 3  # High
-    elif atr_pct > 2.5:
+    elif atr_pct > 3.5:  # Was 2.5
         score += 2  # Medium-high
-    elif atr_pct > 1.5:
+    elif atr_pct > 2.0:  # Was 1.5
         score += 1  # Medium-low
     # else: 0 points (low volatility)
 
@@ -608,11 +586,12 @@ def calculate_volatility_score(data, df):
     # Longer-term volatility context
     hist_vol = get_historical_volatility(df, period=20)
 
-    if hist_vol > 60:
+    # LOOSENED: Higher thresholds
+    if hist_vol > 80:  # Was 60
         score += 3  # Extreme
-    elif hist_vol > 40:
+    elif hist_vol > 60:  # Was 40
         score += 2  # High
-    elif hist_vol > 30:
+    elif hist_vol > 45:  # Was 30
         score += 1  # Medium
     # else: 0 points (low volatility)
 
@@ -620,26 +599,31 @@ def calculate_volatility_score(data, df):
     # Current market condition volatility
     bb_width = get_volatility_from_bollinger(data)
 
-    if bb_width > 15:
+    # LOOSENED: Higher thresholds
+    if bb_width > 20:  # Was 15
         score += 3  # Very wide bands
-    elif bb_width > 10:
+    elif bb_width > 15:  # Was 10
         score += 2  # Wide bands
-    elif bb_width > 7:
+    elif bb_width > 10:  # Was 7
         score += 1  # Medium bands
     # else: 0 points (narrow bands)
 
-    # Classification and Risk Management
-    if score >= 8:
+    # Classification and Risk Management (UPDATED)
+    if score >= 9:  # CHANGED from >= 8
         risk_class = 'extreme'
         position_multiplier = 0.0  # Block entirely
         allow_trading = False
-    elif score >= 6:
-        risk_class = 'high'
+    elif score >= 8:  # NEW tier
+        risk_class = 'very_high'
         position_multiplier = 0.5  # Half position size
         allow_trading = True
-    elif score >= 4:
+    elif score >= 6:  # Was same threshold but now 0.75x instead of 0.5x
+        risk_class = 'high'
+        position_multiplier = 0.75  # CHANGED from 0.5 to 0.75
+        allow_trading = True
+    elif score >= 4:  # Was same but now 1.0x instead of 0.75x
         risk_class = 'medium'
-        position_multiplier = 0.75  # 75% position size
+        position_multiplier = 1.0  # CHANGED from 0.75 to 1.0 (full size)
         allow_trading = True
     else:
         risk_class = 'low'
