@@ -123,6 +123,18 @@ def process_data(symbols, current_date):
             temp_data['indicators']['ema50_10d_ago'] = temp_data['indicators']['ema50']
 
         # ==========================================
+        # VOLATILITY ASSESSMENT (PREVENTS MAJOR LOSSES)
+        # ==========================================
+
+        # Calculate multi-factor volatility score
+        # This prevents trading extremely volatile stocks (NFLX, TSLA)
+        # and reduces position sizes for medium-volatility stocks
+        temp_data['indicators']['volatility_metrics'] = indicators.calculate_volatility_score(
+            temp_data['indicators'],
+            df
+        )
+
+        # ==========================================
         # CURRENT PRICE DATA (KEPT AS-IS)
         # ==========================================
 

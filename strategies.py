@@ -332,6 +332,20 @@ class SwingTradeStrategy(Strategy):
             data = all_stock_data[ticker]['indicators']
 
             # ===================================================================
+            # VOLATILITY FILTER - PREVENTS MAJOR LOSSES ON HIGH-VOLATILITY STOCKS
+            # ===================================================================
+
+            vol_metrics = data.get('volatility_metrics', {})
+
+            # Skip if too volatile (blocks NFLX, extreme TSLA moves, etc.)
+            if not vol_metrics.get('allow_trading', True):
+                print(f"   ⚠️ {ticker} BLOCKED: {vol_metrics['risk_class'].upper()} volatility "
+                      f"(Score: {vol_metrics['volatility_score']}/10, "
+                      f"ATR: {vol_metrics['atr_pct']:.1f}%, "
+                      f"Hist Vol: {vol_metrics['hist_vol']:.0f}%)")
+                continue
+
+            # ===================================================================
             # PRIORITY 3: CHECK REGIME FOR THIS SPECIFIC TICKER
             # (includes 200 SMA check - moved from signals.py)
             # ===================================================================
@@ -405,7 +419,8 @@ class SwingTradeStrategy(Strategy):
             award_display = f"{award_emoji} {award.upper()}"
 
             regime_multiplier = ticker_regime.get('position_size_multiplier', 1.0)
-            final_position_pct = signal_position_size * regime_multiplier * award_multiplier
+            volatility_multiplier = vol_metrics.get('position_multiplier', 1.0)
+            final_position_pct = signal_position_size * regime_multiplier * award_multiplier * volatility_multiplier
 
             # === CALCULATE POSITION SIZE ===
             buy_position = position_sizing.calculate_buy_size(
@@ -440,16 +455,20 @@ class SwingTradeStrategy(Strategy):
             order_sig['signal_count'] = signal_count
             order_sig['award'] = award
             order_sig['award_multiplier'] = award_multiplier
+            order_sig['volatility_class'] = vol_metrics['risk_class']
+            order_sig['volatility_multiplier'] = volatility_multiplier
             buy_orders.append(order_sig)
 
             # ADD COMMITMENT to prevent over-purchasing
             pending_cash_commitment += buy_position['position_value']
 
             # Display pending order with conviction
+
+            vol_display=f"{vol_metrics['risk_class'].upper()} (ATR: {vol_metrics['atr_pct']:.1f}%)"
             print(
                 f" * PENDING BUY: {ticker} x{buy_position['quantity']} {conviction_label} [{award_display}] "
                 f"({signal_count} signals) {adaptive_params['condition_label']} | {buy_signal['signal_type']} "
-                f"= ${buy_position['position_value']:,.2f}")
+                f"| Vol: {vol_display} = ${buy_position['position_value']:,.2f}")
 
         # =====================================================================
         # SUBMIT BUY ORDERS

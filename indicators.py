@@ -490,3 +490,168 @@ def get_volume_surge_score(df, period=20):
         score += 1
 
     return round(score, 1)
+
+
+# ============================================================================
+# VOLATILITY ASSESSMENT
+# ============================================================================
+
+def get_historical_volatility(df, period=20):
+    """
+    Calculate annualized historical volatility
+
+    Uses standard deviation of returns over specified period
+
+    Args:
+        df: DataFrame with 'close' column
+        period: Lookback period (default 20)
+
+    Returns:
+        float: Volatility as percentage (e.g., 25.5 = 25.5% annual volatility)
+    """
+    if len(df) < period + 1:
+        return 0
+
+    # Calculate daily returns
+    returns = df['close'].pct_change().dropna()
+
+    # Get last N periods
+    recent_returns = returns.tail(period)
+
+    if len(recent_returns) < 2:
+        return 0
+
+    # Calculate standard deviation and annualize
+    daily_vol = recent_returns.std()
+    annual_vol = daily_vol * (252 ** 0.5) * 100  # 252 trading days
+
+    return round(annual_vol, 2)
+
+
+def get_volatility_from_bollinger(data):
+    """
+    Use Bollinger Band width as volatility proxy
+
+    Wider bands = higher volatility
+
+    Args:
+        data: Dictionary with bollinger band indicators
+
+    Returns:
+        float: Band width as percentage of mean
+    """
+    upper = data.get('bollinger_upper', 0)
+    lower = data.get('bollinger_lower', 0)
+    mean = data.get('bollinger_mean', 1)
+
+    if mean <= 0:
+        return 0
+
+    # Band width as percentage of mean
+    band_width_pct = ((upper - lower) / mean * 100)
+
+    return round(band_width_pct, 2)
+
+
+def calculate_volatility_score(data, df):
+    """
+    Multi-factor volatility assessment (0-10 scale)
+
+    Prevents trading excessively volatile stocks like NFLX, TSLA
+    and reduces position sizes for medium-volatility stocks
+
+    Components:
+    - ATR% (0-4 points): Daily volatility measure
+    - Historical Volatility (0-3 points): 20-day annualized vol
+    - Bollinger Width (0-3 points): Band width indicator
+
+    Score Interpretation:
+    - 0-3: Low volatility (normal trading, 100% size)
+    - 4-5: Medium volatility (75% position size)
+    - 6-7: High volatility (50% position size)
+    - 8+: Extreme volatility (BLOCKED - too risky)
+
+    Args:
+        data: Dictionary with calculated indicators
+        df: DataFrame with price history
+
+    Returns:
+        dict: {
+            'volatility_score': float (0-10),
+            'risk_class': str ('low', 'medium', 'high', 'extreme'),
+            'position_multiplier': float (0.0-1.0),
+            'allow_trading': bool,
+            'atr_pct': float,
+            'hist_vol': float,
+            'bb_width': float
+        }
+    """
+    score = 0
+
+    # 1. ATR Percentage (0-4 points)
+    # Most reliable real-time volatility measure
+    atr = data.get('atr_14', 0)
+    close = data.get('close', 0)
+    atr_pct = (atr / close * 100) if close > 0 else 0
+
+    if atr_pct > 5.0:
+        score += 4  # Extreme (NFLX territory)
+    elif atr_pct > 3.5:
+        score += 3  # High
+    elif atr_pct > 2.5:
+        score += 2  # Medium-high
+    elif atr_pct > 1.5:
+        score += 1  # Medium-low
+    # else: 0 points (low volatility)
+
+    # 2. Historical Volatility (0-3 points)
+    # Longer-term volatility context
+    hist_vol = get_historical_volatility(df, period=20)
+
+    if hist_vol > 60:
+        score += 3  # Extreme
+    elif hist_vol > 40:
+        score += 2  # High
+    elif hist_vol > 30:
+        score += 1  # Medium
+    # else: 0 points (low volatility)
+
+    # 3. Bollinger Width (0-3 points)
+    # Current market condition volatility
+    bb_width = get_volatility_from_bollinger(data)
+
+    if bb_width > 15:
+        score += 3  # Very wide bands
+    elif bb_width > 10:
+        score += 2  # Wide bands
+    elif bb_width > 7:
+        score += 1  # Medium bands
+    # else: 0 points (narrow bands)
+
+    # Classification and Risk Management
+    if score >= 8:
+        risk_class = 'extreme'
+        position_multiplier = 0.0  # Block entirely
+        allow_trading = False
+    elif score >= 6:
+        risk_class = 'high'
+        position_multiplier = 0.5  # Half position size
+        allow_trading = True
+    elif score >= 4:
+        risk_class = 'medium'
+        position_multiplier = 0.75  # 75% position size
+        allow_trading = True
+    else:
+        risk_class = 'low'
+        position_multiplier = 1.0  # Full position size
+        allow_trading = True
+
+    return {
+        'volatility_score': round(score, 1),
+        'risk_class': risk_class,
+        'position_multiplier': position_multiplier,
+        'allow_trading': allow_trading,
+        'atr_pct': round(atr_pct, 2),
+        'hist_vol': hist_vol,
+        'bb_width': round(bb_width, 2)
+    }
