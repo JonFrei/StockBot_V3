@@ -521,7 +521,8 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
 
         # === GET DATA FROM BROKER (Source of Truth) ===
         broker_quantity = int(position.quantity)
-        broker_entry_price = float(position.avg_fill_price)
+        broker_entry_price = float(getattr(position, 'avg_entry_price', None) or
+                                   getattr(position, 'avg_fill_price', 0))
 
         if ticker not in all_stock_data:
             continue

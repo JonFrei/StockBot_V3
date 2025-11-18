@@ -347,7 +347,8 @@ class ProfitTracker:
             for position in positions:
                 ticker = position.symbol
                 quantity = int(position.quantity)
-                entry_price = float(position.avg_fill_price)
+                entry_price = float(getattr(position, 'avg_entry_price', None) or
+                                    getattr(position, 'avg_fill_price', 0))
 
                 try:
                     current_price = self.strategy.get_last_price(ticker)

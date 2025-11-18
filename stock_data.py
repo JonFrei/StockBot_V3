@@ -162,7 +162,7 @@ def _fetch_alpaca_batch_data(symbols, current_date, days=250):
     Returns:
         Dictionary: {symbol: processed_data_dict}
     """
-
+    '''
     if isinstance(symbols, str):
         symbols = [symbols]
 
@@ -188,6 +188,80 @@ def _fetch_alpaca_batch_data(symbols, current_date, days=250):
             end=current_date,
             adjustment='split',
 
+        )
+
+        bars = client.get_stock_bars(request)
+        stock_data = {}
+
+        for symbol in symbols:
+            try:
+                if symbol not in bars.data:
+                    continue
+
+                symbol_bars = bars.data[symbol]
+                if not symbol_bars:
+                    continue
+
+                # Create DataFrame
+                df = pd.DataFrame([{
+                    'open': bar.open,
+                    'high': bar.high,
+                    'low': bar.low,
+                    'close': bar.close,
+                    'volume': bar.volume,
+                    'timestamp': bar.timestamp
+                } for bar in symbol_bars])
+
+                df.set_index('timestamp', inplace=True)
+                df.sort_index(inplace=True)
+
+                if len(df) < 200:
+                    continue
+
+                stock_data[symbol] = df
+
+            except Exception as e:
+                print(f"[ERROR] Processing {symbol}: {e}")
+                continue
+
+        return stock_data
+
+    except Exception as e:
+        print(f"[ERROR] Alpaca batch request failed: {e}")
+        return {}
+    '''
+    if isinstance(symbols, str):
+        symbols = [symbols]
+
+    if not symbols:
+        return {}
+
+    try:
+        client = StockHistoricalDataClient(
+            Config.ALPACA_API_KEY,
+            Config.ALPACA_API_SECRET
+        )
+
+        # Ensure days is integer
+        if not isinstance(days, int):
+            days = int(days)
+
+        start_date = current_date - timedelta(days=days)
+
+        # Simple if/then: Choose feed based on trading mode
+        if Config.BACKTESTING:
+            feed_type = 'sip'  # Better data for backtesting
+        else:
+            feed_type = 'iex'  # Free feed for live trading (no SIP subscription)
+
+        # Build request (handles all 27 tickers in one call)
+        request = StockBarsRequest(
+            symbol_or_symbols=symbols,
+            timeframe=TimeFrame.Day,
+            start=start_date,
+            end=current_date,
+            adjustment='split',
+            feed=feed_type
         )
 
         bars = client.get_stock_bars(request)
