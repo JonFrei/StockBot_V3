@@ -11,8 +11,6 @@ Integrated Features:
 
 from lumibot.strategies import Strategy
 from config import Config
-# from datetime import time
-# import pytz
 
 import stock_data
 import signals
@@ -25,7 +23,7 @@ from state_persistence import save_state_safe, load_state_safe  # Crash recovery
 # INTEGRATED IMPORTS (consolidated modules)
 from stock_rotation import StockRotator  # Has integrated blacklist
 import drawdown_protection  # Has integrated market regime
-import daily_reports  # Trading window and daily summary
+import broker_data  # Trading window and market hours
 
 from lumibot.brokers import Alpaca
 
@@ -107,7 +105,7 @@ class SwingTradeStrategy(Strategy):
         print(f"✅ Signal Guard: DISABLED - All signals active without restriction")
 
         if not Config.BACKTESTING:
-            window_info = daily_reports.get_trading_window_info()
+            window_info = broker_data.get_trading_window_info()
             print(f"✅ LIVE TRADING WINDOW: {window_info['start_time_str']} - {window_info['end_time_str']} EST")
             print(f"✅ Trading Frequency: Once per day")
 
@@ -155,11 +153,11 @@ class SwingTradeStrategy(Strategy):
                 print(f"[WARN] Could not check market status: {e}")
 
             # Check if already traded today
-            if daily_reports.has_traded_today(self, self.last_trade_date):
+            if broker_data.has_traded_today(self, self.last_trade_date):
                 return
 
             # Check trading window
-            if not daily_reports.is_within_trading_window(self):
+            if not broker_data.is_within_trading_window(self):
                 return
 
         current_date = self.get_datetime()
@@ -194,7 +192,7 @@ class SwingTradeStrategy(Strategy):
 
             # Print summary before exiting
             if not Config.BACKTESTING:
-                daily_reports.print_daily_summary(self, current_date)
+                profit_tracking.print_daily_summary(self, current_date)
 
             return  # Skip rest of iteration
 
@@ -252,7 +250,7 @@ class SwingTradeStrategy(Strategy):
             print(f"⚠️ In drawdown recovery - no new positions")
             # Print summary before exiting
             if not Config.BACKTESTING:
-                daily_reports.print_daily_summary(self, current_date)
+                profit_tracking.print_daily_summary(self, current_date)
 
             return
 
@@ -262,7 +260,7 @@ class SwingTradeStrategy(Strategy):
 
             # Print summary before exiting
             if not Config.BACKTESTING:
-                daily_reports.print_daily_summary(self, current_date)
+                profit_tracking.print_daily_summary(self, current_date)
 
             return
 
@@ -508,7 +506,7 @@ class SwingTradeStrategy(Strategy):
         # =====================================================================
 
         if not Config.BACKTESTING:
-            daily_reports.print_daily_summary(self, current_date)
+            profit_tracking.print_daily_summary(self, current_date)
 
     def on_strategy_end(self):
         """Display final statistics"""
