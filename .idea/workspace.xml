@@ -5,10 +5,21 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="d6df019d-759f-4aef-8455-f63cac562958" name="Changes" comment="com">
+      <change afterPath="$PROJECT_DIR$/account_email_notifications.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/broker_data.py" beforeDir="false" afterPath="$PROJECT_DIR$/broker_data.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/profit_tracking.py" beforeDir="false" afterPath="$PROJECT_DIR$/profit_tracking.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/strategies.py" beforeDir="false" afterPath="$PROJECT_DIR$/strategies.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/broker_data.py" beforeDir="false" afterPath="$PROJECT_DIR$/account_broker_data.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/daily_reports.py" beforeDir="false" afterPath="$PROJECT_DIR$/account_daily_reports.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/drawdown_protection.py" beforeDir="false" afterPath="$PROJECT_DIR$/account_drawdown_protection.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/indicators.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_indicators.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/position_monitoring.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_position_monitoring.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/position_sizing.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_position_sizing.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/profit_tracking.py" beforeDir="false" afterPath="$PROJECT_DIR$/account_profit_tracking.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/signals.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_signals.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/state_persistence.py" beforeDir="false" afterPath="$PROJECT_DIR$/server_state_persistence.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_rotation.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_rotation.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/strategies.py" beforeDir="false" afterPath="$PROJECT_DIR$/account_strategies.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ticker_cooldown.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_cooldown.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -114,7 +125,7 @@
       <option name="INPUT_FILE" value="" />
       <method v="2" />
     </configuration>
-    <configuration name="signals" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+    <configuration name="stock_signals" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
       <module name="StockBot_V3" />
       <option name="ENV_FILES" value="" />
       <option name="INTERPRETER_OPTIONS" value="" />
@@ -127,7 +138,7 @@
       <option name="IS_MODULE_SDK" value="true" />
       <option name="ADD_CONTENT_ROOTS" value="true" />
       <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/signals.py" />
+      <option name="SCRIPT_NAME" value="C:\Users\freie\PycharmProjects\StockBot_V3\stock_signals.py" />
       <option name="PARAMETERS" value="" />
       <option name="SHOW_COMMAND_LINE" value="false" />
       <option name="EMULATE_TERMINAL" value="false" />
@@ -139,7 +150,7 @@
     <recent_temporary>
       <list>
         <item itemvalue="Python.main" />
-        <item itemvalue="Python.signals" />
+        <item itemvalue="Python.stock_signals" />
       </list>
     </recent_temporary>
   </component>
@@ -158,14 +169,6 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1762775089088</updated>
-    </task>
-    <task id="LOCAL-00009" summary="First Com">
-      <option name="closed" value="true" />
-      <created>1762868702576</created>
-      <option name="number" value="00009" />
-      <option name="presentableId" value="LOCAL-00009" />
-      <option name="project" value="LOCAL" />
-      <updated>1762868702576</updated>
     </task>
     <task id="LOCAL-00010" summary="First Com">
       <option name="closed" value="true" />
@@ -551,7 +554,15 @@
       <option name="project" value="LOCAL" />
       <updated>1763514239293</updated>
     </task>
-    <option name="localTasksCounter" value="58" />
+    <task id="LOCAL-00058" summary="com">
+      <option name="closed" value="true" />
+      <created>1763515981787</created>
+      <option name="number" value="00058" />
+      <option name="presentableId" value="LOCAL-00058" />
+      <option name="project" value="LOCAL" />
+      <updated>1763515981787</updated>
+    </task>
+    <option name="localTasksCounter" value="59" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">

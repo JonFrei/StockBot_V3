@@ -15,7 +15,7 @@ from config import Config
 import server_health_check
 
 # from check_core_transaction import CoreHoldingsStrategy
-from strategies import SwingTradeStrategy
+from account_strategies import SwingTradeStrategy
 
 import logging
 
@@ -152,13 +152,25 @@ def main():
             trader.run_all()
 
             print("Finished working today")
-
         except KeyboardInterrupt:
             print("\nShutdown requested by user")
         except Exception as fatal_error:
             print(f"\n[ERROR] Fatal error: {fatal_error}")
+
             import traceback
+            error_traceback = traceback.format_exc()
             traceback.print_exc()
+
+            # Send crash notification email
+            try:
+                import account_email_notifications
+                email_notifications.send_crash_notification(
+                    error_message=str(fatal_error),
+                    error_traceback=error_traceback
+                )
+
+            except Exception as email_error:
+                print(f"[WARN] Could not send crash email: {email_error}")
             sys.exit(1)
 
         finally:

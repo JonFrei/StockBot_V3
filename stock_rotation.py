@@ -19,7 +19,7 @@ Usage:
 from datetime import datetime, timedelta
 import stock_data
 import signals
-from position_monitoring import calculate_market_condition_score
+from stock_position_monitoring import calculate_market_condition_score
 
 
 # =============================================================================

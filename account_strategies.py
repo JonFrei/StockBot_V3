@@ -14,16 +14,16 @@ from config import Config
 
 import stock_data
 import signals
-import position_sizing
-import profit_tracking
-import position_monitoring
-from ticker_cooldown import TickerCooldown
-from state_persistence import save_state_safe, load_state_safe  # Crash recovery
+import stock_position_sizing
+import account_profit_tracking
+import stock_position_monitoring
+from stock_cooldown import TickerCooldown
+from server_state_persistence import save_state_safe, load_state_safe  # Crash recovery
 
 # INTEGRATED IMPORTS (consolidated modules)
 from stock_rotation import StockRotator  # Has integrated blacklist
-import drawdown_protection  # Has integrated market regime
-import broker_data  # Trading window and market hours
+import account_drawdown_protection  # Has integrated market regime
+import account_broker_data  # Trading window and market hours
 
 from lumibot.brokers import Alpaca
 
@@ -507,6 +507,14 @@ class SwingTradeStrategy(Strategy):
 
         if not Config.BACKTESTING:
             profit_tracking.print_daily_summary(self, current_date)
+
+        # =====================================================================
+        # SEND DAILY SUMMARY EMAIL (LIVE TRADING ONLY)
+        # =====================================================================
+
+        if not Config.BACKTESTING:
+            import account_email_notifications
+            email_notifications.send_daily_summary_email(self, current_date)
 
     def on_strategy_end(self):
         """Display final statistics"""
