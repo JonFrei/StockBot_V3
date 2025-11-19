@@ -70,11 +70,11 @@ def swing_trade_1(data):
         return _no_signal(f'Price too extended: {ema20_distance:.1f}% above EMA20')
 
     # LOOSENED: RSI sweet spot (48-70 from 52-68)
-    if not (50 <= rsi <= 68):
+    if not (52 <= rsi <= 65):
         return _no_signal(f'RSI {rsi:.0f} not in 48-70 range')
 
     # LOOSENED: Volume (1.2x from 1.4x)
-    if volume_ratio < 1.2:
+    if volume_ratio < 1.5:
         return _no_signal(f'Volume {volume_ratio:.1f}x too low')
 
     # MACD bullish
@@ -86,7 +86,7 @@ def swing_trade_1(data):
         return _no_signal('OBV not confirming')
 
     # LOOSENED: ADX requirement (18 from 20)
-    if adx < 18:
+    if adx < 25:
         return _no_signal(f'ADX {adx:.0f} too weak')
 
     return {
