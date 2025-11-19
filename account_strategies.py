@@ -46,11 +46,8 @@ class SwingTradeStrategy(Strategy):
 
     ]
 
-    # Cooldown configuration - PRIORITY 2A: REDUCED FROM 3 TO 1
+    # Cooldown configuration
     COOLDOWN_DAYS = 1  # Days between re-purchases of same ticker
-
-    # PRIORITY 1: SIGNAL GUARD REMOVED - No longer restricting signals
-    IDLE_ROTATION_THRESHOLD = 3
 
     # =========================================================================
 
