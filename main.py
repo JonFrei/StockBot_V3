@@ -164,7 +164,7 @@ def main():
             # Send crash notification email
             try:
                 import account_email_notifications
-                email_notifications.send_crash_notification(
+                account_email_notifications.send_crash_notification(
                     error_message=str(fatal_error),
                     error_traceback=error_traceback
                 )

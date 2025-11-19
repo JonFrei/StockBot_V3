@@ -2,7 +2,7 @@ import pandas as pd
 from datetime import timedelta
 
 from config import Config
-import indicators
+import stock_indicators as indicators
 
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest

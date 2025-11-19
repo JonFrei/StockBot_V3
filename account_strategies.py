@@ -13,7 +13,7 @@ from lumibot.strategies import Strategy
 from config import Config
 
 import stock_data
-import signals
+import stock_signals
 import stock_position_sizing
 import account_profit_tracking
 import stock_position_monitoring
@@ -66,10 +66,10 @@ class SwingTradeStrategy(Strategy):
         self.last_trade_date = None
 
         # SIMPLIFIED: Tracker just logs completed trades
-        self.profit_tracker = profit_tracking.ProfitTracker(self)
+        self.profit_tracker = account_profit_tracking.ProfitTracker(self)
 
         # Position monitoring (for exits + market condition caching)
-        self.position_monitor = position_monitoring.PositionMonitor(self)
+        self.position_monitor = stock_position_monitoring.PositionMonitor(self)
 
         # Ticker cooldown to prevent chasing
         self.ticker_cooldown = TickerCooldown(cooldown_days=self.COOLDOWN_DAYS)
@@ -88,7 +88,7 @@ class SwingTradeStrategy(Strategy):
         self.last_rotation_week = None
 
         # Drawdown protection (has integrated market regime)
-        self.drawdown_protection = drawdown_protection.create_default_protection(
+        self.drawdown_protection = account_drawdown_protection.create_default_protection(
             threshold_pct=-10.0,
             recovery_days=5
         )
@@ -105,7 +105,7 @@ class SwingTradeStrategy(Strategy):
         print(f"✅ Signal Guard: DISABLED - All signals active without restriction")
 
         if not Config.BACKTESTING:
-            window_info = broker_data.get_trading_window_info()
+            window_info = account_broker_data.get_trading_window_info()
             print(f"✅ LIVE TRADING WINDOW: {window_info['start_time_str']} - {window_info['end_time_str']} EST")
             print(f"✅ Trading Frequency: Once per day")
 
@@ -153,11 +153,11 @@ class SwingTradeStrategy(Strategy):
                 print(f"[WARN] Could not check market status: {e}")
 
             # Check if already traded today
-            if broker_data.has_traded_today(self, self.last_trade_date):
+            if account_broker_data.has_traded_today(self, self.last_trade_date):
                 return
 
             # Check trading window
-            if not broker_data.is_within_trading_window(self):
+            if not account_broker_data.is_within_trading_window(self):
                 return
 
         current_date = self.get_datetime()
@@ -192,7 +192,7 @@ class SwingTradeStrategy(Strategy):
 
             # Print summary before exiting
             if not Config.BACKTESTING:
-                profit_tracking.print_daily_summary(self, current_date)
+                account_profit_tracking.print_daily_summary(self, current_date)
 
             return  # Skip rest of iteration
 
@@ -213,8 +213,8 @@ class SwingTradeStrategy(Strategy):
         # PRIORITY 3: GLOBAL MARKET REGIME DETECTION
         # =====================================================================
 
-        regime_info = drawdown_protection.detect_market_regime(spy_data)
-        print(drawdown_protection.format_regime_display(regime_info))
+        regime_info = account_drawdown_protection.detect_market_regime(spy_data)
+        print(account_drawdown_protection.format_regime_display(regime_info))
 
         # INTEGRATED: Clean expired blacklists
         if self.stock_rotator.blacklist:
@@ -225,7 +225,7 @@ class SwingTradeStrategy(Strategy):
         # =====================================================================
 
         # Check positions and get exit orders (uses adaptive parameters)
-        exit_orders = position_monitoring.check_positions_for_exits(
+        exit_orders = stock_position_monitoring.check_positions_for_exits(
             strategy=self,
             current_date=current_date,
             all_stock_data=all_stock_data,
@@ -233,7 +233,7 @@ class SwingTradeStrategy(Strategy):
         )
 
         # Execute all exit orders
-        position_monitoring.execute_exit_orders(
+        stock_position_monitoring.execute_exit_orders(
             strategy=self,
             exit_orders=exit_orders,
             current_date=current_date,
@@ -250,7 +250,7 @@ class SwingTradeStrategy(Strategy):
             print(f"⚠️ In drawdown recovery - no new positions")
             # Print summary before exiting
             if not Config.BACKTESTING:
-                profit_tracking.print_daily_summary(self, current_date)
+                account_profit_tracking.print_daily_summary(self, current_date)
 
             return
 
@@ -260,7 +260,7 @@ class SwingTradeStrategy(Strategy):
 
             # Print summary before exiting
             if not Config.BACKTESTING:
-                profit_tracking.print_daily_summary(self, current_date)
+                account_profit_tracking.print_daily_summary(self, current_date)
 
             return
 
@@ -348,7 +348,7 @@ class SwingTradeStrategy(Strategy):
             # (includes 200 SMA check - moved from signals.py)
             # ===================================================================
 
-            ticker_regime = drawdown_protection.detect_market_regime(spy_data, stock_data=data)
+            ticker_regime = account_drawdown_protection.detect_market_regime(spy_data, stock_data=data)
 
             # Skip if this ticker blocked by regime (e.g., below 200 SMA)
             if not ticker_regime.get('allow_trading', True):
@@ -372,7 +372,7 @@ class SwingTradeStrategy(Strategy):
             # CHECK FOR BUY SIGNAL (regime filter now in drawdown_protection)
             # ===================================================================
 
-            buy_signal = signals.buy_signals(data, active_signal_list, spy_data=spy_data)
+            buy_signal = stock_signals.buy_signals(data, active_signal_list, spy_data=spy_data)
 
             # Skip if no buy signal
             if not buy_signal or buy_signal.get('side') != 'buy':
@@ -385,7 +385,7 @@ class SwingTradeStrategy(Strategy):
 
             signal_count = 0
             for test_signal_name in active_signal_list:
-                test_signal_func = signals.BUY_STRATEGIES[test_signal_name]
+                test_signal_func = stock_signals.BUY_STRATEGIES[test_signal_name]
                 test_result = test_signal_func(data)
                 if test_result and test_result.get('side') == 'buy':
                     signal_count += 1
@@ -421,7 +421,7 @@ class SwingTradeStrategy(Strategy):
             final_position_pct = signal_position_size * regime_multiplier * award_multiplier * volatility_multiplier
 
             # === CALCULATE POSITION SIZE ===
-            buy_position = position_sizing.calculate_buy_size(
+            buy_position = stock_position_sizing.calculate_buy_size(
                 self,
                 data['close'],
                 account_threshold=20000,
@@ -506,7 +506,7 @@ class SwingTradeStrategy(Strategy):
         # =====================================================================
 
         if not Config.BACKTESTING:
-            profit_tracking.print_daily_summary(self, current_date)
+            account_profit_tracking.print_daily_summary(self, current_date)
 
         # =====================================================================
         # SEND DAILY SUMMARY EMAIL (LIVE TRADING ONLY)
@@ -514,7 +514,7 @@ class SwingTradeStrategy(Strategy):
 
         if not Config.BACKTESTING:
             import account_email_notifications
-            email_notifications.send_daily_summary_email(self, current_date)
+            account_email_notifications.send_daily_summary_email(self, current_date)
 
     def on_strategy_end(self):
         """Display final statistics"""
@@ -539,6 +539,6 @@ class SwingTradeStrategy(Strategy):
         print_rotation_report(self.stock_rotator)
 
         # Drawdown protection summary
-        drawdown_protection.print_protection_summary(self.drawdown_protection)
+        account_drawdown_protection.print_protection_summary(self.drawdown_protection)
 
         return 0

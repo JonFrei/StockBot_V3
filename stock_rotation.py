@@ -18,7 +18,7 @@ Usage:
 
 from datetime import datetime, timedelta
 import stock_data
-import signals
+import stock_signals as signals
 from stock_position_monitoring import calculate_market_condition_score
 
 
