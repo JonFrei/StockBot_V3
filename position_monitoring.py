@@ -1,24 +1,6 @@
 """
 Adaptive Position Monitoring System - TIGHTENED EXIT STRATEGY
 
-CHANGES FOR IMPROVED PERFORMANCE:
-- Profit Level 1: 12% → 10% (faster profit taking)
-- Profit Level 1 Sell: 40% → 45% (lock in more gains)
-- Profit Level 2: 25% → 22% (faster)
-- Profit Level 3: 40% → 35% (faster)
-- Trailing stops: Tightened 2-3% across all conditions
-- NEW: Peak stop protection after Level 1 (-5% instead of -7%)
-
-Goal: Take profits faster, protect gains better, reduce small losses
-
-Combines:
-- Market condition scoring (0-10 scale) for adaptive parameters
-- Simplified tracking (broker is source of truth for qty/price)
-- Daily caching of market conditions
-- 3-LEVEL profit taking with FASTER targets
-- 60-day max holding period
-- Tighter trailing stops and peak protection
-- Entry score tracking for performance analysis
 """
 
 from datetime import datetime
@@ -32,21 +14,12 @@ class AdaptiveExitConfig:
     """
     Dynamic exit parameters based on market conditions
 
-    TIGHTENED: Faster profit taking + tighter stops to protect gains
-
-    Changes:
-    - Level 1: 12% → 10% (take profits faster)
-    - Level 1 sell: 40% → 45% (sell more to lock in gains)
-    - Peak stop after Level 1: -7% → -5% (tighter to protect gains)
-    - Level 2: 25% → 22% (faster second profit take)
-    - Level 3: 40% → 35% (faster final profit take)
-    - Trailing stops: All tightened 2-3%
     """
 
     # === STRONG CONDITIONS (Score 7-10) ===
     STRONG_EMERGENCY_STOP = -7.0
-    STRONG_PROFIT_TARGET_1 = 10.0  # CHANGED from 12.0 (faster profit taking)
-    STRONG_PROFIT_TARGET_1_SELL = 45.0  # CHANGED from 40.0 (lock in more gains)
+    STRONG_PROFIT_TARGET_1 = 12.0  # CHANGED from 12.0 (faster profit taking)
+    STRONG_PROFIT_TARGET_1_SELL = 50.0  # CHANGED from 40.0 (lock in more gains)
     STRONG_PROFIT_TARGET_2 = 22.0  # CHANGED from 25.0 (faster)
     STRONG_PROFIT_TARGET_2_SELL = 30.0  # UNCHANGED
     STRONG_PROFIT_TARGET_3 = 35.0  # CHANGED from 40.0 (faster)
@@ -57,8 +30,8 @@ class AdaptiveExitConfig:
 
     # === NEUTRAL CONDITIONS (Score 4-6) ===
     NEUTRAL_EMERGENCY_STOP = -4.0
-    NEUTRAL_PROFIT_TARGET_1 = 8.0  # CHANGED from 10.0 (faster)
-    NEUTRAL_PROFIT_TARGET_1_SELL = 45.0  # CHANGED from 40.0 (lock in more)
+    NEUTRAL_PROFIT_TARGET_1 = 10.0  # CHANGED from 10.0 (faster)
+    NEUTRAL_PROFIT_TARGET_1_SELL = 50.0  # CHANGED from 40.0 (lock in more)
     NEUTRAL_PROFIT_TARGET_2 = 18.0  # CHANGED from 20.0 (faster)
     NEUTRAL_PROFIT_TARGET_2_SELL = 30.0  # UNCHANGED
     NEUTRAL_PROFIT_TARGET_3 = 30.0  # CHANGED from 35.0 (faster)

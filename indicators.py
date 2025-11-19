@@ -529,7 +529,7 @@ def get_historical_volatility(df, period=20):
 
 def calculate_volatility_score(data, df):
     """
-    Multi-factor volatility assessment (0-10 scale)
+    Multi-factor volatility assessment (0-7 scale)
 
     LOOSENED: Allow high-performing tech stocks (NVDA, META, AMD) to trade
 
@@ -539,14 +539,13 @@ def calculate_volatility_score(data, df):
     Components:
     - ATR% (0-4 points): Daily volatility measure
     - Historical Volatility (0-3 points): 20-day annualized vol
-    - Bollinger Width (0-3 points): Band width indicator
 
     Score Interpretation (UPDATED):
-    - 0-3: Low volatility (normal trading, 100% size)
-    - 4-5: Medium volatility (100% position size - CHANGED from 75%)
-    - 6-7: High volatility (75% position size - CHANGED from 50%)
-    - 8: Very High volatility (50% position size - NEW tier)
-    - 9+: Extreme volatility (BLOCKED - too risky, was 8+)
+    - 0-2: Low volatility (normal trading, 100% size)
+    - 3-4: Medium volatility (100% position size)
+    - 5: High volatility (75% position size)
+    - 6: Very High volatility (50% position size)
+    - 7: Extreme volatility (BLOCKED - too risky)
 
     Args:
         data: Dictionary with calculated indicators
@@ -554,13 +553,12 @@ def calculate_volatility_score(data, df):
 
     Returns:
         dict: {
-            'volatility_score': float (0-10),
+            'volatility_score': float (0-7),
             'risk_class': str ('low', 'medium', 'high', 'very_high', 'extreme'),
             'position_multiplier': float (0.0-1.0),
             'allow_trading': bool,
             'atr_pct': float,
-            'hist_vol': float,
-            'bb_width': float
+            'hist_vol': float
         }
     """
     score = 0
@@ -595,22 +593,22 @@ def calculate_volatility_score(data, df):
         score += 1  # Medium
     # else: 0 points (low volatility)
 
-    # Classification and Risk Management (UPDATED)
-    if score >= 9:  # CHANGED from >= 8
+    # Classification and Risk Management (UPDATED for 0-7 scale)
+    if score >= 7:
         risk_class = 'extreme'
         position_multiplier = 0.0  # Block entirely
         allow_trading = False
-    elif score >= 8:  # NEW tier
+    elif score >= 6:
         risk_class = 'very_high'
         position_multiplier = 0.5  # Half position size
         allow_trading = True
-    elif score >= 6:  # Was same threshold but now 0.75x instead of 0.5x
+    elif score >= 5:
         risk_class = 'high'
-        position_multiplier = 0.75  # CHANGED from 0.5 to 0.75
+        position_multiplier = 0.75
         allow_trading = True
-    elif score >= 4:  # Was same but now 1.0x instead of 0.75x
+    elif score >= 3:
         risk_class = 'medium'
-        position_multiplier = 1.0  # CHANGED from 0.75 to 1.0 (full size)
+        position_multiplier = 1.0  # Full size
         allow_trading = True
     else:
         risk_class = 'low'
