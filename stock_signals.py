@@ -31,67 +31,86 @@ def buy_signals(data, buy_signal_list, spy_data=None):
 
 def swing_trade_1(data):
     """
-    PRIORITY 3A: LOOSENED from restrictive requirements
+    REDESIGNED: "Early Momentum Catch"
 
-    Changes:
-    - RSI: 52-68 → 48-70 (wider range)
-    - Volume: 1.4x → 1.2x (easier to meet)
-    - ADX: 20 → 18 (allow slightly weaker trends)
+    Strategy: Catch stocks building momentum BEFORE they become obvious
 
-    Goal: Increase trade frequency while maintaining quality
+    Identity:
+    - Early trend formation (not mature trends)
+    - Price consolidating near EMA20 support
+    - Volume picking up (confirming interest)
+    - MACD crossing bullish AND accelerating
+    - ADX showing developing trend (20-35 range)
+
+    Distinct from swing_trade_2:
+    - swing_trade_1: Catches trend FORMATION (momentum building)
+    - swing_trade_2: Catches PULLBACKS in established trends
+
+    Key Requirements:
+    - Price near EMA20 (within 3% above = not extended)
+    - EMA structure: EMA20 > EMA50 (uptrend)
+    - MACD: Bullish + Accelerating (histogram growing)
+    - RSI: 45-70 (healthy momentum, not overbought)
+    - Volume: 1.3x+ (confirmation without requiring spikes)
+    - ADX: 20-35 (developing trend, not weak or mature)
     """
-    ema8 = data.get('ema8', 0)
+    close = data.get('close', 0)
     ema20 = data.get('ema20', 0)
     ema50 = data.get('ema50', 0)
     sma200 = data.get('sma200', 0)
     rsi = data.get('rsi', 50)
-    close = data.get('close', 0)
     volume_ratio = data.get('volume_ratio', 0)
     macd = data.get('macd', 0)
     macd_signal = data.get('macd_signal', 0)
+    macd_hist = data.get('macd_histogram', 0)
+    macd_hist_prev = data.get('macd_hist_prev', 0)
     obv_trending_up = data.get('obv_trending_up', False)
     adx = data.get('adx', 0)
 
-    # Trend confirmation
-    '''
+    # 1. Uptrend structure
     if not (ema20 > ema50):
-        return _no_signal('No uptrend')
-'''
-    if not (close > ema8 > ema20 > ema50):  # CHANGED: Added ema8 and close check
-        return _no_signal('Weak trend structure')
+        return _no_signal('EMA20 not above EMA50')
 
-    # Price above both EMAs and 200 SMA
-    if not (close > ema20 and close > sma200):
-        return _no_signal('Price below key levels')
+    # 2. Price above 200 SMA (long-term uptrend)
+    if close <= sma200:
+        return _no_signal('Below 200 SMA')
 
-    # Don't chase - price shouldn't be extended
+    # 3. Price NEAR EMA20 (not extended) - within 3% above
     ema20_distance = ((close - ema20) / ema20 * 100) if ema20 > 0 else 0
-    if ema20_distance > 5.0:  # More than 5% above EMA20 = too extended
-        return _no_signal(f'Price too extended: {ema20_distance:.1f}% above EMA20')
+    if close < ema20:
+        return _no_signal('Price below EMA20')
+    if ema20_distance > 3.0:
+        return _no_signal(f'Price extended {ema20_distance:.1f}% above EMA20')
 
-    # LOOSENED: RSI sweet spot (48-70 from 52-68)
-    if not (52 <= rsi <= 65):
-        return _no_signal(f'RSI {rsi:.0f} not in 48-70 range')
+    # 4. RSI: Healthy momentum zone (45-70)
+    if not (45 <= rsi <= 70):
+        return _no_signal(f'RSI {rsi:.0f} not in 45-70 range')
 
-    # LOOSENED: Volume (1.2x from 1.4x)
-    if volume_ratio < 1.5:
+    # 5. Volume confirmation (1.3x - not requiring massive spikes)
+    if volume_ratio < 1.3:
         return _no_signal(f'Volume {volume_ratio:.1f}x too low')
 
-    # MACD bullish
+    # 6. MACD: Bullish AND accelerating (key differentiator)
     if macd <= macd_signal:
         return _no_signal('MACD not bullish')
 
-    # OBV confirmation
+    # Check MACD acceleration (histogram growing)
+    if macd_hist <= macd_hist_prev:
+        return _no_signal('MACD not accelerating')
+
+    # 7. OBV confirmation
     if not obv_trending_up:
         return _no_signal('OBV not confirming')
 
-    # LOOSENED: ADX requirement (18 from 20)
-    if adx < 25:
+    # 8. ADX: Developing trend (20-35) - not weak, not mature
+    if adx < 20:
         return _no_signal(f'ADX {adx:.0f} too weak')
+    if adx > 35:
+        return _no_signal(f'ADX {adx:.0f} too strong (trend mature)')
 
     return {
         'side': 'buy',
-        'msg': f'✅ Swing1: RSI {rsi:.0f}, Vol {volume_ratio:.1f}x, ADX {adx:.0f}, OBV+',
+        'msg': f'🚀 Early Momentum: {ema20_distance:.1f}% from EMA20, RSI {rsi:.0f}, Vol {volume_ratio:.1f}x, ADX {adx:.0f}, MACD↑',
         'limit_price': close,
         'stop_loss': None,
         'signal_type': 'swing_trade_1'

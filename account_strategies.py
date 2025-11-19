@@ -7,6 +7,7 @@ Integrated Features:
 - Priority 3: Market regime detection (per-ticker + global)
 - Priority 4: Multi-signal conviction sizing
 - Priority 5: Momentum death exits
+- NEW: Optimal independent position sizing (Option 1)
 """
 
 from lumibot.strategies import Strategy
@@ -100,7 +101,7 @@ class SwingTradeStrategy(Strategy):
         print(f"✅ Award System: Premium (1.3x), Standard (1.0x), Trial (1.0x), None (0.6x)")
         print(f"✅ Integrated Blacklist: Automatic (part of rotation)")
         print(f"✅ Market Regime Detection: Integrated (per-ticker + global)")
-        print(f"✅ Multi-Signal Conviction: Enabled (12-18% position sizing)")
+        print(f"✅ Optimal Position Sizing: Independent allocation (quality-weighted)")
         print(f"✅ Active Signals: {len(self.ACTIVE_SIGNALS)} signals configured")
         print(f"✅ Signal Guard: DISABLED - All signals active without restriction")
 
@@ -312,13 +313,10 @@ class SwingTradeStrategy(Strategy):
                 self.idle_iterations_without_buys = 0
 
         # =====================================================================
-        # STEP 3: LOOK FOR NEW BUY SIGNALS WITH MULTI-SIGNAL CONVICTION
+        # STEP 3: COLLECT ALL BUY OPPORTUNITIES (NEW OPTIMAL SYSTEM)
         # =====================================================================
 
-        buy_orders = []
-
-        # Track cash commitments to prevent over-purchasing
-        pending_cash_commitment = 0
+        opportunities = []
 
         for ticker in active_tickers:
 
@@ -345,12 +343,11 @@ class SwingTradeStrategy(Strategy):
 
             # ===================================================================
             # PRIORITY 3: CHECK REGIME FOR THIS SPECIFIC TICKER
-            # (includes 200 SMA check - moved from signals.py)
             # ===================================================================
 
             ticker_regime = account_drawdown_protection.detect_market_regime(spy_data, stock_data=data)
 
-            # Skip if this ticker blocked by regime (e.g., below 200 SMA)
+            # Skip if this ticker blocked by regime
             if not ticker_regime.get('allow_trading', True):
                 continue
 
@@ -363,13 +360,8 @@ class SwingTradeStrategy(Strategy):
             if has_position:
                 continue
 
-            # === GET ADAPTIVE PARAMETERS FOR EXITS (still used for exit strategy) ===
-            adaptive_params = self.position_monitor.get_cached_market_conditions(
-                ticker, current_date_str, data
-            )
-
             # ===================================================================
-            # CHECK FOR BUY SIGNAL (regime filter now in drawdown_protection)
+            # CHECK FOR BUY SIGNAL
             # ===================================================================
 
             buy_signal = stock_signals.buy_signals(data, active_signal_list, spy_data=spy_data)
@@ -379,62 +371,136 @@ class SwingTradeStrategy(Strategy):
                 continue
 
             # ===================================================================
-            # PRIORITY 4: MULTI-SIGNAL CONVICTION SIZING
-            # Count ALL signals that trigger for this ticker
+            # COUNT ALL TRIGGERED SIGNALS FOR THIS TICKER
             # ===================================================================
 
-            signal_count = 0
-            for test_signal_name in active_signal_list:
-                test_signal_func = stock_signals.BUY_STRATEGIES[test_signal_name]
-                test_result = test_signal_func(data)
-                if test_result and test_result.get('side') == 'buy':
-                    signal_count += 1
-
-            # Dynamic position sizing based on signal count
-            if signal_count >= 3:
-                signal_position_size = 21.0  # High conviction
-                conviction_label = '🔥 HIGH'
-            elif signal_count == 2:
-                signal_position_size = 18.0  # Medium conviction
-                conviction_label = '⚡ MEDIUM'
-            else:
-                signal_position_size = 15.0  # Single signal
-                conviction_label = '• STANDARD'
-
-            # ===================================================================
-            # APPLY REGIME + AWARD MULTIPLIERS
-            # ===================================================================
-
-            award = self.stock_rotator.get_award(ticker)
-            award_multiplier = self.stock_rotator.get_award_multiplier(ticker)
-            award_emoji = {
-                'premium': '🥇',
-                'standard': '🥈',
-                'trial': '🔬',
-                'none': '⚪',
-                'frozen': '❄️'
-            }.get(award, '❓')
-            award_display = f"{award_emoji} {award.upper()}"
-
-            regime_multiplier = ticker_regime.get('position_size_multiplier', 1.0)
-            volatility_multiplier = vol_metrics.get('position_multiplier', 1.0)
-            final_position_pct = signal_position_size * regime_multiplier * award_multiplier * volatility_multiplier
-
-            # === CALCULATE POSITION SIZE ===
-            buy_position = stock_position_sizing.calculate_buy_size(
-                self,
-                data['close'],
-                account_threshold=20000,
-                max_position_pct=final_position_pct,
-                pending_commitments=pending_cash_commitment,
-                adaptive_params=None
+            signal_count = stock_position_sizing.count_triggered_signals(
+                ticker, data, active_signal_list, spy_data
             )
 
-            # Check if we can trade
-            if not buy_position['can_trade']:
+            # ===================================================================
+            # CALCULATE QUALITY SCORE (Current setup only, no awards)
+            # ===================================================================
+
+            quality_score = stock_position_sizing.calculate_opportunity_quality(
+                ticker, data, spy_data, signal_count
+            )
+
+            # Get award info
+            award = self.stock_rotator.get_award(ticker)
+            award_multiplier = self.stock_rotator.get_award_multiplier(ticker)
+
+            # Get regime and volatility multipliers
+            regime_multiplier = ticker_regime.get('position_size_multiplier', 1.0)
+            volatility_multiplier = vol_metrics.get('position_multiplier', 1.0)
+
+            # Store opportunity
+            opportunities.append({
+                'ticker': ticker,
+                'data': data,
+                'buy_signal': buy_signal,
+                'quality_score': quality_score,
+                'signal_count': signal_count,
+                'award': award,
+                'award_multiplier': award_multiplier,
+                'regime_multiplier': regime_multiplier,
+                'volatility_multiplier': volatility_multiplier,
+                'vol_metrics': vol_metrics,
+                'ticker_regime': ticker_regime
+            })
+
+        # =====================================================================
+        # STEP 4: OPTIMAL POSITION SIZING ACROSS ALL OPPORTUNITIES
+        # =====================================================================
+
+        if not opportunities:
+            print("\n📊 No buy opportunities found in this iteration\n")
+
+            # Print summary before exiting
+            if not Config.BACKTESTING:
+                account_profit_tracking.print_daily_summary(self, current_date)
+
+            return
+
+        # Create portfolio context
+        portfolio_context = stock_position_sizing.create_portfolio_context(self)
+
+        # Check if we can trade
+        if portfolio_context['deployable_cash'] <= 0:
+            print(
+                f"\n⚠️ No deployable cash available (${portfolio_context['total_cash']:,.0f} < ${portfolio_context['reserved_cash']:,.0f} threshold)\n")
+
+            # Print summary before exiting
+            if not Config.BACKTESTING:
+                account_profit_tracking.print_daily_summary(self, current_date)
+
+            return
+
+        if portfolio_context['available_slots'] <= 0:
+            print(
+                f"\n⚠️ No available position slots ({portfolio_context['existing_positions_count']}/{stock_position_sizing.OptimalPositionSizingConfig.MAX_TOTAL_POSITIONS})\n")
+
+            # Print summary before exiting
+            if not Config.BACKTESTING:
+                account_profit_tracking.print_daily_summary(self, current_date)
+
+            return
+
+        # Calculate optimal position sizes (independent allocation)
+        allocations = stock_position_sizing.calculate_independent_position_sizes(
+            opportunities,
+            portfolio_context
+        )
+
+        if not allocations:
+            print("\n⚠️ No positions met minimum size requirements after allocation\n")
+
+            # Print summary before exiting
+            if not Config.BACKTESTING:
+                account_profit_tracking.print_daily_summary(self, current_date)
+
+            return
+
+        # =====================================================================
+        # SUBMIT BUY ORDERS
+        # =====================================================================
+
+        print(f"\n{'=' * 70}")
+        print(f"📊 SUBMITTING {len(allocations)} BUY ORDER(S)")
+        print(f"{'=' * 70}\n")
+
+        for alloc in allocations:
+            ticker = alloc['ticker']
+            quantity = alloc['quantity']
+            cost = alloc['cost']
+            price = alloc['price']
+
+            # Find original opportunity data
+            opp = next((o for o in opportunities if o['ticker'] == ticker), None)
+            if not opp:
                 continue
 
-            # Track position with entry signal (no score)
+            buy_signal = opp['buy_signal']
+            signal_count = alloc['signal_count']
+
+            # Get display info
+            award_emoji = {'premium': '🥇', 'standard': '🥈', 'trial': '🔬', 'none': '⚪', 'frozen': '❄️'}.get(
+                alloc['award'], '❓')
+            conviction_label = ['', '• STANDARD', '⚡ MEDIUM', '🔥 HIGH', '🔥🔥 VERY HIGH'][min(signal_count, 4)]
+
+            vol_display = f"{opp['vol_metrics']['risk_class'].upper()} (ATR: {opp['vol_metrics']['atr_pct']:.1f}%)"
+
+            print(f" * BUY: {ticker} x{quantity} {conviction_label} [{award_emoji} {alloc['award'].upper()}] "
+                  f"({signal_count} signals)")
+            print(f"        Quality: {alloc['quality_score']:.0f}/100 ({alloc['quality_tier']})")
+            print(f"        Price: ${price:.2f} | Cost: ${cost:,.2f} ({alloc['pct_portfolio']:.1f}% of portfolio)")
+            print(f"        Signal: {buy_signal['signal_type']} | Vol: {vol_display}")
+            print(f"        Multiplier: {alloc['total_multiplier']:.2f}x (Q:{alloc['quality_multiplier']:.2f} × "
+                  f"C:{alloc['conviction_multiplier']:.2f} × A:{alloc['award_multiplier']:.2f} × "
+                  f"V:{alloc['volatility_multiplier']:.2f} × R:{alloc['regime_multiplier']:.2f})")
+            print()
+
+            # Track position with entry signal and score
             self.position_monitor.track_position(
                 ticker,
                 current_date,
@@ -442,57 +508,14 @@ class SwingTradeStrategy(Strategy):
                 entry_score=signal_count
             )
 
-            # Create order
-            order_sig = buy_signal.copy()
-            order_sig['ticker'] = ticker
-            order_sig['stop_loss'] = 0.90 * data['close']
-            order_sig['quantity'] = buy_position['quantity']
-            order_sig['position_value'] = buy_position['position_value']
-            order_sig['condition'] = adaptive_params['condition_label']
-            order_sig['conviction'] = conviction_label
-            order_sig['signal_count'] = signal_count
-            order_sig['award'] = award
-            order_sig['award_multiplier'] = award_multiplier
-            order_sig['volatility_class'] = vol_metrics['risk_class']
-            order_sig['volatility_multiplier'] = volatility_multiplier
-            buy_orders.append(order_sig)
+            # Create and submit order
+            order = self.create_order(ticker, quantity, 'buy')
+            self.submit_order(order)
 
-            # ADD COMMITMENT to prevent over-purchasing
-            pending_cash_commitment += buy_position['position_value']
+            # Record buy in cooldown tracker
+            self.ticker_cooldown.record_buy(ticker, current_date)
 
-            # Display pending order with conviction
-
-            vol_display=f"{vol_metrics['risk_class'].upper()} (ATR: {vol_metrics['atr_pct']:.1f}%)"
-            print(
-                f" * PENDING BUY: {ticker} x{buy_position['quantity']} {conviction_label} [{award_display}] "
-                f"({signal_count} signals) {adaptive_params['condition_label']} | {buy_signal['signal_type']} "
-                f"| Vol: {vol_display} = ${buy_position['position_value']:,.2f}")
-
-        # =====================================================================
-        # SUBMIT BUY ORDERS
-        # =====================================================================
-
-        # Submit buy orders
-        if len(buy_orders) > 0:
-            print(f"\n{'=' * 70}")
-            print(f"📊 BUY ORDERS SUMMARY - {len(buy_orders)} order(s)")
-            print(f"{'=' * 70}")
-            print(f"Total Cash Commitment: ${pending_cash_commitment:,.2f}")
-            print(f"Cash After Orders: ${self.get_cash() - pending_cash_commitment:,.2f}")
-            print(f"{'=' * 70}\n")
-
-            for order in buy_orders:
-                if order['side'] == 'buy':
-                    submit_order = self.create_order(order['ticker'], order['quantity'], order['side'])
-
-                    print(
-                        f" * BUY: {order['ticker']} x{order['quantity']} {order['conviction']} ({order['signal_count']} signals) {order['condition']} | {order['signal_type']}")
-                    print(f"        Price: ${order['limit_price']:.2f} | Value: ${order['position_value']:,.2f}")
-
-                    self.submit_order(submit_order)
-
-                    # Record buy in cooldown tracker
-                    self.ticker_cooldown.record_buy(order['ticker'], current_date)
+        print(f"{'=' * 70}\n")
 
         # =====================================================================
         # MARK THAT WE'VE TRADED TODAY
