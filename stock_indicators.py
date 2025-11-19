@@ -246,44 +246,6 @@ def get_adx(df, period=14):
 # NEW INDICATORS FOR IMPROVED SIGNAL QUALITY
 # ============================================================================
 
-def get_obv(df):
-    """
-    Calculate On Balance Volume (OBV)
-
-    OBV measures buying/selling pressure by adding volume on up days
-    and subtracting on down days. Rising OBV = accumulation,
-    Falling OBV = distribution.
-
-    Args:
-        df: DataFrame with 'close' and 'volume' columns
-
-    Returns:
-        float: Current OBV value
-    """
-    if len(df) < 2:
-        return 0
-
-    close = df['close']
-    volume = df['volume']
-
-    # Calculate price direction
-    price_direction = close.diff()
-
-    # OBV calculation
-    obv = pd.Series(index=df.index, dtype=float)
-    obv.iloc[0] = volume.iloc[0]
-
-    for i in range(1, len(df)):
-        if price_direction.iloc[i] > 0:
-            obv.iloc[i] = obv.iloc[i - 1] + volume.iloc[i]
-        elif price_direction.iloc[i] < 0:
-            obv.iloc[i] = obv.iloc[i - 1] - volume.iloc[i]
-        else:
-            obv.iloc[i] = obv.iloc[i - 1]
-
-    return obv.iloc[-1]
-
-
 def get_obv_trend(df, period=20):
     """
     Calculate OBV trend direction (rising or falling)

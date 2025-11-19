@@ -402,44 +402,6 @@ def check_profit_taking_adaptive(pnl_pct, profit_target_1, profit_target_2, prof
     return None
 
 
-def check_peak_stop_after_level_1(profit_level_1_locked, highest_price, current_price, pnl_pct):
-    """
-    NEW: Tighter peak stop after Level 1 locked to protect gains
-
-    After locking in profits at Level 1, we want to protect remaining position
-    from giving back too much. Exit if profit drops below +3% and down -5% from peak.
-
-    This replaces the old -7% peak stop with a tighter -5% stop AFTER we've locked
-    in Level 1 profits.
-
-    Args:
-        profit_level_1_locked: Whether Level 1 profit was taken
-        highest_price: Highest price achieved
-        current_price: Current price
-        pnl_pct: Current P&L percentage
-
-    Returns:
-        Exit signal dict or None
-    """
-    if not profit_level_1_locked:
-        return None
-
-    # Only trigger if we're still profitable but declining
-    if pnl_pct < 3.0:  # Below +3% after having reached +10%
-        drawdown_from_peak = ((current_price - highest_price) / highest_price * 100)
-
-        # Exit if down -5% from peak (was -7% in original peak_stop)
-        if drawdown_from_peak <= -5.0:
-            return {
-                'type': 'full_exit',
-                'reason': 'peak_stop',
-                'sell_pct': 100.0,
-                'message': f'📉 Peak Stop -5% (Post-Level 1): Down {drawdown_from_peak:.1f}% from ${highest_price:.2f}'
-            }
-
-    return None
-
-
 def check_trailing_stop(profit_level_2_locked, profit_level_3_locked, highest_price,
                         current_price, trail_pct, trail_pct_final, pnl_pct):
     """
@@ -604,17 +566,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
                 profit_level_3_locked=metadata.get('profit_level_3_locked', False)
             )
 
-        # 4. NEW: Peak stop protection after Level 1 (TIGHTER -5% stop)
-        '''
-        if not exit_signal:
-            exit_signal = check_peak_stop_after_level_1(
-                profit_level_1_locked=metadata.get('profit_level_1_locked', False),
-                highest_price=metadata.get('highest_price', broker_entry_price),
-                current_price=current_price,
-                pnl_pct=pnl_pct
-            )
-        '''
-        # 5. Trailing stop (adaptive distance, WIDER after Level 3)
+        # 4. Trailing stop (adaptive distance, WIDER after Level 3)
         if not exit_signal:
             exit_signal = check_trailing_stop(
                 profit_level_2_locked=metadata.get('profit_level_2_locked', False),

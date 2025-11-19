@@ -83,53 +83,42 @@ def main():
     print(f"Data Directory: {DATA_DIR}")
     print("=" * 80 + "\n")
 
-    # Setup
+    # Setup - For position logging
     setup_data_directory()
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    if not Config.BACKTESTING:
-        server_health_check.start_healthcheck_server()
-
     if Config.BACKTESTING:
         # BACKTESTING
-        from lumibot.backtesting import YahooDataBacktesting
-        from lumibot.backtesting import AlpacaBacktesting
+        try:
+            from lumibot.backtesting import YahooDataBacktesting
+            from lumibot.backtesting import AlpacaBacktesting
 
-        start = datetime(2024, 1, 8)
-        end = datetime(2025, 11, 6)
+            start = datetime(2024, 1, 8)
+            end = datetime(2025, 11, 6)
 
-        '''
-        core_results = CoreHoldingsStrategy.backtest(
-            YahooDataBacktesting,
-            start,
-            end,
-            parameters={"tickers": core_tickers},
-            testing=testing
-        )'''
+            SwingTradeStrategy.backtest(
+                datasource_class=AlpacaBacktesting,
+                backtesting_start=start,
+                backtesting_end=end,
+                parameters={
+                    "tickers": swing_tickers,
+                    "send_emails": False
+                },
+                benchmark_asset='SPY',
+                config=ALPACA_CONFIG
+            )
 
-        SwingTradeStrategy.backtest(
-            datasource_class=AlpacaBacktesting,
-            backtesting_start=start,
-            backtesting_end=end,
-            parameters={
-                "tickers": swing_tickers,
-                "send_emails": False
-            },
-            benchmark_asset='SPY',
-            config=ALPACA_CONFIG
-        )
+        except Exception as backtest_error:
+            print('error: ', backtest_error)
+
     else:
 
         try:
+            server_health_check.start_healthcheck_server()
+
             # LIVE
             broker = Alpaca(ALPACA_CONFIG)
-
-            # core_strategy = CoreHoldingsStrategy(
-            #     broker=broker,
-            #     tickers=core_tickers,
-            #     send_emails=True
-            # )
 
             swing_strategy = SwingTradeStrategy(
                 broker=broker,
@@ -141,8 +130,6 @@ def main():
 
             # Initialize trader
             trader = Trader()
-
-            # trader.add_strategy(core_strategy)
             trader.add_strategy(swing_strategy)
 
             print("\n" + "=" * 80)
