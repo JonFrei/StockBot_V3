@@ -26,8 +26,8 @@ class OptimalPositionSizingConfig:
 
     # Quality-based tier multipliers
     QUALITY_MULTIPLIERS = {
-        'exceptional': 1.2,  # 85-100 quality score
-        'strong': 1.15,  # 70-84 quality score
+        'exceptional': 1.3,  # 85-100 quality score
+        'strong': 1.2,  # 70-84 quality score
         'good': 1.10,  # 55-69 quality score
         'average': 1.00,  # 40-54 quality score
         'weak': 0.9  # 0-39 quality score

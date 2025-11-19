@@ -17,39 +17,39 @@ class AdaptiveExitConfig:
 
     # === STRONG CONDITIONS (Score 7-10) ===
     STRONG_EMERGENCY_STOP = -4.5
-    STRONG_PROFIT_TARGET_1 = 15.0  # CHANGED from 12.0 (faster profit taking)
-    STRONG_PROFIT_TARGET_1_SELL = 33.0  # CHANGED from 40.0 (lock in more gains)
-    STRONG_PROFIT_TARGET_2 = 22.0  # CHANGED from 25.0 (faster)
+    STRONG_PROFIT_TARGET_1 = 15.0  # CHANGED from 12.0
+    STRONG_PROFIT_TARGET_1_SELL = 33.0  # CHANGED from 40.0
+    STRONG_PROFIT_TARGET_2 = 25.0  # CHANGED from 25.0
     STRONG_PROFIT_TARGET_2_SELL = 33.0  # UNCHANGED
-    STRONG_PROFIT_TARGET_3 = 30.0  # CHANGED from 40.0 (faster)
+    STRONG_PROFIT_TARGET_3 = 35.0  # CHANGED from 40.0
     STRONG_PROFIT_TARGET_3_SELL = 34.0  # UNCHANGED
     # Trailing Stop
-    STRONG_TRAILING_STOP = 10.0  # CHANGED from 12.0 (tighter)
-    STRONG_TRAILING_STOP_FINAL = 18.0  # CHANGED from 18.0 (tighter)
+    STRONG_TRAILING_STOP = 12.0  # CHANGED from 12.0
+    STRONG_TRAILING_STOP_FINAL = 18.0  # CHANGED from 18.0
 
     # === NEUTRAL CONDITIONS (Score 4-6) ===
     NEUTRAL_EMERGENCY_STOP = -4.0
-    NEUTRAL_PROFIT_TARGET_1 = 15.0  # CHANGED from 10.0 (faster)
-    NEUTRAL_PROFIT_TARGET_1_SELL = 33.0  # CHANGED from 40.0 (lock in more)
-    NEUTRAL_PROFIT_TARGET_2 = 20.0  # CHANGED from 20.0 (faster)
+    NEUTRAL_PROFIT_TARGET_1 = 15.0  # CHANGED from 10.0
+    NEUTRAL_PROFIT_TARGET_1_SELL = 33.0  # CHANGED from 40.0
+    NEUTRAL_PROFIT_TARGET_2 = 22.0  # CHANGED from 20.0
     NEUTRAL_PROFIT_TARGET_2_SELL = 33.0  # UNCHANGED
-    NEUTRAL_PROFIT_TARGET_3 = 25.0  # CHANGED from 35.0 (faster)
+    NEUTRAL_PROFIT_TARGET_3 = 30.0  # CHANGED from 35.0
     NEUTRAL_PROFIT_TARGET_3_SELL = 34.0  # UNCHANGED
     # Trailing Stop
-    NEUTRAL_TRAILING_STOP = 10.0  # CHANGED from 10.0 (tighter)
-    NEUTRAL_TRAILING_STOP_FINAL = 15.0  # CHANGED from 15.0 (tighter)
+    NEUTRAL_TRAILING_STOP = 10.0  # CHANGED from 10.0
+    NEUTRAL_TRAILING_STOP_FINAL = 15.0  # CHANGED from 15.0
 
     # === WEAK CONDITIONS (Score 0-3) ===
     WEAK_EMERGENCY_STOP = -3.5
-    WEAK_PROFIT_TARGET_1 = 10.0  # CHANGED from 8.0 (faster - get out quick)
-    WEAK_PROFIT_TARGET_1_SELL = 33.0  # CHANGED from 40.0 (sell half immediately)
-    WEAK_PROFIT_TARGET_2 = 12.0  # CHANGED from 18.0 (faster)
+    WEAK_PROFIT_TARGET_1 = 12.0  # CHANGED from 8.0
+    WEAK_PROFIT_TARGET_1_SELL = 33.0  # CHANGED from 40.0
+    WEAK_PROFIT_TARGET_2 = 16.0  # CHANGED from 18.0
     WEAK_PROFIT_TARGET_2_SELL = 33.0  # UNCHANGED
-    WEAK_PROFIT_TARGET_3 = 15.0  # CHANGED from 30.0 (faster)
+    WEAK_PROFIT_TARGET_3 = 20.0  # CHANGED from 30.0
     WEAK_PROFIT_TARGET_3_SELL = 34.0  # UNCHANGED
     # Trailing Stop
-    WEAK_TRAILING_STOP = 7.0  # CHANGED from 6.0 (tighter)
-    WEAK_TRAILING_STOP_FINAL = 12.0  # CHANGED from 12.0 (tighter)
+    WEAK_TRAILING_STOP = 6.0  # CHANGED from 6.0
+    WEAK_TRAILING_STOP_FINAL = 8.0  # CHANGED from 12.0
 
 
 # =============================================================================
@@ -431,102 +431,7 @@ def check_trailing_stop(profit_level_2_locked, profit_level_3_locked, highest_pr
     return None
 
 
-def check_progressive_growth_milestones(position_monitor, ticker, current_date, data, pnl_pct):
-    """
-    OPTION 4: Progressive growth expectations at multiple checkpoints
-
-    Exits positions that aren't meeting minimum growth thresholds + have weak momentum
-
-    Checkpoints:
-    - 14 days: Must be +4% or better (with weak momentum check)
-    - 28 days: Must be +8% or better (with momentum check)
-    - 42 days: Must be +12% or better (with momentum check)
-    - 56 days: Must be +15% or better (stricter momentum check)
-
-    Args:
-        position_monitor: PositionMonitor instance
-        ticker: Stock symbol
-        current_date: Current date
-        data: Stock technical data
-        pnl_pct: Current P&L percentage
-
-    Returns:
-        dict with exit signal or None
-    """
-    metadata = position_monitor.get_position_metadata(ticker)
-    if not metadata:
-        return None
-
-    entry_date = metadata['entry_date']
-    days_held = (current_date - entry_date).days
-
-    # Get technical indicators
-    adx = data.get('adx', 0)
-    close = data.get('close', 0)
-    ema20 = data.get('ema20', 0)
-    macd = data.get('macd', 0)
-    macd_signal = data.get('macd_signal', 0)
-
-    # =========================================================================
-    # CHECKPOINT 1: 14 Days - Early Underperformance Detection
-    # =========================================================================
-    if days_held >= 14 and days_held < 28:
-        if pnl_pct < 4.0:  # Less than 4% after 2 weeks
-            # Check if momentum is weak
-            if adx < 20 or close < ema20:
-                return {
-                    'type': 'full_exit',
-                    'reason': 'stagnation_14d',
-                    'sell_pct': 100.0,
-                    'message': f'⏰ 14d Checkpoint: +{pnl_pct:.1f}% (target: +4%) + Weak Momentum (ADX: {adx:.0f})'
-                }
-
-    # =========================================================================
-    # CHECKPOINT 2: 28 Days - Mid-Term Growth Check
-    # =========================================================================
-    elif days_held >= 28 and days_held < 42:
-        if pnl_pct < 8.0:  # Less than 8% after 4 weeks
-            # Stricter momentum requirement
-            if adx < 22 or macd <= macd_signal:
-                return {
-                    'type': 'full_exit',
-                    'reason': 'stagnation_28d',
-                    'sell_pct': 100.0,
-                    'message': f'⏰ 28d Checkpoint: +{pnl_pct:.1f}% (target: +8%) + Weakening Momentum'
-                }
-
-    # =========================================================================
-    # CHECKPOINT 3: 42 Days - Extended Hold Scrutiny
-    # =========================================================================
-    elif days_held >= 42 and days_held < 56:
-        if pnl_pct < 12.0:  # Less than 12% after 6 weeks
-            # Check for deteriorating trend
-            if adx < 25 or close < ema20:
-                return {
-                    'type': 'full_exit',
-                    'reason': 'stagnation_42d',
-                    'sell_pct': 100.0,
-                    'message': f'⏰ 42d Checkpoint: +{pnl_pct:.1f}% (target: +12%) + Deteriorating Trend'
-                }
-
-    # =========================================================================
-    # CHECKPOINT 4: 56 Days - Final Pre-Max Check
-    # =========================================================================
-    elif days_held >= 56 and days_held < 60:
-        if pnl_pct < 15.0:  # Less than 15% after 8 weeks
-            # Strict momentum requirement at this stage
-            if adx < 25 or macd <= macd_signal:
-                return {
-                    'type': 'full_exit',
-                    'reason': 'stagnation_56d',
-                    'sell_pct': 100.0,
-                    'message': f'⏰ 56d Checkpoint: +{pnl_pct:.1f}% (target: +15%) + Insufficient Momentum'
-                }
-
-    return None
-
-
-def check_max_holding_period(position_monitor, ticker, current_date, data, max_days=60):
+def check_max_holding_period(position_monitor, ticker, current_date, data, max_days=60, profit_level_2_locked = False):
     """
     Exit positions held longer than 60 days
 
@@ -540,6 +445,9 @@ def check_max_holding_period(position_monitor, ticker, current_date, data, max_d
 
     entry_date = metadata['entry_date']
     days_held = (current_date - entry_date).days
+
+    if profit_level_2_locked:
+        max_days = 90  # Give big winners more time
 
     if days_held >= max_days:
         # Get momentum indicators
@@ -632,24 +540,16 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         # === CHECK EXIT CONDITIONS (Using Adaptive Parameters) ===
         exit_signal = None
 
-        # 1. OPTION 4: Progressive growth checkpoints (14d, 28d, 42d, 56d) - NEW!
-        exit_signal = check_progressive_growth_milestones(
+        # 2. Max holding period (60 days with momentum exception)
+        # if not exit_signal:
+        exit_signal = check_max_holding_period(
             position_monitor=position_monitor,
             ticker=ticker,
             current_date=current_date,
             data=data,
-            pnl_pct=pnl_pct
+            max_days=30,
+            profit_level_2_locked=metadata.get('profit_level_2_locked', False)
         )
-
-        # 2. Max holding period (60 days with momentum exception)
-        if not exit_signal:
-            exit_signal = check_max_holding_period(
-                position_monitor=position_monitor,
-                ticker=ticker,
-                current_date=current_date,
-                data=data,
-                max_days=60
-            )
 
         # 3. Emergency stop (adaptive)
         if not exit_signal:
