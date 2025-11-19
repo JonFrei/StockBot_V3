@@ -38,11 +38,11 @@ class SwingTradeStrategy(Strategy):
 
     # Active trading signals (in priority order)
     ACTIVE_SIGNALS = [
+        'swing_trade_1',  # EMA crossover + momentum
+        'swing_trade_2',  # Pullback plays
         'consolidation_breakout',  # 75% win rate - LOOSENED
         'golden_cross',  # 77% win rate - LOOSENED
         'bollinger_buy',
-        'swing_trade_1',  # EMA crossover + momentum
-        'swing_trade_2',  # Pullback plays
 
     ]
 

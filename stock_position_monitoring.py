@@ -15,37 +15,37 @@ class AdaptiveExitConfig:
     """
 
     # === STRONG CONDITIONS (Score 7-10) ===
-    STRONG_EMERGENCY_STOP = -6.0
-    STRONG_PROFIT_TARGET_1 = 10.0  # CHANGED from 12.0 (faster profit taking)
-    STRONG_PROFIT_TARGET_1_SELL = 40.0  # CHANGED from 40.0 (lock in more gains)
+    STRONG_EMERGENCY_STOP = -4.5
+    STRONG_PROFIT_TARGET_1 = 15.0  # CHANGED from 12.0 (faster profit taking)
+    STRONG_PROFIT_TARGET_1_SELL = 33.0  # CHANGED from 40.0 (lock in more gains)
     STRONG_PROFIT_TARGET_2 = 20.0  # CHANGED from 25.0 (faster)
-    STRONG_PROFIT_TARGET_2_SELL = 30.0  # UNCHANGED
-    STRONG_PROFIT_TARGET_3 = 40.0  # CHANGED from 40.0 (faster)
-    STRONG_PROFIT_TARGET_3_SELL = 20.0  # UNCHANGED
+    STRONG_PROFIT_TARGET_2_SELL = 33.0  # UNCHANGED
+    STRONG_PROFIT_TARGET_3 = 25.0  # CHANGED from 40.0 (faster)
+    STRONG_PROFIT_TARGET_3_SELL = 34.0  # UNCHANGED
     # Trailing Stop
     STRONG_TRAILING_STOP = 10.0  # CHANGED from 12.0 (tighter)
-    STRONG_TRAILING_STOP_FINAL = 20.0  # CHANGED from 18.0 (tighter)
+    STRONG_TRAILING_STOP_FINAL = 18.0  # CHANGED from 18.0 (tighter)
 
     # === NEUTRAL CONDITIONS (Score 4-6) ===
-    NEUTRAL_EMERGENCY_STOP = -5.0
-    NEUTRAL_PROFIT_TARGET_1 = 10.0  # CHANGED from 10.0 (faster)
+    NEUTRAL_EMERGENCY_STOP = -4.0
+    NEUTRAL_PROFIT_TARGET_1 = 12.0  # CHANGED from 10.0 (faster)
     NEUTRAL_PROFIT_TARGET_1_SELL = 50.0  # CHANGED from 40.0 (lock in more)
     NEUTRAL_PROFIT_TARGET_2 = 15.0  # CHANGED from 20.0 (faster)
-    NEUTRAL_PROFIT_TARGET_2_SELL = 30.0  # UNCHANGED
-    NEUTRAL_PROFIT_TARGET_3 = 25.0  # CHANGED from 35.0 (faster)
-    NEUTRAL_PROFIT_TARGET_3_SELL = 20.0  # UNCHANGED
+    NEUTRAL_PROFIT_TARGET_2_SELL = 33.0  # UNCHANGED
+    NEUTRAL_PROFIT_TARGET_3 = 18.0  # CHANGED from 35.0 (faster)
+    NEUTRAL_PROFIT_TARGET_3_SELL = 34.0  # UNCHANGED
     # Trailing Stop
     NEUTRAL_TRAILING_STOP = 10.0  # CHANGED from 10.0 (tighter)
     NEUTRAL_TRAILING_STOP_FINAL = 15.0  # CHANGED from 15.0 (tighter)
 
     # === WEAK CONDITIONS (Score 0-3) ===
-    WEAK_EMERGENCY_STOP = -4.5
-    WEAK_PROFIT_TARGET_1 = 7.0  # CHANGED from 8.0 (faster - get out quick)
-    WEAK_PROFIT_TARGET_1_SELL = 60.0  # CHANGED from 40.0 (sell half immediately)
-    WEAK_PROFIT_TARGET_2 = 12.0  # CHANGED from 18.0 (faster)
-    WEAK_PROFIT_TARGET_2_SELL = 30.0  # UNCHANGED
-    WEAK_PROFIT_TARGET_3 = 18.0  # CHANGED from 30.0 (faster)
-    WEAK_PROFIT_TARGET_3_SELL = 20.0  # UNCHANGED
+    WEAK_EMERGENCY_STOP = -3.5
+    WEAK_PROFIT_TARGET_1 = 8.0  # CHANGED from 8.0 (faster - get out quick)
+    WEAK_PROFIT_TARGET_1_SELL = 50.0  # CHANGED from 40.0 (sell half immediately)
+    WEAK_PROFIT_TARGET_2 = 10.0  # CHANGED from 18.0 (faster)
+    WEAK_PROFIT_TARGET_2_SELL = 33.0  # UNCHANGED
+    WEAK_PROFIT_TARGET_3 = 12.0  # CHANGED from 30.0 (faster)
+    WEAK_PROFIT_TARGET_3_SELL = 34.0  # UNCHANGED
     # Trailing Stop
     WEAK_TRAILING_STOP = 7.0  # CHANGED from 6.0 (tighter)
     WEAK_TRAILING_STOP_FINAL = 12.0  # CHANGED from 12.0 (tighter)

@@ -22,13 +22,13 @@ class OptimalPositionSizingConfig:
     """Position sizing configuration"""
 
     # Base position size (% of portfolio value)
-    BASE_POSITION_PCT = 10.0  # Starting point for average opportunity
+    BASE_POSITION_PCT = 12.0  # Starting point for average opportunity
 
     # Quality-based tier multipliers
     QUALITY_MULTIPLIERS = {
-        'exceptional': 2.0,  # 85-100 quality score
-        'strong': 1.8,  # 70-84 quality score
-        'good': 1.5,  # 55-69 quality score
+        'exceptional': 1.8,  # 85-100 quality score
+        'strong': 1.5,  # 70-84 quality score
+        'good': 1.25,  # 55-69 quality score
         'average': 1.0,  # 40-54 quality score
         'weak': 0.75  # 0-39 quality score
     }
@@ -43,11 +43,11 @@ class OptimalPositionSizingConfig:
     MAX_POSITION_PCT = 20.0  # Single position concentration limit
 
     # Per-iteration limits
-    MAX_POSITIONS_PER_ITERATION = 5
+    MAX_POSITIONS_PER_ITERATION = 10
     MAX_CASH_DEPLOYMENT_PCT = 60.0  # % of available cash
 
     # Portfolio-level limits
-    MAX_TOTAL_POSITIONS = 10
+    MAX_TOTAL_POSITIONS = 20
     MIN_CASH_RESERVE = 20000  # Minimum cash to keep in dollars
 
     # Tiered scaling thresholds (when budget tight)
