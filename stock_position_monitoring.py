@@ -28,7 +28,7 @@ class AdaptiveExitConfig:
 
     # === NEUTRAL CONDITIONS (Score 4-6) ===
     NEUTRAL_EMERGENCY_STOP = -4.0
-    NEUTRAL_PROFIT_TARGET_1 = 8.0  # CHANGED from 10.0 (faster)
+    NEUTRAL_PROFIT_TARGET_1 = 10.0  # CHANGED from 10.0 (faster)
     NEUTRAL_PROFIT_TARGET_1_SELL = 50.0  # CHANGED from 40.0 (lock in more)
     NEUTRAL_PROFIT_TARGET_2 = 15.0  # CHANGED from 20.0 (faster)
     NEUTRAL_PROFIT_TARGET_2_SELL = 30.0  # UNCHANGED
@@ -40,11 +40,11 @@ class AdaptiveExitConfig:
 
     # === WEAK CONDITIONS (Score 0-3) ===
     WEAK_EMERGENCY_STOP = -2.5
-    WEAK_PROFIT_TARGET_1 = 6.0  # CHANGED from 8.0 (faster - get out quick)
+    WEAK_PROFIT_TARGET_1 = 8.0  # CHANGED from 8.0 (faster - get out quick)
     WEAK_PROFIT_TARGET_1_SELL = 50.0  # CHANGED from 40.0 (sell half immediately)
-    WEAK_PROFIT_TARGET_2 = 8.0  # CHANGED from 18.0 (faster)
+    WEAK_PROFIT_TARGET_2 = 10.0  # CHANGED from 18.0 (faster)
     WEAK_PROFIT_TARGET_2_SELL = 30.0  # UNCHANGED
-    WEAK_PROFIT_TARGET_3 = 10.0  # CHANGED from 30.0 (faster)
+    WEAK_PROFIT_TARGET_3 = 12.0  # CHANGED from 30.0 (faster)
     WEAK_PROFIT_TARGET_3_SELL = 20.0  # UNCHANGED
     WEAK_TRAILING_STOP = 5.0  # CHANGED from 6.0 (tighter)
     WEAK_TRAILING_STOP_FINAL = 10.0  # CHANGED from 12.0 (tighter)
@@ -608,6 +608,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
             )
 
         # 4. NEW: Peak stop protection after Level 1 (TIGHTER -5% stop)
+        '''
         if not exit_signal:
             exit_signal = check_peak_stop_after_level_1(
                 profit_level_1_locked=metadata.get('profit_level_1_locked', False),
@@ -615,7 +616,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
                 current_price=current_price,
                 pnl_pct=pnl_pct
             )
-
+        '''
         # 5. Trailing stop (adaptive distance, WIDER after Level 3)
         if not exit_signal:
             exit_signal = check_trailing_stop(

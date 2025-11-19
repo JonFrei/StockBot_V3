@@ -40,6 +40,7 @@ def swing_trade_1(data):
 
     Goal: Increase trade frequency while maintaining quality
     """
+    ema8 = data.get('ema8', 0)
     ema20 = data.get('ema20', 0)
     ema50 = data.get('ema50', 0)
     sma200 = data.get('sma200', 0)
@@ -52,15 +53,24 @@ def swing_trade_1(data):
     adx = data.get('adx', 0)
 
     # Trend confirmation
+    '''
     if not (ema20 > ema50):
         return _no_signal('No uptrend')
+'''
+    if not (close > ema8 > ema20 > ema50):  # CHANGED: Added ema8 and close check
+        return _no_signal('Weak trend structure')
 
     # Price above both EMAs and 200 SMA
     if not (close > ema20 and close > sma200):
         return _no_signal('Price below key levels')
 
+    # Don't chase - price shouldn't be extended
+    ema20_distance = ((close - ema20) / ema20 * 100) if ema20 > 0 else 0
+    if ema20_distance > 5.0:  # More than 5% above EMA20 = too extended
+        return _no_signal(f'Price too extended: {ema20_distance:.1f}% above EMA20')
+
     # LOOSENED: RSI sweet spot (48-70 from 52-68)
-    if not (48 <= rsi <= 70):
+    if not (50 <= rsi <= 68):
         return _no_signal(f'RSI {rsi:.0f} not in 48-70 range')
 
     # LOOSENED: Volume (1.2x from 1.4x)
