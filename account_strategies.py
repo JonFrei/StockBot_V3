@@ -439,7 +439,7 @@ class SwingTradeStrategy(Strategy):
                 ticker,
                 current_date,
                 buy_signal.get('signal_type', 'unknown'),
-                entry_score=0
+                entry_score=signal_count
             )
 
             # Create order
