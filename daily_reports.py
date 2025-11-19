@@ -1,26 +1,13 @@
 """
-Daily Trading Reports and Controls Module
+Enhanced Trading Window Controls
 
-Contains reusable functions for:
-- Trading window validation (10-11 AM EST)
-- Daily iteration control (one trade per day)
-- Comprehensive daily summary reporting
-
-Usage:
-    from daily_reports import is_within_trading_window, has_traded_today, print_daily_summary
-
-    if not is_within_trading_window(strategy):
-        return
-
-    if has_traded_today(strategy, last_trade_date):
-        return
-
-    # ... trading logic ...
-
-    print_daily_summary(strategy, current_date)
+Adds:
+- Market holiday detection
+- Mid-window startup handling
+- Maintains once-per-day trading logic
 """
 
-from datetime import time
+from datetime import time, date
 import pytz
 from config import Config
 
@@ -31,6 +18,42 @@ from config import Config
 TRADING_START_TIME = time(10, 0)  # 10:00 AM EST
 TRADING_END_TIME = time(11, 0)  # 11:00 AM EST
 
+# =============================================================================
+# US MARKET HOLIDAYS (2025)
+# =============================================================================
+
+# NYSE/NASDAQ holiday schedule
+US_MARKET_HOLIDAYS_2025 = {
+    date(2025, 1, 1),  # New Year's Day
+    date(2025, 1, 20),  # Martin Luther King Jr. Day
+    date(2025, 2, 17),  # Presidents' Day
+    date(2025, 4, 18),  # Good Friday
+    date(2025, 5, 26),  # Memorial Day
+    date(2025, 6, 19),  # Juneteenth
+    date(2025, 7, 4),  # Independence Day
+    date(2025, 9, 1),  # Labor Day
+    date(2025, 11, 27),  # Thanksgiving
+    date(2025, 12, 25),  # Christmas
+}
+
+
+def is_market_holiday(check_date):
+    """
+    Check if date is a US market holiday
+
+    Args:
+        check_date: datetime.date object
+
+    Returns:
+        bool: True if holiday, False otherwise
+    """
+    # Check if weekend
+    if check_date.weekday() >= 5:  # Saturday = 5, Sunday = 6
+        return True
+
+    # Check if holiday
+    return check_date in US_MARKET_HOLIDAYS_2025
+
 
 # =============================================================================
 # TRADING WINDOW VALIDATION
@@ -39,6 +62,11 @@ TRADING_END_TIME = time(11, 0)  # 11:00 AM EST
 def is_within_trading_window(strategy):
     """
     Check if current time is within trading window (10-11 AM EST)
+
+    ENHANCED:
+    - Checks for market holidays
+    - Checks for weekends
+    - Gracefully handles mid-window startup
 
     Args:
         strategy: Lumibot Strategy instance
@@ -52,14 +80,26 @@ def is_within_trading_window(strategy):
     try:
         # Get current time in EST
         est = pytz.timezone('US/Eastern')
-        current_time_est = strategy.get_datetime().astimezone(est).time()
+        current_datetime_est = strategy.get_datetime().astimezone(est)
+        current_time_est = current_datetime_est.time()
+        current_date = current_datetime_est.date()
+
+        # Check if market holiday
+        if is_market_holiday(current_date):
+            day_name = current_datetime_est.strftime('%A')
+            print(f"[INFO] Market closed - {day_name}, {current_date} is a holiday/weekend")
+            return False
 
         # Check if within window
         is_within = TRADING_START_TIME <= current_time_est <= TRADING_END_TIME
 
         if not is_within:
-            print(f"[INFO] Outside trading window (current: {current_time_est.strftime('%I:%M %p')} EST, "
-                  f"window: {TRADING_START_TIME.strftime('%I:%M %p')} - {TRADING_END_TIME.strftime('%I:%M %p')} EST)")
+            if current_time_est < TRADING_START_TIME:
+                print(f"[INFO] Before trading window (current: {current_time_est.strftime('%I:%M %p')} EST, "
+                      f"window opens at {TRADING_START_TIME.strftime('%I:%M %p')} EST)")
+            else:
+                print(f"[INFO] After trading window (current: {current_time_est.strftime('%I:%M %p')} EST, "
+                      f"window closed at {TRADING_END_TIME.strftime('%I:%M %p')} EST)")
 
         return is_within
 
@@ -71,6 +111,8 @@ def is_within_trading_window(strategy):
 def has_traded_today(strategy, last_trade_date):
     """
     Check if strategy has already traded today
+
+    MAINTAINS: Once-per-day trading logic
 
     Args:
         strategy: Lumibot Strategy instance
@@ -92,7 +134,7 @@ def has_traded_today(strategy, last_trade_date):
 
 
 # =============================================================================
-# DAILY SUMMARY REPORTING
+# DAILY SUMMARY REPORTING (unchanged)
 # =============================================================================
 
 def print_daily_summary(strategy, current_date):

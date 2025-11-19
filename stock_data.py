@@ -26,10 +26,6 @@ def process_data(symbols, current_date):
             'raw': df
         }
 
-        # ==========================================
-        # EXISTING INDICATORS (KEPT AS-IS)
-        # ==========================================
-
         # Calculate SMAs (14, 20, 50, 200 day)
         sma14 = indicators.get_sma(df, period=14)
         sma20 = indicators.get_sma(df, period=20)
@@ -80,10 +76,6 @@ def process_data(symbols, current_date):
         # Calculate ADX
         temp_data['indicators']['adx'] = round(float(indicators.get_adx(df, period=14)), 2)
 
-        # ==========================================
-        # NEW INDICATORS FOR IMPROVED SIGNALS
-        # ==========================================
-
         # OBV Trend
         obv_trend = indicators.get_obv_trend(df, period=20)
         temp_data['indicators']['obv'] = round(obv_trend['obv'], 2)
@@ -122,21 +114,11 @@ def process_data(symbols, current_date):
         else:
             temp_data['indicators']['ema50_10d_ago'] = temp_data['indicators']['ema50']
 
-        # ==========================================
-        # VOLATILITY ASSESSMENT (PREVENTS MAJOR LOSSES)
-        # ==========================================
-
-        # Calculate multi-factor volatility score
-        # This prevents trading extremely volatile stocks (NFLX, TSLA)
-        # and reduces position sizes for medium-volatility stocks
+        # Volatility assessment
         temp_data['indicators']['volatility_metrics'] = indicators.calculate_volatility_score(
             temp_data['indicators'],
             df
         )
-
-        # ==========================================
-        # CURRENT PRICE DATA (KEPT AS-IS)
-        # ==========================================
 
         # Add current price data
         temp_data['indicators']['close'] = round(float(df['close'].iloc[-1]), 2)
@@ -165,9 +147,8 @@ def process_data(symbols, current_date):
 def _fetch_alpaca_batch_data(symbols, current_date, days=250):
     """
     Fetch historical data for multiple symbols using Alpaca API
-    Similar interface to Twelve Data batch fetching
 
-    ENHANCED: Split-adjusted data validation to prevent NFLX-style disasters
+    FIXED: Removed split-adjustment validation blocks per user request
 
     Args:
         symbols: List of stock symbols or single symbol string
@@ -200,7 +181,7 @@ def _fetch_alpaca_batch_data(symbols, current_date, days=250):
         else:
             feed_type = 'iex'  # Free feed for live trading (no SIP subscription)
 
-        # Build request (handles all 27 tickers in one call)
+        # Build request (handles all tickers in one call)
         request = StockBarsRequest(
             symbol_or_symbols=symbols,
             timeframe=TimeFrame.Day,
@@ -235,41 +216,9 @@ def _fetch_alpaca_batch_data(symbols, current_date, days=250):
                 df.set_index('timestamp', inplace=True)
                 df.sort_index(inplace=True)
 
+                # Minimum data requirement
                 if len(df) < 200:
                     continue
-
-                # ========================================================================
-                # CRITICAL FIX: Split-Adjusted Data Validation (Prevents NFLX Disasters)
-                # ========================================================================
-
-                if len(df) >= 2:
-                    recent_prices = df['close'].tail(20)
-                    price_changes = recent_prices.pct_change()
-
-                    # Flag 1: Detect single-day drops > 50% (likely split not adjusted properly)
-                    extreme_drops = price_changes[price_changes < -0.5]
-                    if not extreme_drops.empty:
-                        max_drop = extreme_drops.min() * 100
-                        print(
-                            f"⚠️  [DATA ERROR] {symbol}: Detected {max_drop:.1f}% single-day drop - SPLIT ADJUSTMENT ERROR - SKIPPING")
-                        continue
-
-                    # Flag 2: Current price < 20% of recent high (severe data issue)
-                    recent_high = recent_prices.max()
-                    current_price = df['close'].iloc[-1]
-                    if current_price < (recent_high * 0.2):
-                        drop_pct = ((current_price - recent_high) / recent_high) * 100
-                        print(
-                            f"⚠️  [DATA ERROR] {symbol}: Current ${current_price:.2f} is {drop_pct:.1f}% below recent high ${recent_high:.2f} - DATA QUALITY ISSUE - SKIPPING")
-                        continue
-
-                    # Flag 3: Unrealistic price (< $0.50 or > $100,000 per share)
-                    if current_price < 0.50:
-                        print(f"⚠️  [DATA ERROR] {symbol}: Price ${current_price:.2f} unrealistically low - SKIPPING")
-                        continue
-                    if current_price > 100000:
-                        print(f"⚠️  [DATA ERROR] {symbol}: Price ${current_price:.2f} unrealistically high - SKIPPING")
-                        continue
 
                 stock_data[symbol] = df
 

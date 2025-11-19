@@ -1,5 +1,5 @@
 """
-Portfolio Drawdown Protection System + Market Regime Detection
+Portfolio Drawdown Protection System + Market Regime Detection + Circuit Breaker
 
 INTEGRATED: Market regime detection now part of this module
 
@@ -11,6 +11,8 @@ Protects portfolio from deep drawdowns by:
 5. Enforcing recovery period before allowing new entries
 
 PLUS: Market regime detection for adaptive position sizing
+
+PLUS: CircuitBreaker class for API failure protection
 
 PRIORITY 4: ADJUSTED - Bear market now allows 30% position sizing instead of blocking entirely
 
@@ -31,9 +33,107 @@ Usage:
 
     # Market regime detection
     regime_info = detect_market_regime(spy_data, stock_data)
+
+    # Circuit breaker for API calls
+    breaker = CircuitBreaker(failure_threshold=5, cooldown_seconds=300)
 """
 
-from datetime import timedelta
+from datetime import timedelta, datetime
+
+
+# =============================================================================
+# CIRCUIT BREAKER FOR API CALLS
+# =============================================================================
+
+class CircuitBreakerOpen(Exception):
+    """Raised when circuit breaker is open"""
+    pass
+
+
+class CircuitBreaker:
+    """
+    Circuit breaker pattern for API calls
+
+    Opens after N consecutive failures, preventing further calls
+    Closes after cooldown period
+
+    Usage:
+        breaker = CircuitBreaker(failure_threshold=5, cooldown_seconds=300)
+
+        if not breaker.can_attempt():
+            raise CircuitBreakerOpen("API unavailable")
+
+        try:
+            result = api_call()
+            breaker.record_success()
+        except Exception as e:
+            breaker.record_failure()
+            raise
+    """
+
+    def __init__(self, failure_threshold=5, cooldown_seconds=300):
+        """
+        Initialize circuit breaker
+
+        Args:
+            failure_threshold: Number of failures before opening (default: 5)
+            cooldown_seconds: Cooldown period before testing recovery (default: 300 = 5 minutes)
+        """
+        self.failure_threshold = failure_threshold
+        self.cooldown_seconds = cooldown_seconds
+        self.failure_count = 0
+        self.last_failure_time = None
+        self.state = 'closed'  # 'closed', 'open', 'half_open'
+
+    def record_success(self):
+        """Record successful API call"""
+        self.failure_count = 0
+        if self.state == 'half_open':
+            self.state = 'closed'
+            print("[CIRCUIT BREAKER] Closed - API recovered")
+
+    def record_failure(self):
+        """Record failed API call"""
+        self.failure_count += 1
+        self.last_failure_time = datetime.now()
+
+        if self.failure_count >= self.failure_threshold and self.state == 'closed':
+            self.state = 'open'
+            print(
+                f"[CIRCUIT BREAKER] OPENED after {self.failure_count} failures - API calls blocked for {self.cooldown_seconds}s")
+
+    def can_attempt(self):
+        """Check if API call can be attempted"""
+        if self.state == 'closed':
+            return True
+
+        if self.state == 'open':
+            # Check if cooldown period has passed
+            if self.last_failure_time:
+                elapsed = (datetime.now() - self.last_failure_time).total_seconds()
+                if elapsed >= self.cooldown_seconds:
+                    self.state = 'half_open'
+                    print("[CIRCUIT BREAKER] Half-open - Testing API recovery")
+                    return True
+            return False
+
+        # Half-open - allow single test request
+        return True
+
+    def get_status(self):
+        """Get circuit breaker status"""
+        return {
+            'state': self.state,
+            'failure_count': self.failure_count,
+            'last_failure': self.last_failure_time
+        }
+
+    def reset(self):
+        """Manually reset circuit breaker"""
+        self.failure_count = 0
+        self.last_failure_time = None
+        self.state = 'closed'
+        print("[CIRCUIT BREAKER] Manually reset")
 
 
 # =============================================================================

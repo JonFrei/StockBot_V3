@@ -1,4 +1,3 @@
-
 def check_position_concentration(strategy, ticker, new_position_value, max_concentration_pct=20.0):
     """
     Check if adding a new position would exceed concentration limits
@@ -61,6 +60,8 @@ def calculate_buy_size(strategy, entry_price, account_threshold=40000,
                        max_position_pct=12.0, pending_commitments=0, adaptive_params=None):
     """
     Calculate position size based on available cash - NOW ADAPTIVE
+
+    FIXED: Uses effective_cash for max_position_value calculation (was using cash_balance)
 
     Adaptive behavior:
     - STRONG conditions: Use 15% position sizes (more aggressive)
@@ -129,8 +130,8 @@ def calculate_buy_size(strategy, entry_price, account_threshold=40000,
             'message': f'No available cash after threshold'
         }
 
-    # Calculate max position value using ADAPTIVE percentage
-    max_position_value = cash_balance * (max_position_pct / 100)
+    # FIXED: Calculate max position value using EFFECTIVE_CASH (not cash_balance)
+    max_position_value = effective_cash * (max_position_pct / 100)
 
     # Can't use more than available cash
     position_value = min(max_position_value, available_cash)

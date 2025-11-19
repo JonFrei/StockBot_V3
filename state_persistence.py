@@ -1,15 +1,114 @@
 """
-Minimal State Persistence for Crash Recovery
+Minimal State Persistence for Crash Recovery + Periodic Auto-Save
 
 Saves critical state to disk, restores on restart.
 Uses simple JSON files in /app/data volume.
+
+ENHANCED: Now includes PeriodicStateSaver for automatic background saves
 """
 
 import json
 import os
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
+
+# =============================================================================
+# PERIODIC STATE SAVER - AUTOMATIC BACKGROUND SAVES
+# =============================================================================
+
+class PeriodicStateSaver:
+    """
+    Background thread that periodically saves strategy state
+
+    Usage:
+        saver = PeriodicStateSaver(strategy, interval_minutes=5)
+        saver.start()
+        # ... trading runs ...
+        saver.stop()
+    """
+
+    def __init__(self, strategy, interval_minutes=5):
+        """
+        Initialize periodic saver
+
+        Args:
+            strategy: Strategy instance to save
+            interval_minutes: How often to save state (default: 5 minutes)
+        """
+        self.strategy = strategy
+        self.interval_seconds = interval_minutes * 60
+        self.running = False
+        self.thread = None
+        self.save_count = 0
+        self.last_save_time = None
+
+    def start(self):
+        """Start the background saver thread"""
+        if self.running:
+            return
+
+        self.running = True
+        self.thread = threading.Thread(target=self._save_loop, daemon=True)
+        self.thread.start()
+        print(f"[STATE SAVER] Started - saving every {self.interval_seconds / 60:.0f} minutes")
+
+    def stop(self):
+        """Stop the background saver thread"""
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=5)
+        print(f"[STATE SAVER] Stopped - total saves: {self.save_count}")
+
+    def _save_loop(self):
+        """Background loop that saves state periodically"""
+        while self.running:
+            try:
+                # Sleep in small increments to allow quick shutdown
+                for _ in range(self.interval_seconds):
+                    if not self.running:
+                        return
+                    time.sleep(1)
+
+                # Save state
+                self._save_state()
+
+            except Exception as e:
+                print(f"[STATE SAVER] Error in save loop: {e}")
+                # Continue running even if one save fails
+
+    def _save_state(self):
+        """Perform the actual state save"""
+        try:
+            save_state_safe(self.strategy)
+            self.save_count += 1
+            self.last_save_time = datetime.now()
+
+            print(f"[STATE SAVER] Auto-save #{self.save_count} completed at {self.last_save_time.strftime('%H:%M:%S')}")
+
+        except Exception as e:
+            print(f"[STATE SAVER] Save failed: {e}")
+
+    def force_save(self):
+        """Manually trigger an immediate save"""
+        print("[STATE SAVER] Forcing immediate save...")
+        self._save_state()
+
+    def get_status(self):
+        """Get saver status"""
+        return {
+            'running': self.running,
+            'save_count': self.save_count,
+            'last_save_time': self.last_save_time,
+            'interval_minutes': self.interval_seconds / 60
+        }
+
+
+# =============================================================================
+# STATE PERSISTENCE - CORE SAVE/LOAD FUNCTIONALITY
+# =============================================================================
 
 class StatePersistence:
     """Minimal persistence - only what's needed for crash recovery"""
