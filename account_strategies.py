@@ -126,14 +126,14 @@ class SwingTradeStrategy(Strategy):
 
                     if ticker in self.tickers:
                         # Check if we already have metadata (from loaded state)
-                        # if ticker not in self.position_monitor.positions_metadata:
-                        # No metadata - track as pre_existing
-                        self.position_monitor.track_position(
-                            ticker,
-                            self.get_datetime(),
-                            'pre_existing',
-                            entry_score=0
-                        )
+                        if ticker not in self.position_monitor.positions_metadata:
+                            # No metadata - track as pre_existing
+                            self.position_monitor.track_position(
+                                ticker,
+                                self.get_datetime(),
+                                'pre_existing',
+                                entry_score=0
+                            )
 
             print(f"[SYNC] Loaded {len(self.position_monitor.positions_metadata)} positions\n")
 

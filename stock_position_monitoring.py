@@ -505,10 +505,37 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
     for position in positions:
         ticker = position.symbol
 
-        # === GET DATA FROM BROKER (Source of Truth) ===
-        broker_quantity = int(position.quantity)
-        broker_entry_price = float(getattr(position, 'avg_entry_price', None) or
-                                   getattr(position, 'avg_fill_price', 0))
+        # ===== GET DATA FROM BROKER (Source of Truth) =====
+        broker_entry_price = None
+
+        # Try avg_entry_price first
+        if hasattr(position, 'avg_entry_price') and position.avg_entry_price:
+            try:
+                broker_entry_price = float(position.avg_entry_price)
+            except (ValueError, TypeError):
+                pass
+
+        # Try avg_fill_price as backup
+        if not broker_entry_price and hasattr(position, 'avg_fill_price') and position.avg_fill_price:
+            try:
+                broker_entry_price = float(position.avg_fill_price)
+            except (ValueError, TypeError):
+                pass
+
+        # Use current_price as last resort for pre-existing positions
+        if not broker_entry_price or broker_entry_price <= 0:
+            try:
+                broker_entry_price = float(position.current_price)
+                print(
+                    f"[INFO] {ticker} - Using current_price as entry (pre-existing position): ${broker_entry_price:.2f}")
+            except (ValueError, TypeError, AttributeError):
+                pass
+
+        # SAFETY CHECK: Skip if still invalid after all attempts
+        if not broker_entry_price or broker_entry_price <= 0:
+            print(f"[WARN] Skipping {ticker} - invalid entry price after all attempts: {broker_entry_price}")
+            continue
+        # =================================================
 
         if ticker not in all_stock_data:
             continue
@@ -627,6 +654,10 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
         sell_quantity = int(broker_quantity * (sell_pct / 100))
 
         if sell_quantity <= 0:
+            continue
+
+        if broker_entry_price <= 0:
+            print(f"[WARN] Skipping {ticker} - invalid entry price: {broker_entry_price}")
             continue
 
         # === SIMPLE P&L CALCULATION ===
