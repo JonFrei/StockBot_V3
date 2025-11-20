@@ -157,7 +157,8 @@ def generate_daily_summary_html(strategy, current_date):
         for position in positions:
             ticker = position.symbol
             qty = int(position.quantity)
-            entry_price = float(position.avg_fill_price)
+            entry_price = float(getattr(position, 'avg_entry_price', None) or
+                                getattr(position, 'avg_fill_price', 0))
 
             try:
                 current_price = strategy.get_last_price(ticker)
