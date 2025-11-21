@@ -1,13 +1,13 @@
 # Core Trading Libraries
 alpaca-trade-api==3.2.0
 alpaca-py==0.43.2
-polygon-api-client==1.17.0
-lumibot==3.8.2
+polygon-api-client==1.16.3
+lumibot==4.3.7
 
 # Data & Analysis
 pandas==2.2.3
 numpy==1.26.4
-yfinance==0.2.49
+yfinance==0.2.66
 
 # Networking
 websockets==13.1
@@ -17,7 +17,7 @@ requests==2.32.3
 python-dotenv==1.0.1
 
 # AI/ML (Optional)
-google-generativeai==0.8.3
+google-generativeai==0.8.5
 
 # Utilities
 pytz==2024.2
