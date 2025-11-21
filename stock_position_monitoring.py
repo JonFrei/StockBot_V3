@@ -537,6 +537,9 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
             continue
         # =================================================
 
+        # Get quantity from broker
+        broker_quantity = int(position.quantity)
+
         if ticker not in all_stock_data:
             continue
 

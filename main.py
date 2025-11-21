@@ -102,8 +102,7 @@ def main():
                 backtesting_start=start,
                 backtesting_end=end,
                 parameters={
-                    "tickers": swing_tickers,
-                    "send_emails": False
+                    "tickers": swing_tickers
                 },
                 benchmark_asset='SPY',
                 config=ALPACA_CONFIG
@@ -122,10 +121,7 @@ def main():
 
             swing_strategy = SwingTradeStrategy(
                 broker=broker,
-                tickers=swing_tickers,
-                parameters={
-                    "send_emails": True
-                },
+                tickers=swing_tickers
             )
 
             # Initialize trader
