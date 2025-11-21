@@ -545,12 +545,22 @@ def safe_generate_positions_section(strategy):
                     ticker = position.symbol
                     qty = int(position.quantity)
 
+
                     entry_price = None
                     # Try avg_entry_price first
                     if hasattr(position, 'avg_entry_price') and position.avg_entry_price:
                         try:
                             entry_price = float(position.avg_entry_price)
                         except (ValueError, TypeError):
+                            pass
+
+                    # Try cost_basis / quantity (alpaca-trade-api stores this way)
+                    if not entry_price and hasattr(position, 'cost_basis') and position.cost_basis:
+                        try:
+                            cost_basis = float(position.cost_basis)
+                            qty = int(position.quantity)
+                            entry_price = cost_basis / qty if qty > 0 else 0
+                        except (ValueError, TypeError, ZeroDivisionError):
                             pass
 
                     # Try fill_avg_price as backup

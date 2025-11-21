@@ -515,6 +515,15 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
             except (ValueError, TypeError):
                 pass
 
+        # Try cost_basis / quantity (alpaca-trade-api stores this way)
+        if not broker_entry_price and hasattr(position, 'cost_basis') and position.cost_basis:
+            try:
+                cost_basis = float(position.cost_basis)
+                qty = int(position.quantity)
+                broker_entry_price = cost_basis / qty if qty > 0 else 0
+            except (ValueError, TypeError, ZeroDivisionError):
+                pass
+
         # Try fill_avg_price as backup
         if not broker_entry_price and hasattr(position, 'fill_avg_price') and position.fill_avg_price:
             try:
