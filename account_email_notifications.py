@@ -544,9 +544,29 @@ def safe_generate_positions_section(strategy):
                 try:
                     ticker = position.symbol
                     qty = int(position.quantity)
-                    entry_price = float(getattr(position, 'avg_entry_price', None) or
-                                        getattr(position, 'filled_avg_price', None) or
-                                        getattr(position, 'avg_fill_price', 0))
+
+                    entry_price = None
+                    # Try avg_entry_price first
+                    if hasattr(position, 'avg_entry_price') and position.avg_entry_price:
+                        try:
+                            entry_price = float(position.avg_entry_price)
+                        except (ValueError, TypeError):
+                            pass
+
+                    # Try fill_avg_price as backup
+                    if not entry_price and hasattr(position, 'fill_avg_price') and position.fill_avg_price:
+                        try:
+                            entry_price = float(position.fill_avg_price)
+                        except (ValueError, TypeError):
+                            pass
+
+                    # Try avg_fill_price as backup
+                    if not entry_price and hasattr(position, 'avg_fill_price') and position.avg_fill_price:
+                        try:
+                            entry_price = float(position.avg_fill_price)
+                        except (ValueError, TypeError):
+                            pass
+
                     current_price = strategy.get_last_price(ticker)
 
                     # Safety check:

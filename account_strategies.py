@@ -178,6 +178,13 @@ class SwingTradeStrategy(Strategy):
             current_date = self.get_datetime()
             current_date_str = current_date.strftime('%Y-%m-%d')
 
+            # =====================================================================
+            # MARK THAT WE'VE TRADED TODAY
+            # =====================================================================
+
+            if not Config.BACKTESTING:
+                self.last_trade_date = current_date.date()
+
             print('\n')
             print(30 * '=' + ' Date: ' + str(current_date) + ' ' + 30 * '=')
             print('Portfolio Value:', self.portfolio_value)
@@ -582,12 +589,7 @@ class SwingTradeStrategy(Strategy):
 
             print(f"{'=' * 70}\n")
 
-            # =====================================================================
-            # MARK THAT WE'VE TRADED TODAY
-            # =====================================================================
 
-            if not Config.BACKTESTING:
-                self.last_trade_date = current_date.date()
 
             # =====================================================================
             # COMPLETE EXECUTION AND SEND EMAIL
