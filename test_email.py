@@ -1,192 +1,243 @@
 """
-Standalone Email Test Script
+Email Test Script
 
-Tests email configuration without running the full trading bot.
-This helps diagnose if the issue is with email setup or bot logic.
+Tests the email notification system with sample data.
+Run this to verify your Resend API configuration before deploying.
 
 Usage:
     python test_email.py
 """
 
 import os
+import sys
 from datetime import datetime
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
-# Get credentials
-EMAIL_SENDER = os.getenv('EMAIL_SENDER')
-EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD')
-EMAIL_RECIPIENT = os.getenv('EMAIL_RECIPIENT')
+# Import email system
+import account_email_notifications
+from config import Config
 
-print("=" * 80)
-print("EMAIL CONFIGURATION TEST")
-print("=" * 80)
-print(f"Sender: {EMAIL_SENDER}")
-print(f"Password: {'*' * len(EMAIL_PASSWORD) if EMAIL_PASSWORD else 'NOT SET'}")
-print(f"Recipient: {EMAIL_RECIPIENT}")
-print("=" * 80)
 
-# Check if all credentials are set
-if not all([EMAIL_SENDER, EMAIL_PASSWORD, EMAIL_RECIPIENT]):
-    print("\n❌ ERROR: Missing email configuration!")
-    print("\nRequired environment variables:")
-    print("  - EMAIL_SENDER (your Gmail address)")
-    print("  - EMAIL_PASSWORD (Gmail App Password - NOT your regular password)")
-    print("  - EMAIL_RECIPIENT (where to send reports)")
-    print("\n📖 How to get a Gmail App Password:")
-    print("  1. Enable 2FA on your Google account")
-    print("  2. Go to: https://myaccount.google.com/apppasswords")
-    print("  3. Create an app password for 'Mail'")
-    print("  4. Use that 16-character password (no spaces)")
-    exit(1)
+def create_test_execution_tracker():
+    """Create a sample execution tracker with test data"""
+    tracker = account_email_notifications.ExecutionTracker()
 
-print("\n✅ All credentials are set. Testing SMTP connection...\n")
+    # Add some test actions
+    tracker.record_action('entries', count=3)
+    tracker.record_action('exits', count=2)
+    tracker.record_action('rotation')
 
-# Try to send test email
-try:
-    import smtplib
-    from email.mime.text import MIMEText
-    from email.mime.multipart import MIMEMultipart
+    # Add a test warning
+    tracker.add_warning("Market volatility detected - reduced position sizing")
 
-    # Create test message
-    msg = MIMEMultipart('alternative')
-    msg['Subject'] = f"🧪 Trading Bot Email Test - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    msg['From'] = EMAIL_SENDER
-    msg['To'] = EMAIL_RECIPIENT
+    # Add a test error (optional)
+    # tracker.add_error("Test Error Context", "This is a test error", "Test traceback...")
 
-    # Plain text version
-    text_content = """
-    This is a test email from your trading bot.
+    # Complete the tracker
+    tracker.complete('SUCCESS')
 
-    If you're reading this, your email configuration is working correctly!
+    return tracker
 
-    Configuration:
-    - SMTP Server: smtp.gmail.com:465 (SSL)
-    - Sender: {}
-    - Recipient: {}
 
-    Next steps:
-    - Verify you received this at the correct address
-    - Check spam folder if not in inbox
-    - If this works, your bot's email summaries should work too
+def create_test_strategy():
+    """Create a mock strategy object with test data"""
 
-    Generated: {}
-    """.format(EMAIL_SENDER, EMAIL_RECIPIENT, datetime.now().strftime('%Y-%m-%d %I:%M:%S %p'))
+    class MockPosition:
+        def __init__(self, symbol, quantity, avg_entry_price, current_price):
+            self.symbol = symbol
+            self.quantity = quantity
+            self.avg_entry_price = avg_entry_price
+            self.current_price = current_price
 
-    # HTML version
-    html_content = """
-    <html>
-    <head>
-        <style>
-            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-            .header {{ background-color: #4CAF50; color: white; padding: 20px; text-align: center; }}
-            .content {{ padding: 20px; background-color: #f9f9f9; }}
-            .success {{ color: #4CAF50; font-weight: bold; }}
-            .info-box {{ background-color: white; padding: 15px; border-left: 4px solid #4CAF50; margin: 10px 0; }}
-            .footer {{ padding: 10px; text-align: center; color: #777; font-size: 0.9em; }}
-        </style>
-    </head>
-    <body>
-        <div class="header">
-            <h1>🧪 Trading Bot Email Test</h1>
-        </div>
+    class MockTrade:
+        def __init__(self, ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct, entry_signal, exit_date):
+            self.data = {
+                'ticker': ticker,
+                'quantity': quantity,
+                'entry_price': entry_price,
+                'exit_price': exit_price,
+                'pnl_dollars': pnl_dollars,
+                'pnl_pct': pnl_pct,
+                'entry_signal': entry_signal,
+                'exit_date': exit_date
+            }
 
-        <div class="content">
-            <p class="success">✅ SUCCESS! Your email configuration is working correctly.</p>
+        def __getitem__(self, key):
+            return self.data[key]
 
-            <div class="info-box">
-                <h3>Configuration Details:</h3>
-                <ul>
-                    <li><strong>SMTP Server:</strong> smtp.gmail.com:465 (SSL)</li>
-                    <li><strong>Sender:</strong> {}</li>
-                    <li><strong>Recipient:</strong> {}</li>
-                    <li><strong>Test Time:</strong> {}</li>
-                </ul>
-            </div>
+        def get(self, key, default=None):
+            return self.data.get(key, default)
 
-            <h3>What This Means:</h3>
-            <p>If you're reading this email, your trading bot's email notification system is properly configured 
-            and can successfully send emails. Daily trading summaries should work the same way.</p>
+    class MockProfitTracker:
+        def __init__(self):
+            self.closed_trades = [
+                MockTrade('AAPL', 10, 150.00, 155.00, 50.00, 3.33, 'swing_trade_1', datetime.now()),
+                MockTrade('MSFT', 5, 380.00, 375.00, -25.00, -1.32, 'swing_trade_2', datetime.now()),
+                MockTrade('NVDA', 15, 450.00, 475.00, 375.00, 5.56, 'golden_cross', datetime.now()),
+            ]
 
-            <h3>Next Steps:</h3>
-            <ol>
-                <li>Verify you received this at the correct address</li>
-                <li>Check your spam/junk folder if not in inbox</li>
-                <li>Add sender to contacts to ensure future emails arrive in inbox</li>
-                <li>Run your trading bot and wait for the next daily summary</li>
-            </ol>
-        </div>
+    class MockStockRotator:
+        def __init__(self):
+            self.ticker_awards = {
+                'AAPL': 'standard',
+                'MSFT': 'trial',
+                'NVDA': 'premium',
+                'GOOGL': 'trial',
+                'META': 'standard',
+            }
 
-        <div class="footer">
-            <p><em>Automated test message from SwingTradeStrategy Bot</em></p>
-        </div>
-    </body>
-    </html>
-    """.format(EMAIL_SENDER, EMAIL_RECIPIENT, datetime.now().strftime('%Y-%m-%d %I:%M:%S %p'))
+        def get_award(self, ticker):
+            return self.ticker_awards.get(ticker, 'trial')
 
-    # Attach both versions
-    part1 = MIMEText(text_content, 'plain')
-    part2 = MIMEText(html_content, 'html')
-    msg.attach(part1)
-    msg.attach(part2)
+    class MockStrategy:
+        def __init__(self):
+            self.portfolio_value = 100000.00
+            self.cash = 45000.00
+            self.profit_tracker = MockProfitTracker()
+            self.stock_rotator = MockStockRotator()
 
-    # Send email
-    print("Connecting to Gmail SMTP server...")
-    with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-        print("Logging in...")
-        smtp.login(EMAIL_SENDER, EMAIL_PASSWORD)
+        def get_cash(self):
+            return self.cash
 
-        print("Sending test email...")
-        smtp.send_message(msg)
+        def get_positions(self):
+            return [
+                MockPosition('AAPL', 10, 150.00, 152.50),
+                MockPosition('NVDA', 15, 450.00, 462.00),
+            ]
+
+        def get_last_price(self, ticker):
+            prices = {'AAPL': 152.50, 'NVDA': 462.00}
+            return prices.get(ticker, 100.00)
+
+    return MockStrategy()
+
+
+def test_email_sending():
+    """Test the email sending functionality"""
 
     print("\n" + "=" * 80)
-    print("✅ SUCCESS! Test email sent successfully!")
-    print("=" * 80)
-    print(f"\nCheck your inbox at: {EMAIL_RECIPIENT}")
-    print("(Also check spam/junk folder)")
-    print("\nIf you received the email, your configuration is correct.")
-    print("The bot's daily summaries should work the same way.")
+    print("EMAIL SYSTEM TEST")
     print("=" * 80)
 
-except smtplib.SMTPAuthenticationError as e:
+    # Check configuration
+    print("\n1. Checking Configuration...")
+    print(f"   EMAIL_SENDER: {Config.EMAIL_SENDER or 'NOT SET'}")
+    print(f"   EMAIL_RECIPIENT: {Config.EMAIL_RECIPIENT or 'NOT SET'}")
+    print(f"   RESEND_API_KEY: {'SET' if os.getenv('RESEND_API_KEY') else 'NOT SET'}")
+
+    if not Config.EMAIL_SENDER or not Config.EMAIL_RECIPIENT:
+        print("\n❌ ERROR: EMAIL_SENDER and EMAIL_RECIPIENT must be set")
+        print("   Add them to your .env file or environment variables")
+        return False
+
+    if not os.getenv('RESEND_API_KEY'):
+        print("\n⚠️  WARNING: RESEND_API_KEY not set")
+        print("   Email will be logged to console only")
+        print("   Get API key from: https://resend.com/api-keys")
+
+    # Create test data
+    print("\n2. Creating Test Data...")
+    execution_tracker = create_test_execution_tracker()
+    mock_strategy = create_test_strategy()
+    test_date = datetime.now()
+
+    print(f"   ✅ Execution tracker created")
+    print(f"   ✅ Mock strategy created with 2 positions, 3 closed trades")
+
+    # Send test email
+    print("\n3. Sending Test Email...")
+    print(f"   From: {Config.EMAIL_SENDER}")
+    print(f"   To: {Config.EMAIL_RECIPIENT}")
+    print(f"   Subject: Test Trading Bot Report - {test_date.strftime('%Y-%m-%d')}")
+
+    try:
+        account_email_notifications.send_daily_summary_email(
+            strategy=mock_strategy,
+            current_date=test_date,
+            execution_tracker=execution_tracker
+        )
+        print("\n✅ Email function completed")
+
+        if os.getenv('RESEND_API_KEY'):
+            print("\n4. Check your inbox!")
+            print(f"   Email should arrive at: {Config.EMAIL_RECIPIENT}")
+            print("   Check spam folder if not in inbox")
+        else:
+            print("\n4. Check console output above for email content")
+            print("   Add RESEND_API_KEY to send real emails")
+
+        return True
+
+    except Exception as e:
+        print(f"\n❌ ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def test_crash_notification():
+    """Test crash notification email"""
+
     print("\n" + "=" * 80)
-    print("❌ AUTHENTICATION FAILED")
-    print("=" * 80)
-    print(f"\nError: {e}")
-    print("\n🔧 Common fixes:")
-    print("  1. Make sure you're using an App Password, NOT your regular Gmail password")
-    print("  2. App Password setup:")
-    print("     - Enable 2-Factor Authentication on your Google account")
-    print("     - Go to: https://myaccount.google.com/apppasswords")
-    print("     - Create a new App Password for 'Mail'")
-    print("     - Copy the 16-character password (remove spaces)")
-    print("     - Use that as your EMAIL_PASSWORD")
-    print("  3. Verify EMAIL_SENDER matches the Google account that created the App Password")
+    print("CRASH NOTIFICATION TEST")
     print("=" * 80)
 
-except smtplib.SMTPException as e:
+    print("\nSending test crash notification...")
+
+    test_error = "Test error: Something went wrong"
+    test_traceback = """Traceback (most recent call last):
+  File "test.py", line 42, in main
+    raise ValueError("Test error")
+ValueError: Test error: Something went wrong"""
+
+    try:
+        account_email_notifications.send_crash_notification(
+            error_message=test_error,
+            error_traceback=test_traceback
+        )
+        print("✅ Crash notification sent")
+        return True
+    except Exception as e:
+        print(f"❌ ERROR: {e}")
+        return False
+
+
+def main():
+    """Run all tests"""
+
     print("\n" + "=" * 80)
-    print("❌ SMTP ERROR")
+    print("TRADING BOT EMAIL SYSTEM TEST SUITE")
     print("=" * 80)
-    print(f"\nError: {e}")
-    print("\n🔧 Possible issues:")
-    print("  - Gmail SMTP might be temporarily unavailable")
-    print("  - Check your internet connection")
-    print("  - Verify firewall isn't blocking port 465")
-    print("=" * 80)
+    print(f"Date: {datetime.now().strftime('%Y-%m-%d %I:%M:%S %p')}")
 
-except Exception as e:
+    # Test 1: Daily summary email
+    success1 = test_email_sending()
+
+    # Test 2: Crash notification
+    print("\n")
+    success2 = test_crash_notification()
+
+    # Summary
     print("\n" + "=" * 80)
-    print("❌ UNEXPECTED ERROR")
+    print("TEST SUMMARY")
     print("=" * 80)
-    print(f"\nError: {e}")
-    print(f"Error type: {type(e).__name__}")
-    print("\nPlease share this error for help debugging.")
-    print("=" * 80)
+    print(f"Daily Summary Email: {'✅ PASSED' if success1 else '❌ FAILED'}")
+    print(f"Crash Notification: {'✅ PASSED' if success2 else '❌ FAILED'}")
 
-    import traceback
+    if success1 and success2:
+        print("\n🎉 All tests passed!")
+        print("\nNext steps:")
+        print("1. Check your email inbox (or spam folder)")
+        print("2. If no email received, verify RESEND_API_KEY is correct")
+        print("3. Deploy to Railway with same environment variables")
+    else:
+        print("\n⚠️  Some tests failed - check errors above")
 
-    print("\nFull traceback:")
-    traceback.print_exc()
+    print("=" * 80 + "\n")
+
+
+if __name__ == "__main__":
+    main()

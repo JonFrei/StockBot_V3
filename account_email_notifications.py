@@ -546,8 +546,22 @@ def safe_generate_positions_section(strategy):
                     qty = int(position.quantity)
                     entry_price = float(getattr(position, 'avg_entry_price', None) or
                                         getattr(position, 'avg_fill_price', 0))
-
                     current_price = strategy.get_last_price(ticker)
+
+                    # Safety check:
+                    if entry_price <= 0:
+                        # Skip this position or use current price as fallback
+                        html += f"""
+                        <tr>
+                            <td><strong>{ticker}</strong></td>
+                            <td>{qty:,}</td>
+                            <td>N/A</td>
+                            <td>${current_price:.2f}</td>
+                            <td colspan="3">Entry price unavailable</td>
+                        </tr>
+                        """
+                        continue
+
                     pnl_dollars = (current_price - entry_price) * qty
                     pnl_pct = ((current_price - entry_price) / entry_price * 100)
                     total_unrealized += pnl_dollars
