@@ -10,7 +10,7 @@ numpy==1.26.4
 yfinance==0.2.66
 
 # Networking
-websockets==13.1
+websockets==10.4
 requests==2.32.3
 
 # Environment & Configuration
