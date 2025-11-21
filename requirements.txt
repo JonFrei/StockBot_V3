@@ -15,6 +15,3 @@ pytz
 
 # Optional: Health check endpoint
 flask
-
-# Email
-secure-smtplib

@@ -52,7 +52,7 @@ class SwingTradeStrategy(Strategy):
 
     # =========================================================================
 
-    def initialize(self):
+    def initialize(self, send_emails=True):
         """Initialize strategy with all integrated systems"""
         if Config.BACKTESTING:
             self.sleeptime = "1D"

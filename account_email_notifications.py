@@ -13,11 +13,32 @@ Key Features:
 - Tracks execution start/end times
 - Captures and reports all errors with full tracebacks
 - Separates execution status from trading details
+- Falls back to console logging when email fails
+- Uses Resend API (Railway-compatible, works everywhere)
+
+Email Configuration:
+==========================================
+Set these environment variables in Railway:
+
+Required:
+- RESEND_API_KEY: Get from https://resend.com/api-keys
+- EMAIL_SENDER: Your verified sender email
+- EMAIL_RECIPIENT: Where to send reports
+
+Setup:
+1. Sign up at https://resend.com (free tier: 100 emails/day)
+2. Add and verify your domain OR use onboarding@resend.dev
+3. Create API key
+4. Add RESEND_API_KEY to Railway environment variables
+
+Example:
+RESEND_API_KEY=re_123456789
+EMAIL_SENDER=bot@yourdomain.com
+EMAIL_RECIPIENT=you@email.com
+==========================================
 """
 
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import os
 from datetime import datetime
 from config import Config
 import traceback
@@ -85,7 +106,9 @@ class ExecutionTracker:
 
 def send_email(subject, body_html, body_text=None):
     """
-    Send email with HTML content
+    Send email with HTML content using Resend API
+
+    Falls back to console logging if email fails (e.g., no API key configured)
 
     Args:
         subject: Email subject line
@@ -100,36 +123,97 @@ def send_email(subject, body_html, body_text=None):
         return False
 
     # Check if email is configured
-    if not all([Config.EMAIL_SENDER, Config.EMAIL_PASSWORD, Config.EMAIL_RECIPIENT]):
-        print("[EMAIL] Email not configured - skipping")
+    if not all([Config.EMAIL_SENDER, Config.EMAIL_RECIPIENT]):
+        print("[EMAIL] Email not configured - logging to console instead")
+        _log_email_to_console(subject, body_html)
+        return False
+
+    # Get Resend API key
+    resend_api_key = os.getenv('RESEND_API_KEY')
+    if not resend_api_key:
+        print("[EMAIL] RESEND_API_KEY not found - logging to console instead")
+        _log_email_to_console(subject, body_html)
         return False
 
     try:
-        # Create message
-        msg = MIMEMultipart('alternative')
-        msg['Subject'] = subject
-        msg['From'] = Config.EMAIL_SENDER
-        msg['To'] = Config.EMAIL_RECIPIENT
+        import requests
 
-        # Attach plain text and HTML versions
+        # Resend API endpoint
+        url = "https://api.resend.com/emails"
+
+        # Prepare payload
+        payload = {
+            "from": Config.EMAIL_SENDER,
+            "to": [Config.EMAIL_RECIPIENT],
+            "subject": subject,
+            "html": body_html
+        }
+
+        # Add text version if provided
         if body_text:
-            part1 = MIMEText(body_text, 'plain')
-            msg.attach(part1)
+            payload["text"] = body_text
 
-        part2 = MIMEText(body_html, 'html')
-        msg.attach(part2)
+        # Send request
+        headers = {
+            "Authorization": f"Bearer {resend_api_key}",
+            "Content-Type": "application/json"
+        }
 
-        # Send email via Gmail SMTP
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-            smtp.login(Config.EMAIL_SENDER, Config.EMAIL_PASSWORD)
-            smtp.send_message(msg)
+        response = requests.post(url, json=payload, headers=headers)
 
-        print(f"[EMAIL] ✅ Sent: {subject}")
-        return True
+        if response.status_code in [200, 201]:
+            print(f"[EMAIL] ✅ Sent via Resend: {subject}")
+            return True
+        else:
+            print(f"[EMAIL] ❌ Resend API error: {response.status_code} - {response.text}")
+            _log_email_to_console(subject, body_html)
+            return False
 
     except Exception as e:
         print(f"[EMAIL] ❌ Failed to send email: {e}")
+        print(f"[EMAIL] 📝 Logging email content to console instead...")
+        _log_email_to_console(subject, body_html)
         return False
+
+
+def _log_email_to_console(subject, body_html):
+    """
+    Log email content to console when email sending fails
+
+    Useful for Railway deployments where Resend API key not configured
+    """
+    print(f"\n{'=' * 80}")
+    print(f"📧 EMAIL CONTENT (Console Log)")
+    print(f"{'=' * 80}")
+    print(f"Subject: {subject}")
+    print(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %I:%M:%S %p EST')}")
+    print(f"{'=' * 80}")
+
+    # Strip HTML tags for console readability
+    try:
+        import re
+        # Remove HTML tags
+        text = re.sub('<[^<]+?>', '', body_html)
+        # Remove multiple newlines
+        text = re.sub(r'\n\s*\n', '\n', text)
+        # Decode HTML entities
+        text = text.replace('&nbsp;', ' ')
+        text = text.replace('&amp;', '&')
+        text = text.replace('&lt;', '<')
+        text = text.replace('&gt;', '>')
+        text = text.replace('&quot;', '"')
+
+        print(text)
+    except:
+        # Fallback: just print raw HTML
+        print(body_html)
+
+    print(f"{'=' * 80}\n")
+    print(f"[EMAIL] ℹ️  To enable email delivery:")
+    print(f"[EMAIL]    1. Sign up at https://resend.com (free 100 emails/day)")
+    print(f"[EMAIL]    2. Get API key from dashboard")
+    print(f"[EMAIL]    3. Add RESEND_API_KEY to Railway environment variables")
+    print(f"{'=' * 80}\n")
 
 
 # =============================================================================
