@@ -1,17 +1,27 @@
+# Core Trading Libraries
 alpaca-trade-api==3.2.0
-polygon-api-client==1.15.4
-yfinance==0.2.37
-websockets==10.4
-lumibot==3.5.2
-alpaca-py==0.22.0
-pandas>=2.0.0
-numpy>=1.24.0
-requests>=2.31.0
-python-dotenv>=1.0.0
-google-generativeai>=0.3.0
+alpaca-py==0.33.3
+polygon-api-client==1.17.0
+lumibot==3.8.2
+
+# Data & Analysis
+pandas==2.2.3
+numpy==1.26.4
+yfinance==0.2.49
+
+# Networking
+websockets==13.1
+requests==2.32.3
+
+# Environment & Configuration
+python-dotenv==1.0.1
+
+# AI/ML (Optional)
+google-generativeai==0.8.3
 
 # Utilities
-pytz
+pytz==2024.2
 
-# Optional: Health check endpoint
-flask
+# Web Server (Health Check)
+flask==3.1.0
+werkzeug==3.1.3
