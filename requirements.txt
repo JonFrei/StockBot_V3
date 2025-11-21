@@ -1,6 +1,6 @@
 # Core Trading Libraries
 alpaca-trade-api==3.2.0
-alpaca-py==0.33.3
+alpaca-py==0.43.2
 polygon-api-client==1.17.0
 lumibot==3.8.2
 
