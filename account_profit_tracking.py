@@ -349,6 +349,7 @@ class ProfitTracker:
                 ticker = position.symbol
                 quantity = int(position.quantity)
                 entry_price = float(getattr(position, 'avg_entry_price', None) or
+                                    getattr(position, 'filled_avg_price', None) or
                                     getattr(position, 'avg_fill_price', 0))
 
                 try:
@@ -420,6 +421,7 @@ def print_daily_summary(strategy, current_date):
             ticker = position.symbol
             qty = int(position.quantity)
             entry_price = float(getattr(position, 'avg_entry_price', None) or
+                                getattr(position, 'filled_avg_price', None) or
                                 getattr(position, 'avg_fill_price', 0))
 
             try:

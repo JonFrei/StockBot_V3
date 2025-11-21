@@ -515,6 +515,13 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
             except (ValueError, TypeError):
                 pass
 
+        # Try fill_avg_price as backup
+        if not broker_entry_price and hasattr(position, 'fill_avg_price') and position.fill_avg_price:
+            try:
+                broker_entry_price = float(position.fill_avg_price)
+            except (ValueError, TypeError):
+                pass
+
         # Try avg_fill_price as backup
         if not broker_entry_price and hasattr(position, 'avg_fill_price') and position.avg_fill_price:
             try:
