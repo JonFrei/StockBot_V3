@@ -1,7 +1,7 @@
 """
 Award-Based Stock Rotation System
 
-COMPLETE REDESIGN - Awards System replacing tiered competition
+UPDATED: Integrated with database for blacklist management (per-strategy)
 
 Key Features:
 - Performance-based awards (Premium/Standard) with no slot limits
@@ -9,79 +9,119 @@ Key Features:
 - Trial period for new stocks (1.0x base for first 5 trades)
 - Relative volume requirements that scale with system maturity
 - Hybrid removal system (immediate for new, rolling window for established)
-- Integrated ticker blacklist for severe underperformers
-
-Usage:
-    rotator = StockRotator(profit_tracker=profit_tracker)
-    rotator.rotate_stocks(strategy, all_candidates, current_date, all_stock_data)
+- Database-backed ticker blacklist (per-strategy tracking)
 """
 
 from datetime import datetime, timedelta
 import stock_data
 import stock_signals as signals
 from stock_position_monitoring import calculate_market_condition_score
+from database import get_database
+from config import Config
 
 
 # =============================================================================
-# AWARD CONFIGURATION - EASY TO UPDATE
+# AWARD CONFIGURATION
 # =============================================================================
 
 class AwardConfig:
-    """Centralized configuration for award system - modify here"""
+    """Centralized configuration for award system"""
 
     # === AWARD MULTIPLIERS ===
-    PREMIUM_MULTIPLIER = 1.3  # Top performers
-    STANDARD_MULTIPLIER = 1.0  # Good performers
-    TRIAL_MULTIPLIER = 1.0  # Untested stocks (first 5 trades)
-    NO_AWARD_MULTIPLIER = 0.6  # Below threshold performers
-    FROZEN_MULTIPLIER = 0.0  # Death row (manual review needed)
+    PREMIUM_MULTIPLIER = 1.3
+    STANDARD_MULTIPLIER = 1.0
+    TRIAL_MULTIPLIER = 1.0
+    NO_AWARD_MULTIPLIER = 0.6
+    FROZEN_MULTIPLIER = 0.0
 
     # === WIN RATE THRESHOLDS ===
-    STANDARD_WIN_RATE = 55.0  # Minimum for Standard award
-    PREMIUM_WIN_RATE = 65.0  # Minimum for Premium award
-    DEATH_ROW_WIN_RATE = 30.0  # Below this = frozen
+    STANDARD_WIN_RATE = 55.0
+    PREMIUM_WIN_RATE = 65.0
+    DEATH_ROW_WIN_RATE = 30.0
 
     # === TRADE COUNT REQUIREMENTS ===
-    TRIAL_TRADE_COUNT = 5  # Trial period duration
-    STANDARD_MIN_TRADES = 5  # Minimum for Standard
-    PREMIUM_MIN_TRADES = 8  # Minimum for Premium
-    DEATH_ROW_MIN_TRADES = 10  # Need 10+ trades to freeze
+    TRIAL_TRADE_COUNT = 5
+    STANDARD_MIN_TRADES = 5
+    PREMIUM_MIN_TRADES = 8
+    DEATH_ROW_MIN_TRADES = 10
 
     # === SCALING THRESHOLDS ===
-    SCALING_START_TRADES = 100  # When to start scaling requirements
-    STANDARD_VOLUME_RATIO = 0.25  # Need 25% of avg volume for Standard
-    PREMIUM_VOLUME_RATIO = 0.40  # Need 40% of avg volume for Premium
+    SCALING_START_TRADES = 100
+    STANDARD_VOLUME_RATIO = 0.25
+    PREMIUM_VOLUME_RATIO = 0.40
 
     # === REMOVAL RULES ===
-    ROLLING_WINDOW_THRESHOLD = 20  # Use rolling window for 20+ trades
-    ROLLING_WINDOW_SIZE = 10  # Look at last 10 trades
-    ROLLING_WINDOW_WR = 50.0  # Recent WR must be above this
+    ROLLING_WINDOW_THRESHOLD = 20
+    ROLLING_WINDOW_SIZE = 10
+    ROLLING_WINDOW_WR = 50.0
 
     # === ROTATION ===
-    ROTATION_FREQUENCY = 'weekly'  # How often to rotate
+    ROTATION_FREQUENCY = 'weekly'
 
     # === BLACKLIST ===
-    BLACKLIST_CONSECUTIVE_LOSSES = 3  # Temp blacklist trigger
-    BLACKLIST_TEMP_DAYS = 21  # Temporary blacklist duration
-    BLACKLIST_LOOKBACK_TRADES = 3  # Recent trades for P&L check
-    BLACKLIST_LOSS_THRESHOLD = -1000  # Cumulative loss threshold
+    BLACKLIST_CONSECUTIVE_LOSSES = 3
+    BLACKLIST_TEMP_DAYS = 21
+    BLACKLIST_LOOKBACK_TRADES = 3
+    BLACKLIST_LOSS_THRESHOLD = -1000
 
 
 # =============================================================================
-# TICKER BLACKLIST SYSTEM (Integrated)
+# TICKER BLACKLIST SYSTEM (Database-Backed, Per-Strategy)
 # =============================================================================
 
 class TickerBlacklist:
     """
-    Proactive ticker quality monitoring system
-    Integrates with profit_tracker to analyze historical performance
+    Database-backed ticker blacklist with per-strategy tracking
     """
 
-    def __init__(self, profit_tracker):
+    def __init__(self, profit_tracker, strategy_name='swing_trade_stocks'):
         self.profit_tracker = profit_tracker
+        self.strategy_name = strategy_name
         self.consecutive_losses = {}
-        self.temporary_blacklist = {}
+        self.temporary_blacklist = {}  # {ticker: expiry_date}
         self.permanent_blacklist = set()
+
+        # Load from database
+        self._load_from_database()
+
+    def _load_from_database(self):
+        """Load blacklist from database"""
+        if Config.BACKTESTING:
+            return  # In-memory mode doesn't persist
+
+        db = get_database()
+        conn = db.get_connection()
+
+        try:
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                SELECT ticker, blacklist_type, expiry_date
+                FROM blacklist
+                WHERE strategy = %s
+            """, (self.strategy_name,))
+
+            for row in cursor.fetchall():
+                ticker = row[0]
+                blacklist_type = row[1]
+                expiry_date = row[2]
+
+                if blacklist_type == 'permanent':
+                    self.permanent_blacklist.add(ticker)
+                elif blacklist_type == 'temporary' and expiry_date:
+                    self.temporary_blacklist[ticker] = expiry_date
+
+            if self.permanent_blacklist or self.temporary_blacklist:
+                print(f"[BLACKLIST] Loaded for {self.strategy_name}:")
+                print(f"   Permanent: {len(self.permanent_blacklist)}")
+                print(f"   Temporary: {len(self.temporary_blacklist)}")
+
+        except Exception as e:
+            print(f"[WARN] Could not load blacklist from database: {e}")
+
+        finally:
+            cursor.close()
+            db.return_connection(conn)
 
     def update_from_trade(self, ticker, is_winner, current_date):
         """Update tracker when a trade closes"""
@@ -112,6 +152,9 @@ class TickerBlacklist:
             if previous_expiry is None or expiry > previous_expiry:
                 self.temporary_blacklist[ticker] = expiry
                 print(f"\n⛔ TEMPORARY BLACKLIST: {ticker} ({reason}) - Until {expiry.strftime('%Y-%m-%d')}")
+
+                # Save to database
+                self._save_to_database(ticker, 'temporary', expiry, reason)
 
     def _check_recent_loss_pnl(self, ticker, current_date):
         """Check recent cumulative losses"""
@@ -149,6 +192,40 @@ class TickerBlacklist:
                 del self.temporary_blacklist[ticker]
             print(f"\n🚫 PERMANENT BLACKLIST: {ticker} ({win_rate:.1f}% win rate over {len(trades)} trades)")
 
+            # Save to database
+            self._save_to_database(ticker, 'permanent', None, f'{win_rate:.1f}% win rate')
+
+    def _save_to_database(self, ticker, blacklist_type, expiry_date, reason):
+        """Save blacklist entry to database"""
+        if Config.BACKTESTING:
+            return  # Don't persist in backtesting
+
+        db = get_database()
+        conn = db.get_connection()
+
+        try:
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                INSERT INTO blacklist (ticker, strategy, blacklist_type, expiry_date, reason)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (ticker, strategy) DO UPDATE
+                SET blacklist_type = EXCLUDED.blacklist_type,
+                    expiry_date = EXCLUDED.expiry_date,
+                    reason = EXCLUDED.reason,
+                    created_at = CURRENT_TIMESTAMP
+            """, (ticker, self.strategy_name, blacklist_type, expiry_date, reason))
+
+            conn.commit()
+
+        except Exception as e:
+            conn.rollback()
+            print(f"[ERROR] Failed to save blacklist for {ticker}: {e}")
+
+        finally:
+            cursor.close()
+            db.return_connection(conn)
+
     def clean_expired_blacklists(self, current_date):
         """Remove expired temporary blacklists"""
         expired = [ticker for ticker, expiry in self.temporary_blacklist.items()
@@ -159,6 +236,35 @@ class TickerBlacklist:
             self.consecutive_losses[ticker] = 0
             print(f"\n✅ BLACKLIST EXPIRED: {ticker} - Back in rotation pool")
 
+            # Remove from database
+            self._remove_from_database(ticker)
+
+    def _remove_from_database(self, ticker):
+        """Remove blacklist entry from database"""
+        if Config.BACKTESTING:
+            return
+
+        db = get_database()
+        conn = db.get_connection()
+
+        try:
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                DELETE FROM blacklist
+                WHERE ticker = %s AND strategy = %s
+            """, (ticker, self.strategy_name))
+
+            conn.commit()
+
+        except Exception as e:
+            conn.rollback()
+            print(f"[ERROR] Failed to remove blacklist for {ticker}: {e}")
+
+        finally:
+            cursor.close()
+            db.return_connection(conn)
+
     def is_blacklisted(self, ticker):
         """Check if ticker is currently blacklisted"""
         return ticker in self.permanent_blacklist or ticker in self.temporary_blacklist
@@ -166,6 +272,7 @@ class TickerBlacklist:
     def get_statistics(self):
         """Get blacklist statistics"""
         return {
+            'strategy': self.strategy_name,
             'permanent_blacklist': list(self.permanent_blacklist),
             'temporary_blacklist': len(self.temporary_blacklist),
             'temp_blacklist_tickers': list(self.temporary_blacklist.keys()),
@@ -181,32 +288,24 @@ class TickerBlacklist:
 # =============================================================================
 
 class StockRotator:
-    """
-    Award-based rotation system with no slot limits
+    """Award-based rotation system with database-backed blacklist"""
 
-    Awards are granted based purely on performance:
-    - Premium: 65% WR, 10+ trades → 1.3x position size
-    - Standard: 55% WR, 5+ trades → 1.0x position size
-    - Trial: 0-4 trades → 1.0x position size
-    - None: Below thresholds → 0.6x position size
-    - Frozen: <30% WR over 10+ trades → 0.0x (manual review)
-    """
-
-    def __init__(self, rotation_frequency='weekly', profit_tracker=None):
+    def __init__(self, rotation_frequency='weekly', profit_tracker=None, strategy_name='swing_trade_stocks'):
         self.rotation_frequency = rotation_frequency
+        self.strategy_name = strategy_name
         self.active_tickers = []
         self.last_rotation_date = None
         self.rotation_count = 0
 
         # Award tracking
-        self.ticker_awards = {}  # {ticker: 'premium'/'standard'/'trial'/'none'/'frozen'}
-        self.ticker_stats = {}  # {ticker: {'trades': int, 'wins': int, 'losses': int}}
+        self.ticker_awards = {}
+        self.ticker_stats = {}
 
         # Profit tracking integration
         self.profit_tracker = profit_tracker
 
-        # Blacklist system
-        self.blacklist = TickerBlacklist(profit_tracker) if profit_tracker else None
+        # Database-backed blacklist
+        self.blacklist = TickerBlacklist(profit_tracker, strategy_name) if profit_tracker else None
 
     def should_rotate(self, current_date):
         """Check if it's time to rotate based on frequency"""
@@ -247,7 +346,7 @@ class StockRotator:
                     'wins': 0,
                     'losses': 0,
                     'win_rate': 0.0,
-                    'recent_trades': []  # For rolling window
+                    'recent_trades': []
                 }
 
             self.ticker_stats[ticker]['trades'] += 1
@@ -257,7 +356,7 @@ class StockRotator:
             else:
                 self.ticker_stats[ticker]['losses'] += 1
 
-            # Store recent trades for rolling window (keep last 20)
+            # Store recent trades for rolling window
             self.ticker_stats[ticker]['recent_trades'].append(is_winner)
             if len(self.ticker_stats[ticker]['recent_trades']) > 20:
                 self.ticker_stats[ticker]['recent_trades'].pop(0)
@@ -274,7 +373,7 @@ class StockRotator:
 
         recent = self.ticker_stats[ticker]['recent_trades']
         if len(recent) < AwardConfig.ROLLING_WINDOW_SIZE:
-            return None  # Not enough data for rolling window
+            return None
 
         last_n = recent[-AwardConfig.ROLLING_WINDOW_SIZE:]
         wins = sum(1 for trade in last_n if trade)
@@ -283,14 +382,9 @@ class StockRotator:
         return wr
 
     def calculate_award(self, ticker, total_system_trades):
-        """
-        Calculate award for a ticker based on performance
-
-        Returns: 'premium', 'standard', 'trial', 'none', or 'frozen'
-        """
-        # Get stats
+        """Calculate award for a ticker based on performance"""
         if ticker not in self.ticker_stats:
-            return 'trial'  # New ticker, no trades yet
+            return 'trial'
 
         stats = self.ticker_stats[ticker]
         trades = stats['trades']
@@ -308,22 +402,14 @@ class StockRotator:
         if trades < AwardConfig.TRIAL_TRADE_COUNT:
             return 'trial'
 
-        # === REMOVAL CHECK (HYBRID SYSTEM) ===
-
-        # For established tickers (20+ trades): use rolling window
+        # Removal check for established tickers
         if trades >= AwardConfig.ROLLING_WINDOW_THRESHOLD:
             rolling_wr = self.calculate_rolling_window_wr(ticker)
 
             if rolling_wr is not None and rolling_wr < AwardConfig.ROLLING_WINDOW_WR:
-                # Recent performance is poor - remove awards
                 return 'none'
 
-        # For newer tickers (<20 trades): use all-time WR for removal
-        # This is checked below in the qualification logic
-
-        # === SCALING REQUIREMENTS ===
-
-        # Calculate minimum trade requirements based on system maturity
+        # Calculate minimum trade requirements
         if total_system_trades >= AwardConfig.SCALING_START_TRADES:
             num_tickers = len(self.ticker_stats) if self.ticker_stats else 1
             avg_per_ticker = total_system_trades / num_tickers
@@ -340,17 +426,13 @@ class StockRotator:
             standard_min = AwardConfig.STANDARD_MIN_TRADES
             premium_min = AwardConfig.PREMIUM_MIN_TRADES
 
-        # === AWARD QUALIFICATION ===
-
-        # Premium award
+        # Award qualification
         if trades >= premium_min and wr >= AwardConfig.PREMIUM_WIN_RATE:
             return 'premium'
 
-        # Standard award
         if trades >= standard_min and wr >= AwardConfig.STANDARD_WIN_RATE:
             return 'standard'
 
-        # Doesn't qualify
         return 'none'
 
     def get_award_multiplier(self, ticker):
@@ -368,11 +450,7 @@ class StockRotator:
         return multipliers.get(award, AwardConfig.NO_AWARD_MULTIPLIER)
 
     def rotate_stocks(self, strategy, all_candidates, current_date, all_stock_data):
-        """
-        Perform weekly award evaluation
-
-        Returns: List of all tickers (awards control sizing, not availability)
-        """
+        """Perform weekly award evaluation"""
         if not all_candidates:
             return []
 
@@ -417,7 +495,7 @@ class StockRotator:
         self._display_award_summary(total_system_trades, award_changes)
 
         # Update state
-        self.active_tickers = all_candidates  # All tickers available
+        self.active_tickers = all_candidates
         self.last_rotation_date = current_date
         self.rotation_count += 1
 
@@ -425,7 +503,6 @@ class StockRotator:
 
     def _display_award_summary(self, total_system_trades, award_changes):
         """Display award evaluation summary"""
-
         # Calculate scaling requirements
         if total_system_trades >= AwardConfig.SCALING_START_TRADES:
             num_tickers = len(self.ticker_stats) if self.ticker_stats else 1
@@ -481,12 +558,11 @@ class StockRotator:
             for ticker, award in award_changes['new_awards']:
                 print(f"   {ticker}: {award}")
 
-        # Display ticker details (sorted by award tier)
+        # Display ticker details
         print(f"\n{'─' * 80}")
         print(f"{'Ticker':<8} {'Award':<10} {'Trades':<8} {'WR':<8} {'Recent':<10} {'Multiplier'}")
         print(f"{'─' * 80}")
 
-        # Sort by award tier
         tier_order = {'premium': 0, 'standard': 1, 'trial': 2, 'none': 3, 'frozen': 4}
         sorted_tickers = sorted(
             self.ticker_awards.items(),
@@ -499,13 +575,11 @@ class StockRotator:
                 trades = stats['trades']
                 wr = stats['win_rate']
 
-                # Get rolling WR if available
                 rolling_wr = self.calculate_rolling_window_wr(ticker)
                 recent_str = f"{rolling_wr:.0f}%" if rolling_wr is not None else "N/A"
 
                 multiplier = self.get_award_multiplier(ticker)
 
-                # Award emoji
                 award_emoji = {
                     'premium': '🥇',
                     'standard': '🥈',
@@ -516,7 +590,6 @@ class StockRotator:
 
                 print(f"{ticker:<8} {award_emoji} {award:<8} {trades:<8} {wr:>5.1f}%  {recent_str:<10} {multiplier}x")
             else:
-                # No stats yet
                 print(f"{ticker:<8} 🔬 trial     0        N/A    N/A        {AwardConfig.TRIAL_MULTIPLIER}x")
 
         print(f"{'─' * 80}\n")
@@ -600,7 +673,7 @@ def print_rotation_report(rotator):
     if rotator.blacklist:
         blacklist_stats = rotator.blacklist.get_statistics()
         print(f"{'=' * 80}")
-        print(f"⛔ TICKER BLACKLIST SUMMARY")
+        print(f"⛔ TICKER BLACKLIST SUMMARY ({blacklist_stats['strategy']})")
         print(f"{'=' * 80}")
         if blacklist_stats['permanent_blacklist']:
             print(f"Permanent Blacklist: {', '.join(blacklist_stats['permanent_blacklist'])}")

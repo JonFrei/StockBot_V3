@@ -52,6 +52,20 @@ class Database:
         try:
             cursor = conn.cursor()
 
+            # Tickers table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tickers (
+                    ticker VARCHAR(10) PRIMARY KEY,
+                    name VARCHAR(100),
+                    strategies TEXT[] DEFAULT '{}',
+                    is_blacklisted BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_tickers_strategies ON tickers USING GIN(strategies);
+                CREATE INDEX IF NOT EXISTS idx_tickers_blacklisted ON tickers(is_blacklisted);
+            """)
+
             # Closed trades table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS closed_trades (
@@ -112,16 +126,20 @@ class Database:
                 );
             """)
 
-            # Blacklist table
+            # Blacklist table with strategy column
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS blacklist (
-                    ticker VARCHAR(10) PRIMARY KEY,
+                    ticker VARCHAR(10),
+                    strategy VARCHAR(50),
                     blacklist_type VARCHAR(20) NOT NULL,
                     expiry_date TIMESTAMP,
                     consecutive_losses INTEGER DEFAULT 0,
                     reason VARCHAR(200),
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (ticker, strategy)
                 );
+                CREATE INDEX IF NOT EXISTS idx_blacklist_strategy ON blacklist(strategy);
+                CREATE INDEX IF NOT EXISTS idx_blacklist_type ON blacklist(blacklist_type);
             """)
 
             conn.commit()
@@ -152,6 +170,7 @@ class InMemoryDatabase:
     """
 
     def __init__(self):
+        self.tickers = {}  # {ticker: {'name': str, 'strategies': [], 'is_blacklisted': bool}}
         self.closed_trades = []
         self.position_metadata = {}
         self.bot_state = {
@@ -163,7 +182,7 @@ class InMemoryDatabase:
             'ticker_awards': {}
         }
         self.cooldowns = {}
-        self.blacklist = {}
+        self.blacklist = {}  # {(ticker, strategy): {...}}
 
         print("[MEMORY DB] In-memory database initialized for backtesting")
 
@@ -178,6 +197,27 @@ class InMemoryDatabase:
     def close_pool(self):
         """No-op for in-memory"""
         pass
+
+    # Ticker operations
+    def get_tickers_by_strategy(self, strategy_name):
+        """Get tickers for a specific strategy"""
+        result = []
+        for ticker, data in self.tickers.items():
+            if strategy_name in data.get('strategies', []) and not data.get('is_blacklisted', False):
+                result.append(ticker)
+        return result
+
+    def insert_ticker(self, ticker, name, strategies):
+        """Insert ticker into in-memory database"""
+        self.tickers[ticker] = {
+            'name': name,
+            'strategies': strategies.copy() if isinstance(strategies, list) else [],
+            'is_blacklisted': False
+        }
+
+    def get_all_tickers(self):
+        """Get all tickers"""
+        return {k: v.copy() for k, v in self.tickers.items()}
 
     # Trade operations
     def insert_trade(self, ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct,
@@ -296,22 +336,32 @@ class InMemoryDatabase:
         self.cooldowns = {}
 
     # Blacklist operations
-    def upsert_blacklist(self, ticker, blacklist_type, expiry_date, reason):
+    def upsert_blacklist(self, ticker, strategy, blacklist_type, expiry_date, reason):
         """Insert or update blacklist entry"""
-        self.blacklist[ticker] = {
+        key = (ticker, strategy)
+        self.blacklist[key] = {
             'blacklist_type': blacklist_type,
             'expiry_date': expiry_date,
             'reason': reason
         }
 
+    def get_blacklist_by_strategy(self, strategy):
+        """Get blacklist entries for specific strategy"""
+        result = {}
+        for (ticker, strat), data in self.blacklist.items():
+            if strat == strategy:
+                result[ticker] = data.copy()
+        return result
+
     def get_all_blacklist(self):
         """Get all blacklist entries"""
         return self.blacklist.copy()
 
-    def delete_blacklist(self, ticker):
+    def delete_blacklist(self, ticker, strategy):
         """Delete blacklist entry"""
-        if ticker in self.blacklist:
-            del self.blacklist[ticker]
+        key = (ticker, strategy)
+        if key in self.blacklist:
+            del self.blacklist[key]
 
     def clear_all_blacklist(self):
         """Clear all blacklist entries"""

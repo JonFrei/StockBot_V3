@@ -41,11 +41,17 @@ swing_tickers = []
 watch_list = []
 
 try:
-    with open('ticker_config.json', 'r') as f:
-        config = json.load(f)
-        core_tickers = config.get('core_stocks', [])
-        swing_tickers = config.get('swing_trade_stocks', [])
-        watch_list = config.get('watch_list', [])
+    from Utils import load_tickers
+
+    ticker_config = load_tickers()
+    core_tickers = ticker_config.get('core_stocks', [])
+    swing_tickers = ticker_config.get('swing_trade_stocks', [])
+    watch_list = ticker_config.get('watch_list', [])
+
+    if not swing_tickers:
+        print("[ERROR] No swing trade tickers loaded!")
+        exit(1)
+
 except Exception as e:
     print(f"Could not load ticker list: {e}")
     exit()
