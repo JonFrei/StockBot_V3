@@ -1,270 +1,226 @@
 """
-Minimal State Persistence for Crash Recovery + Periodic Auto-Save
-
-Saves critical state to disk, restores on restart.
-Uses simple JSON files in /app/data volume.
-
-ENHANCED: Now includes PeriodicStateSaver for automatic background saves
+State Persistence - Dual Mode (PostgreSQL for live, in-memory for backtesting)
 """
 
-import json
-import os
-import threading
-import time
 from datetime import datetime
-from pathlib import Path
+from database import get_database
+import json
+from config import Config
 
-
-# =============================================================================
-# PERIODIC STATE SAVER - AUTOMATIC BACKGROUND SAVES
-# =============================================================================
-
-class PeriodicStateSaver:
-    """
-    Background thread that periodically saves strategy state
-
-    Usage:
-        saver = PeriodicStateSaver(strategy, interval_minutes=5)
-        saver.start()
-        # ... trading runs ...
-        saver.stop()
-    """
-
-    def __init__(self, strategy, interval_minutes=5):
-        """
-        Initialize periodic saver
-
-        Args:
-            strategy: Strategy instance to save
-            interval_minutes: How often to save state (default: 5 minutes)
-        """
-        self.strategy = strategy
-        self.interval_seconds = interval_minutes * 60
-        self.running = False
-        self.thread = None
-        self.save_count = 0
-        self.last_save_time = None
-
-    def start(self):
-        """Start the background saver thread"""
-        if self.running:
-            return
-
-        self.running = True
-        self.thread = threading.Thread(target=self._save_loop, daemon=True)
-        self.thread.start()
-        print(f"[STATE SAVER] Started - saving every {self.interval_seconds / 60:.0f} minutes")
-
-    def stop(self):
-        """Stop the background saver thread"""
-        self.running = False
-        if self.thread:
-            self.thread.join(timeout=5)
-        print(f"[STATE SAVER] Stopped - total saves: {self.save_count}")
-
-    def _save_loop(self):
-        """Background loop that saves state periodically"""
-        while self.running:
-            try:
-                # Sleep in small increments to allow quick shutdown
-                for _ in range(self.interval_seconds):
-                    if not self.running:
-                        return
-                    time.sleep(1)
-
-                # Save state
-                self._save_state()
-
-            except Exception as e:
-                print(f"[STATE SAVER] Error in save loop: {e}")
-                # Continue running even if one save fails
-
-    def _save_state(self):
-        """Perform the actual state save"""
-        try:
-            save_state_safe(self.strategy)
-            self.save_count += 1
-            self.last_save_time = datetime.now()
-
-            print(f"[STATE SAVER] Auto-save #{self.save_count} completed at {self.last_save_time.strftime('%H:%M:%S')}")
-
-        except Exception as e:
-            print(f"[STATE SAVER] Save failed: {e}")
-
-    def force_save(self):
-        """Manually trigger an immediate save"""
-        print("[STATE SAVER] Forcing immediate save...")
-        self._save_state()
-
-    def get_status(self):
-        """Get saver status"""
-        return {
-            'running': self.running,
-            'save_count': self.save_count,
-            'last_save_time': self.last_save_time,
-            'interval_minutes': self.interval_seconds / 60
-        }
-
-
-# =============================================================================
-# STATE PERSISTENCE - CORE SAVE/LOAD FUNCTIONALITY
-# =============================================================================
 
 class StatePersistence:
-    """Minimal persistence - only what's needed for crash recovery"""
+    """Dual-mode state persistence"""
 
-    def __init__(self, data_dir='/app/data'):
-        self.data_dir = Path(data_dir)
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-
-        self.state_file = self.data_dir / 'bot_state.json'
-        self.backup_file = self.data_dir / 'bot_state_backup.json'
+    def __init__(self):
+        self.db = get_database()
+        self.is_memory_db = Config.BACKTESTING
 
     def save_state(self, strategy):
-        """
-        Save critical state that can't be recovered from broker
+        """Save complete bot state (PostgreSQL or in-memory)"""
 
-        What we save:
-        1. Position metadata (entry dates, signals, profit levels, highest prices)
-        2. Cooldown timers
-        3. Stock rotation state (awards, last rotation date)
-        4. Drawdown protection state
-        5. Last update timestamp
-        """
+        if self.is_memory_db:
+            self._save_state_memory(strategy)
+        else:
+            self._save_state_postgres(strategy)
 
-        state = {
-            'last_updated': datetime.now().isoformat(),
-            'portfolio_peak': strategy.drawdown_protection.portfolio_peak,
-            'drawdown_protection_active': strategy.drawdown_protection.protection_active,
-            'drawdown_protection_end_date': strategy.drawdown_protection.protection_end_date.isoformat()
-            if strategy.drawdown_protection.protection_end_date else None,
+    def _save_state_postgres(self, strategy):
+        """Save to PostgreSQL"""
+        conn = self.db.get_connection()
+        try:
+            cursor = conn.cursor()
 
-            # Position metadata - CRITICAL for exits
-            'positions_metadata': {
-                ticker: {
-                    'entry_date': meta['entry_date'].isoformat(),
-                    'entry_signal': meta['entry_signal'],
-                    'entry_score': meta.get('entry_score', 0),
-                    'highest_price': meta['highest_price'],
-                    'profit_level_1_locked': meta.get('profit_level_1_locked', False),
-                    'profit_level_2_locked': meta.get('profit_level_2_locked', False),
-                    'profit_level_3_locked': meta.get('profit_level_3_locked', False)
-                }
-                for ticker, meta in strategy.position_monitor.positions_metadata.items()
-            },
+            # Save bot state
+            cursor.execute("""
+                UPDATE bot_state SET
+                    portfolio_peak = %s,
+                    drawdown_protection_active = %s,
+                    drawdown_protection_end_date = %s,
+                    last_rotation_date = %s,
+                    last_rotation_week = %s,
+                    ticker_awards = %s,
+                    updated_at = %s
+                WHERE id = 1
+            """, (
+                strategy.drawdown_protection.portfolio_peak,
+                strategy.drawdown_protection.protection_active,
+                strategy.drawdown_protection.protection_end_date,
+                strategy.stock_rotator.last_rotation_date,
+                strategy.last_rotation_week,
+                json.dumps(strategy.stock_rotator.ticker_awards),
+                datetime.now()
+            ))
 
-            # Cooldowns - prevents immediate rebuys
-            'cooldowns': {
-                ticker: date.isoformat()
-                for ticker, date in strategy.ticker_cooldown.last_buy_dates.items()
-            },
+            # Clear and save position metadata
+            cursor.execute("DELETE FROM position_metadata")
+            for ticker, meta in strategy.position_monitor.positions_metadata.items():
+                cursor.execute("""
+                    INSERT INTO position_metadata 
+                    (ticker, entry_date, entry_signal, entry_score, highest_price, 
+                     profit_level_1_locked, profit_level_2_locked, profit_level_3_locked)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    ticker,
+                    meta['entry_date'],
+                    meta['entry_signal'],
+                    meta.get('entry_score', 0),
+                    meta['highest_price'],
+                    meta.get('profit_level_1_locked', False),
+                    meta.get('profit_level_2_locked', False),
+                    meta.get('profit_level_3_locked', False)
+                ))
 
-            # Stock rotation - awards determine position sizing
-            'stock_rotation': {
-                'ticker_awards': strategy.stock_rotator.ticker_awards,
-                'last_rotation_date': strategy.stock_rotator.last_rotation_date.isoformat()
-                if strategy.stock_rotator.last_rotation_date else None,
-                'last_rotation_week': strategy.last_rotation_week
-            },
+            # Clear and save cooldowns
+            cursor.execute("DELETE FROM cooldowns")
+            for ticker, date in strategy.ticker_cooldown.last_buy_dates.items():
+                cursor.execute("""
+                    INSERT INTO cooldowns (ticker, last_buy_date)
+                    VALUES (%s, %s)
+                """, (ticker, date))
 
-            # Blacklist state
-            'blacklist': {
-                'consecutive_losses': strategy.stock_rotator.blacklist.consecutive_losses,
-                'temporary_blacklist': {
-                    ticker: date.isoformat()
-                    for ticker, date in strategy.stock_rotator.blacklist.temporary_blacklist.items()
-                },
-                'permanent_blacklist': list(strategy.stock_rotator.blacklist.permanent_blacklist)
-            } if strategy.stock_rotator.blacklist else {}
-        }
+            # Clear and save blacklist
+            cursor.execute("DELETE FROM blacklist")
+            if strategy.stock_rotator.blacklist:
+                # Permanent blacklist
+                for ticker in strategy.stock_rotator.blacklist.permanent_blacklist:
+                    cursor.execute("""
+                        INSERT INTO blacklist (ticker, blacklist_type, reason)
+                        VALUES (%s, %s, %s)
+                    """, (ticker, 'permanent', 'Low performance'))
 
-        # Backup existing state before overwriting
-        if self.state_file.exists():
-            self.state_file.rename(self.backup_file)
+                # Temporary blacklist
+                for ticker, expiry in strategy.stock_rotator.blacklist.temporary_blacklist.items():
+                    cursor.execute("""
+                        INSERT INTO blacklist (ticker, blacklist_type, expiry_date, reason)
+                        VALUES (%s, %s, %s, %s)
+                    """, (ticker, 'temporary', expiry, 'Recent losses'))
 
-        # Write new state
-        with open(self.state_file, 'w') as f:
-            json.dump(state, f, indent=2)
+            conn.commit()
+            print(f"[DATABASE] State saved to PostgreSQL at {datetime.now().strftime('%H:%M:%S')}")
+
+        except Exception as e:
+            conn.rollback()
+            print(f"[DATABASE] Error saving state: {e}")
+            raise
+        finally:
+            cursor.close()
+            self.db.return_connection(conn)
+
+    def _save_state_memory(self, strategy):
+        """Save to in-memory database"""
+
+        # Save bot state
+        self.db.update_bot_state(
+            portfolio_peak=strategy.drawdown_protection.portfolio_peak,
+            drawdown_protection_active=strategy.drawdown_protection.protection_active,
+            drawdown_protection_end_date=strategy.drawdown_protection.protection_end_date,
+            last_rotation_date=strategy.stock_rotator.last_rotation_date,
+            last_rotation_week=strategy.last_rotation_week,
+            ticker_awards=strategy.stock_rotator.ticker_awards.copy()
+        )
+
+        # Save position metadata
+        self.db.clear_all_position_metadata()
+        for ticker, meta in strategy.position_monitor.positions_metadata.items():
+            self.db.upsert_position_metadata(
+                ticker=ticker,
+                entry_date=meta['entry_date'],
+                entry_signal=meta['entry_signal'],
+                entry_score=meta.get('entry_score', 0),
+                highest_price=meta['highest_price'],
+                profit_level_1_locked=meta.get('profit_level_1_locked', False),
+                profit_level_2_locked=meta.get('profit_level_2_locked', False),
+                profit_level_3_locked=meta.get('profit_level_3_locked', False)
+            )
+
+        # Save cooldowns
+        self.db.clear_all_cooldowns()
+        for ticker, date in strategy.ticker_cooldown.last_buy_dates.items():
+            self.db.upsert_cooldown(ticker, date)
+
+        # Save blacklist
+        self.db.clear_all_blacklist()
+        if strategy.stock_rotator.blacklist:
+            for ticker in strategy.stock_rotator.blacklist.permanent_blacklist:
+                self.db.upsert_blacklist(ticker, 'permanent', None, 'Low performance')
+
+            for ticker, expiry in strategy.stock_rotator.blacklist.temporary_blacklist.items():
+                self.db.upsert_blacklist(ticker, 'temporary', expiry, 'Recent losses')
 
     def load_state(self, strategy):
-        """
-        Restore state from disk
-        Returns True if state was restored, False if starting fresh
-        """
+        """Load bot state (PostgreSQL or in-memory)"""
 
-        if not self.state_file.exists():
-            print("\n[RECOVERY] No saved state found - starting fresh")
-            return False
+        if self.is_memory_db:
+            return self._load_state_memory(strategy)
+        else:
+            return self._load_state_postgres(strategy)
 
+    def _load_state_postgres(self, strategy):
+        """Load from PostgreSQL"""
+        conn = self.db.get_connection()
         try:
-            with open(self.state_file, 'r') as f:
-                state = json.load(f)
+            cursor = conn.cursor()
 
             print(f"\n{'=' * 80}")
-            print(f"🔄 RESTORING STATE FROM DISK")
+            print(f"🔄 RESTORING STATE FROM DATABASE")
             print(f"{'=' * 80}")
-            print(f"Last saved: {state['last_updated']}")
 
-            # Restore drawdown protection
-            if state.get('portfolio_peak'):
-                strategy.drawdown_protection.portfolio_peak = state['portfolio_peak']
-                strategy.drawdown_protection.protection_active = state.get('drawdown_protection_active', False)
+            # Load bot state
+            cursor.execute("SELECT * FROM bot_state WHERE id = 1")
+            state = cursor.fetchone()
 
-                if state.get('drawdown_protection_end_date'):
-                    strategy.drawdown_protection.protection_end_date = datetime.fromisoformat(
-                        state['drawdown_protection_end_date']
-                    )
+            if state:
+                # Restore drawdown protection
+                if state[1]:  # portfolio_peak
+                    strategy.drawdown_protection.portfolio_peak = float(state[1])
+                    strategy.drawdown_protection.protection_active = state[2]
+                    strategy.drawdown_protection.protection_end_date = state[3]
+                    print(f"✅ Drawdown Protection: Peak ${state[1]:,.2f}")
 
-                print(f"✅ Drawdown Protection: Peak ${state['portfolio_peak']:,.2f}")
+                # Restore rotation state
+                if state[4]:  # last_rotation_date
+                    strategy.stock_rotator.last_rotation_date = state[4]
+                    strategy.last_rotation_week = state[5]
 
-            # Restore position metadata
-            for ticker, meta in state.get('positions_metadata', {}).items():
-                strategy.position_monitor.positions_metadata[ticker] = {
-                    'entry_date': datetime.fromisoformat(meta['entry_date']),
-                    'entry_signal': meta['entry_signal'],
-                    'entry_score': meta.get('entry_score', 0),
-                    'highest_price': meta['highest_price'],
-                    'profit_level_1_locked': meta.get('profit_level_1_locked', False),
-                    'profit_level_2_locked': meta.get('profit_level_2_locked', False),
-                    'profit_level_3_locked': meta.get('profit_level_3_locked', False)
+                if state[6]:  # ticker_awards
+                    strategy.stock_rotator.ticker_awards = json.loads(state[6])
+                    print(f"✅ Stock Rotation: {len(strategy.stock_rotator.ticker_awards)} awards restored")
+
+            # Load position metadata
+            cursor.execute("SELECT * FROM position_metadata")
+            positions = cursor.fetchall()
+            for pos in positions:
+                strategy.position_monitor.positions_metadata[pos[0]] = {
+                    'entry_date': pos[1],
+                    'entry_signal': pos[2],
+                    'entry_score': pos[3],
+                    'highest_price': float(pos[4]),
+                    'profit_level_1_locked': pos[5],
+                    'profit_level_2_locked': pos[6],
+                    'profit_level_3_locked': pos[7]
                 }
+            print(f"✅ Position Metadata: {len(positions)} position(s)")
 
-            print(f"✅ Position Metadata: {len(state.get('positions_metadata', {}))} position(s)")
+            # Load cooldowns
+            cursor.execute("SELECT * FROM cooldowns")
+            cooldowns = cursor.fetchall()
+            for cooldown in cooldowns:
+                strategy.ticker_cooldown.last_buy_dates[cooldown[0]] = cooldown[1]
+            print(f"✅ Cooldowns: {len(cooldowns)} ticker(s)")
 
-            # Restore cooldowns
-            for ticker, date_str in state.get('cooldowns', {}).items():
-                strategy.ticker_cooldown.last_buy_dates[ticker] = datetime.fromisoformat(date_str)
+            # Load blacklist
+            cursor.execute("SELECT * FROM blacklist")
+            blacklist_entries = cursor.fetchall()
+            if strategy.stock_rotator.blacklist:
+                for entry in blacklist_entries:
+                    ticker = entry[0]
+                    blacklist_type = entry[1]
 
-            print(f"✅ Cooldowns: {len(state.get('cooldowns', {}))} ticker(s)")
+                    if blacklist_type == 'permanent':
+                        strategy.stock_rotator.blacklist.permanent_blacklist.add(ticker)
+                    elif blacklist_type == 'temporary':
+                        strategy.stock_rotator.blacklist.temporary_blacklist[ticker] = entry[2]
 
-            # Restore stock rotation
-            rotation = state.get('stock_rotation', {})
-            if rotation:
-                strategy.stock_rotator.ticker_awards = rotation.get('ticker_awards', {})
-
-                if rotation.get('last_rotation_date'):
-                    strategy.stock_rotator.last_rotation_date = datetime.fromisoformat(
-                        rotation['last_rotation_date']
-                    )
-
-                strategy.last_rotation_week = rotation.get('last_rotation_week')
-
-                print(f"✅ Stock Rotation: {len(rotation.get('ticker_awards', {}))} awards restored")
-
-            # Restore blacklist
-            blacklist_data = state.get('blacklist', {})
-            if blacklist_data and strategy.stock_rotator.blacklist:
-                strategy.stock_rotator.blacklist.consecutive_losses = blacklist_data.get('consecutive_losses', {})
-
-                for ticker, date_str in blacklist_data.get('temporary_blacklist', {}).items():
-                    strategy.stock_rotator.blacklist.temporary_blacklist[ticker] = datetime.fromisoformat(date_str)
-
-                strategy.stock_rotator.blacklist.permanent_blacklist = set(
-                    blacklist_data.get('permanent_blacklist', [])
-                )
-
-                print(f"✅ Blacklist: {len(blacklist_data.get('permanent_blacklist', []))} permanent, "
-                      f"{len(blacklist_data.get('temporary_blacklist', {}))} temporary")
+                print(f"✅ Blacklist: {len(blacklist_entries)} entries restored")
 
             print(f"{'=' * 80}\n")
 
@@ -274,27 +230,71 @@ class StatePersistence:
             return True
 
         except Exception as e:
-            print(f"\n⚠️ [RECOVERY] Failed to load state: {e}")
-            print("Starting fresh...")
+            print(f"\n⚠️ [DATABASE] Failed to load state: {e}")
             return False
+        finally:
+            cursor.close()
+            self.db.return_connection(conn)
+
+    def _load_state_memory(self, strategy):
+        """Load from in-memory database"""
+
+        print(f"\n{'=' * 80}")
+        print(f"🔄 RESTORING STATE FROM MEMORY (Backtest)")
+        print(f"{'=' * 80}")
+
+        # Load bot state
+        state = self.db.get_bot_state()
+
+        if state['portfolio_peak']:
+            strategy.drawdown_protection.portfolio_peak = state['portfolio_peak']
+            strategy.drawdown_protection.protection_active = state['drawdown_protection_active']
+            strategy.drawdown_protection.protection_end_date = state['drawdown_protection_end_date']
+            print(f"✅ Drawdown Protection: Peak ${state['portfolio_peak']:,.2f}")
+
+        if state['last_rotation_date']:
+            strategy.stock_rotator.last_rotation_date = state['last_rotation_date']
+            strategy.last_rotation_week = state['last_rotation_week']
+
+        if state['ticker_awards']:
+            strategy.stock_rotator.ticker_awards = state['ticker_awards'].copy()
+            print(f"✅ Stock Rotation: {len(strategy.stock_rotator.ticker_awards)} awards restored")
+
+        # Load position metadata
+        positions = self.db.get_all_position_metadata()
+        strategy.position_monitor.positions_metadata = positions.copy()
+        print(f"✅ Position Metadata: {len(positions)} position(s)")
+
+        # Load cooldowns
+        cooldowns = self.db.get_all_cooldowns()
+        strategy.ticker_cooldown.last_buy_dates = cooldowns.copy()
+        print(f"✅ Cooldowns: {len(cooldowns)} ticker(s)")
+
+        # Load blacklist
+        blacklist_entries = self.db.get_all_blacklist()
+        if strategy.stock_rotator.blacklist:
+            for ticker, entry in blacklist_entries.items():
+                if entry['blacklist_type'] == 'permanent':
+                    strategy.stock_rotator.blacklist.permanent_blacklist.add(ticker)
+                elif entry['blacklist_type'] == 'temporary':
+                    strategy.stock_rotator.blacklist.temporary_blacklist[ticker] = entry['expiry_date']
+
+            print(f"✅ Blacklist: {len(blacklist_entries)} entries restored")
+
+        print(f"{'=' * 80}\n")
+
+        return True
 
     def _validate_with_broker(self, strategy):
-        """
-        Cross-check saved state with broker positions
-        Warn about mismatches but don't crash
-        """
-
+        """Cross-check saved state with broker positions"""
         try:
             broker_positions = strategy.get_positions()
             broker_tickers = {p.symbol for p in broker_positions}
             state_tickers = set(strategy.position_monitor.positions_metadata.keys())
 
-            # Positions in broker but not in state
             missing_metadata = broker_tickers - state_tickers
             if missing_metadata:
                 print(f"\n⚠️ [VALIDATION] Broker has positions without metadata: {missing_metadata}")
-                print("These will be treated as pre-existing positions")
-
                 for ticker in missing_metadata:
                     strategy.position_monitor.track_position(
                         ticker,
@@ -303,12 +303,9 @@ class StatePersistence:
                         entry_score=0
                     )
 
-            # Positions in state but not in broker
             extra_metadata = state_tickers - broker_tickers
             if extra_metadata:
-                print(f"\n⚠️ [VALIDATION] State has metadata for closed positions: {extra_metadata}")
-                print("Cleaning up...")
-
+                print(f"\n⚠️ [VALIDATION] Cleaning metadata for closed positions: {extra_metadata}")
                 for ticker in extra_metadata:
                     strategy.position_monitor.clean_position_metadata(ticker)
 
@@ -320,27 +317,23 @@ class StatePersistence:
 
 
 def save_state_safe(strategy):
-    """
-    Wrapper that handles errors gracefully
-    Bot continues even if save fails
-    """
+    """Save state with error handling"""
     try:
         persistence = StatePersistence()
         persistence.save_state(strategy)
     except Exception as e:
         print(f"⚠️ Failed to save state: {e}")
-        print("Continuing anyway...")
+        if not Config.BACKTESTING:
+            raise  # Don't continue if DB save fails in live mode
 
 
 def load_state_safe(strategy):
-    """
-    Wrapper that handles errors gracefully
-    Returns False if load fails (start fresh)
-    """
+    """Load state with error handling"""
     try:
         persistence = StatePersistence()
         return persistence.load_state(strategy)
     except Exception as e:
         print(f"⚠️ Failed to load state: {e}")
-        print("Starting fresh...")
+        if not Config.BACKTESTING:
+            raise  # Don't continue if DB load fails in live mode
         return False

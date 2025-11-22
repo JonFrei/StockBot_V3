@@ -599,6 +599,7 @@ class SwingTradeStrategy(Strategy):
 
             if not Config.BACKTESTING:
                 account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
+                save_state_safe(self)
 
         except Exception as e:
             # Catch-all for any unhandled errors
