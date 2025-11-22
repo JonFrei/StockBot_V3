@@ -250,25 +250,30 @@ class PositionMonitor:
         """
         Record position metadata for monitoring
 
-        SIMPLIFIED: No quantity or price tracking - get from broker
-        ENHANCED: Now stores entry_score for analysis
+        ENHANCED: Handles recovered/orphaned positions gracefully
         """
         if ticker not in self.positions_metadata:
+            current_price = self._get_current_price(ticker)
+
             self.positions_metadata[ticker] = {
                 'entry_date': entry_date,
                 'entry_signal': entry_signal,
                 'entry_score': entry_score,
-                'highest_price': self._get_current_price(ticker),
+                'highest_price': current_price,
                 'profit_level_1_locked': False,
                 'profit_level_2_locked': False,
                 'profit_level_3_locked': False
             }
+
+            # Log recovered positions
+            if entry_signal in ['recovered_orphan', 'recovered_metadata', 'recovered_unknown']:
+                print(f"   [MONITOR] {ticker}: Tracking as {entry_signal}")
         else:
-            # If adding to existing position, keep original entry signal and score
-            # Update highest price to current
+            # Update highest price for existing position
+            current_price = self._get_current_price(ticker)
             self.positions_metadata[ticker]['highest_price'] = max(
                 self.positions_metadata[ticker].get('highest_price', 0),
-                self._get_current_price(ticker)
+                current_price
             )
 
     def update_highest_price(self, ticker, current_price):

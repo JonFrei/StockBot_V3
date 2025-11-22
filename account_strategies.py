@@ -8,6 +8,8 @@ Integrated Features:
 - Priority 4: Multi-signal conviction sizing
 - Priority 5: Momentum death exits
 - NEW: Optimal independent position sizing (Option 1)
+- NEW: PostgreSQL database with dual-mode support
+- NEW: Automatic broker reconciliation on every startup
 - ENHANCED: ExecutionTracker for guaranteed daily emails with error reporting
 """
 
@@ -20,12 +22,12 @@ import stock_position_sizing
 import account_profit_tracking
 import stock_position_monitoring
 from stock_cooldown import TickerCooldown
-from server_state_persistence import save_state_safe, load_state_safe  # Crash recovery
+from server_state_persistence import save_state_safe, load_state_safe
 
 # INTEGRATED IMPORTS (consolidated modules)
-from stock_rotation import StockRotator  # Has integrated blacklist
-import account_drawdown_protection  # Has integrated market regime
-import account_broker_data  # Trading window and market hours
+from stock_rotation import StockRotator
+import account_drawdown_protection
+import account_broker_data
 
 from lumibot.brokers import Alpaca
 
@@ -39,16 +41,15 @@ class SwingTradeStrategy(Strategy):
 
     # Active trading signals (in priority order)
     ACTIVE_SIGNALS = [
-        'swing_trade_1',  # EMA crossover + momentum
-        'swing_trade_2',  # Pullback plays
-        'consolidation_breakout',  # 75% win rate - LOOSENED
-        'golden_cross',  # 77% win rate - LOOSENED
+        'swing_trade_1',
+        'swing_trade_2',
+        'consolidation_breakout',
+        'golden_cross',
         'bollinger_buy',
-
     ]
 
     # Cooldown configuration
-    COOLDOWN_DAYS = 1  # Days between re-purchases of same ticker
+    COOLDOWN_DAYS = 1
 
     # =========================================================================
 
@@ -64,19 +65,19 @@ class SwingTradeStrategy(Strategy):
         # Track if we've traded today (for live mode)
         self.last_trade_date = None
 
-        # SIMPLIFIED: Tracker just logs completed trades
+        # Profit tracker (PostgreSQL or in-memory)
         self.profit_tracker = account_profit_tracking.ProfitTracker(self)
 
-        # Position monitoring (for exits + market condition caching)
+        # Position monitoring
         self.position_monitor = stock_position_monitoring.PositionMonitor(self)
 
-        # Ticker cooldown to prevent chasing
+        # Ticker cooldown
         self.ticker_cooldown = TickerCooldown(cooldown_days=self.COOLDOWN_DAYS)
 
-        # PRIORITY 2 & 5: Stock rotation WITH integrated blacklist + profit tracker
+        # Stock rotation with integrated blacklist
         self.stock_rotator = StockRotator(
-            rotation_frequency='weekly',  # Changed from biweekly
-            profit_tracker=self.profit_tracker  # Blacklist automatic
+            rotation_frequency='weekly',
+            profit_tracker=self.profit_tracker
         )
 
         # Dynamic rotation controls
@@ -86,7 +87,7 @@ class SwingTradeStrategy(Strategy):
         # Track rotation timing
         self.last_rotation_week = None
 
-        # Drawdown protection (has integrated market regime)
+        # Drawdown protection
         self.drawdown_protection = account_drawdown_protection.create_default_protection(
             threshold_pct=-10.0,
             recovery_days=5
@@ -95,51 +96,38 @@ class SwingTradeStrategy(Strategy):
         print(
             f"✅ Drawdown Protection: {self.drawdown_protection.threshold_pct:.1f}% threshold, {self.drawdown_protection.recovery_days}d recovery")
         print(f"✅ Ticker Cooldown: {self.ticker_cooldown.cooldown_days} days between purchases")
-        print(f"✅ Stock Rotation: Weekly award-based system (all stocks tradeable)")
+        print(f"✅ Stock Rotation: Weekly award-based system")
         print(f"✅ Award System: Premium (1.3x), Standard (1.0x), Trial (1.0x), None (0.6x)")
-        print(f"✅ Integrated Blacklist: Automatic (part of rotation)")
-        print(f"✅ Market Regime Detection: Integrated (per-ticker + global)")
-        print(f"✅ Optimal Position Sizing: Independent allocation (quality-weighted)")
-        print(f"✅ Active Signals: {len(self.ACTIVE_SIGNALS)} signals configured")
-        print(f"✅ Signal Guard: DISABLED - All signals active without restriction")
+        print(f"✅ Integrated Blacklist: Automatic")
+        print(f"✅ Market Regime Detection: Integrated")
+        print(f"✅ Optimal Position Sizing: Independent allocation")
+        print(f"✅ Active Signals: {len(self.ACTIVE_SIGNALS)} signals")
+        print(f"✅ Database: {'In-Memory (Backtest)' if Config.BACKTESTING else 'PostgreSQL (Live)'}")
+        print(f"✅ Broker Reconciliation: Runs on every startup")
 
         if not Config.BACKTESTING:
             window_info = account_broker_data.get_trading_window_info()
-            print(f"✅ LIVE TRADING WINDOW: {window_info['start_time_str']} - {window_info['end_time_str']} EST")
-            print(f"✅ Trading Frequency: Once per day")
+            print(f"✅ Trading Window: {window_info['start_time_str']} - {window_info['end_time_str']} EST")
 
     def before_starting_trading(self):
         """
-        Sync existing positions - WITH CRASH RECOVERY
+        Startup sequence with automatic broker reconciliation
+
+        CRITICAL: Runs on EVERY startup to ensure broker/database sync
         """
         if Config.BACKTESTING:
             return
 
-        # LOAD SAVED STATE FIRST (if exists)
+        print(f"\n{'🚀' * 40}")
+        print(f"STARTING TRADING BOT - INITIALIZATION SEQUENCE")
+        print(f"{'🚀' * 40}\n")
+
+        # STEP 1: Load saved state from database
+        # This also triggers automatic broker reconciliation
         load_state_safe(self)
 
-        try:
-            broker_positions = self.get_positions()
-
-            if len(broker_positions) > 0:
-                for position in broker_positions:
-                    ticker = position.symbol
-
-                    if ticker in self.tickers:
-                        # Check if we already have metadata (from loaded state)
-                        if ticker not in self.position_monitor.positions_metadata:
-                            # No metadata - track as pre_existing
-                            self.position_monitor.track_position(
-                                ticker,
-                                self.get_datetime(),
-                                'pre_existing',
-                                entry_score=0
-                            )
-
-            print(f"[SYNC] Loaded {len(self.position_monitor.positions_metadata)} positions\n")
-
-        except Exception as e:
-            print(f"[ERROR] Failed to sync positions: {e}")
+        # State loading includes reconciliation, so we're done!
+        print(f"[STARTUP] Initialization complete\n")
 
     def on_trading_iteration(self):
         # Create execution tracker for email reporting
@@ -178,10 +166,7 @@ class SwingTradeStrategy(Strategy):
             current_date = self.get_datetime()
             current_date_str = current_date.strftime('%Y-%m-%d')
 
-            # =====================================================================
-            # MARK THAT WE'VE TRADED TODAY
-            # =====================================================================
-
+            # Mark that we've traded today
             if not Config.BACKTESTING:
                 self.last_trade_date = current_date.date()
 
@@ -200,10 +185,9 @@ class SwingTradeStrategy(Strategy):
             print('\n')
 
             # =====================================================================
-            # PORTFOLIO DRAWDOWN PROTECTION - HIGHEST PRIORITY
+            # PORTFOLIO DRAWDOWN PROTECTION
             # =====================================================================
 
-            # Check if protection should trigger
             if self.drawdown_protection.should_trigger(self.portfolio_value):
                 try:
                     self.drawdown_protection.activate(
@@ -216,21 +200,18 @@ class SwingTradeStrategy(Strategy):
                 except Exception as e:
                     execution_tracker.add_error("Drawdown Protection Activation", e)
 
-                # Complete and send email
                 execution_tracker.complete('SUCCESS')
                 if not Config.BACKTESTING:
                     account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
 
-                return  # Skip rest of iteration
+                return
 
-            # Check if in recovery period
             if self.drawdown_protection.is_in_recovery(current_date):
                 self.drawdown_protection.print_status(self.portfolio_value, current_date)
                 execution_tracker.add_warning("In drawdown recovery period - no new positions")
-                # Continue to exits but no new positions
 
             # =====================================================================
-            # FETCH DATA FOR ALL TICKERS + SPY
+            # FETCH DATA
             # =====================================================================
 
             try:
@@ -245,7 +226,7 @@ class SwingTradeStrategy(Strategy):
                 return
 
             # =====================================================================
-            # PRIORITY 3: GLOBAL MARKET REGIME DETECTION
+            # MARKET REGIME DETECTION
             # =====================================================================
 
             try:
@@ -253,9 +234,9 @@ class SwingTradeStrategy(Strategy):
                 print(account_drawdown_protection.format_regime_display(regime_info))
             except Exception as e:
                 execution_tracker.add_error("Market Regime Detection", e)
-                regime_info = {'allow_trading': True}  # Default to allow trading
+                regime_info = {'allow_trading': True}
 
-            # INTEGRATED: Clean expired blacklists
+            # Clean expired blacklists
             try:
                 if self.stock_rotator.blacklist:
                     self.stock_rotator.blacklist.clean_expired_blacklists(current_date)
@@ -263,11 +244,10 @@ class SwingTradeStrategy(Strategy):
                 execution_tracker.add_error("Blacklist Cleanup", e)
 
             # =====================================================================
-            # STEP 1: CHECK ALL EXISTING POSITIONS FOR EXITS (HIGHEST PRIORITY)
+            # STEP 1: CHECK POSITIONS FOR EXITS
             # =====================================================================
 
             try:
-                # Check positions and get exit orders (uses adaptive parameters)
                 exit_orders = stock_position_monitoring.check_positions_for_exits(
                     strategy=self,
                     current_date=current_date,
@@ -275,7 +255,6 @@ class SwingTradeStrategy(Strategy):
                     position_monitor=self.position_monitor
                 )
 
-                # Execute all exit orders
                 stock_position_monitoring.execute_exit_orders(
                     strategy=self,
                     exit_orders=exit_orders,
@@ -285,7 +264,6 @@ class SwingTradeStrategy(Strategy):
                     ticker_cooldown=self.ticker_cooldown
                 )
 
-                # Record exits
                 if exit_orders:
                     execution_tracker.record_action('exits', count=len(exit_orders))
 
@@ -312,27 +290,23 @@ class SwingTradeStrategy(Strategy):
                     account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
                 return
 
-            # PRIORITY 1: SIGNAL GUARD REMOVED - Use all configured signals
             active_signal_list = self.ACTIVE_SIGNALS
 
             # =====================================================================
-            # STEP 2: STOCK ROTATION - WEEKLY AWARD EVALUATION
+            # STEP 2: STOCK ROTATION
             # =====================================================================
 
             try:
-                # Calculate weekly period
-                current_week = current_date.isocalendar()[1]  # ISO week number
+                current_week = current_date.isocalendar()[1]
                 current_year = current_date.year
                 weekly_period = (current_year, current_week)
 
                 force_rotation = False
                 if self.force_rotation_next_cycle:
                     force_rotation = True
-                    print(
-                        f"\n🌀 FORCED ROTATION: No new entries for {self.idle_iterations_without_buys} iteration(s) → refreshing active pool early")
+                    print(f"\n🌀 FORCED ROTATION: No entries for {self.idle_iterations_without_buys} iterations")
 
                 if self.last_rotation_week != weekly_period or force_rotation:
-                    # Time to rotate - perform actual rotation (scheduled or forced)
                     active_tickers = self.stock_rotator.rotate_stocks(
                         strategy=self,
                         all_candidates=self.tickers,
@@ -347,10 +321,8 @@ class SwingTradeStrategy(Strategy):
                     self.idle_iterations_without_buys = 0
                     execution_tracker.record_action('rotation')
                 else:
-                    # NOT time to rotate - use existing active list
                     active_tickers = self.stock_rotator.active_tickers
 
-                    # First iteration or empty pool - initialize active list
                     if not active_tickers:
                         active_tickers = self.stock_rotator.rotate_stocks(
                             strategy=self,
@@ -364,92 +336,61 @@ class SwingTradeStrategy(Strategy):
 
             except Exception as e:
                 execution_tracker.add_error("Stock Rotation", e)
-                active_tickers = self.tickers  # Fallback to all tickers
+                active_tickers = self.tickers
 
             # =====================================================================
-            # STEP 3: COLLECT ALL BUY OPPORTUNITIES (NEW OPTIMAL SYSTEM)
+            # STEP 3: COLLECT BUY OPPORTUNITIES
             # =====================================================================
 
             opportunities = []
 
             for ticker in active_tickers:
-
                 try:
                     if ticker not in all_stock_data:
-                        self.log_message(f"No data for {ticker}, skipping")
                         continue
 
-                    # Get stock data and indicators
                     data = all_stock_data[ticker]['indicators']
 
-                    # ===================================================================
-                    # VOLATILITY FILTER - PREVENTS MAJOR LOSSES ON HIGH-VOLATILITY STOCKS
-                    # ===================================================================
-
+                    # Volatility filter
                     vol_metrics = data.get('volatility_metrics', {})
-
-                    # Skip if too volatile (blocks NFLX, extreme TSLA moves, etc.)
                     if not vol_metrics.get('allow_trading', True):
-                        print(f"   ⚠️ {ticker} BLOCKED: {vol_metrics['risk_class'].upper()} volatility "
-                              f"(Score: {vol_metrics['volatility_score']}/10, "
-                              f"ATR: {vol_metrics['atr_pct']:.1f}%, "
-                              f"Hist Vol: {vol_metrics['hist_vol']:.0f}%)")
+                        print(f"   ⚠️ {ticker} BLOCKED: {vol_metrics['risk_class'].upper()} volatility")
                         continue
 
-                    # ===================================================================
-                    # PRIORITY 3: CHECK REGIME FOR THIS SPECIFIC TICKER
-                    # ===================================================================
-
+                    # Check regime for this ticker
                     ticker_regime = account_drawdown_protection.detect_market_regime(spy_data, stock_data=data)
-
-                    # Skip if this ticker blocked by regime
                     if not ticker_regime.get('allow_trading', True):
                         continue
 
-                    # === CHECK COOLDOWN BEFORE PROCESSING ===
+                    # Check cooldown
                     if not self.ticker_cooldown.can_buy(ticker, current_date):
                         continue
 
-                    # Skip if we already have a position
-                    has_position = ticker in self.positions
-                    if has_position:
+                    # Skip if we have position
+                    if ticker in self.positions:
                         continue
 
-                    # ===================================================================
-                    # CHECK FOR BUY SIGNAL
-                    # ===================================================================
-
+                    # Check for buy signal
                     buy_signal = stock_signals.buy_signals(data, active_signal_list, spy_data=spy_data)
-
-                    # Skip if no buy signal
                     if not buy_signal or buy_signal.get('side') != 'buy':
                         continue
 
-                    # ===================================================================
-                    # COUNT ALL TRIGGERED SIGNALS FOR THIS TICKER
-                    # ===================================================================
-
+                    # Count triggered signals
                     signal_count = stock_position_sizing.count_triggered_signals(
                         ticker, data, active_signal_list, spy_data
                     )
 
-                    # ===================================================================
-                    # CALCULATE QUALITY SCORE (Current setup only, no awards)
-                    # ===================================================================
-
+                    # Calculate quality score
                     quality_score = stock_position_sizing.calculate_opportunity_quality(
                         ticker, data, spy_data, signal_count
                     )
 
-                    # Get award info
+                    # Get multipliers
                     award = self.stock_rotator.get_award(ticker)
                     award_multiplier = self.stock_rotator.get_award_multiplier(ticker)
-
-                    # Get regime and volatility multipliers
                     regime_multiplier = ticker_regime.get('position_size_multiplier', 1.0)
                     volatility_multiplier = vol_metrics.get('position_multiplier', 1.0)
 
-                    # Store opportunity
                     opportunities.append({
                         'ticker': ticker,
                         'data': data,
@@ -469,48 +410,43 @@ class SwingTradeStrategy(Strategy):
                     continue
 
             # =====================================================================
-            # STEP 4: OPTIMAL POSITION SIZING ACROSS ALL OPPORTUNITIES
+            # STEP 4: OPTIMAL POSITION SIZING
             # =====================================================================
 
             if not opportunities:
-                print("\n📊 No buy opportunities found in this iteration\n")
+                print("\n📊 No buy opportunities found\n")
                 execution_tracker.complete('SUCCESS')
                 if not Config.BACKTESTING:
                     account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
                 return
 
             try:
-                # Create portfolio context
                 portfolio_context = stock_position_sizing.create_portfolio_context(self)
 
-                # Check if we can trade
                 if portfolio_context['deployable_cash'] <= 0:
-                    print(
-                        f"\n⚠️ No deployable cash available (${portfolio_context['total_cash']:,.0f} < ${portfolio_context['reserved_cash']:,.0f} threshold)\n")
-                    execution_tracker.add_warning("No deployable cash available")
+                    print(f"\n⚠️ No deployable cash available\n")
+                    execution_tracker.add_warning("No deployable cash")
                     execution_tracker.complete('SUCCESS')
                     if not Config.BACKTESTING:
                         account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
                     return
 
                 if portfolio_context['available_slots'] <= 0:
-                    print(
-                        f"\n⚠️ No available position slots ({portfolio_context['existing_positions_count']}/{stock_position_sizing.OptimalPositionSizingConfig.MAX_TOTAL_POSITIONS})\n")
-                    execution_tracker.add_warning("No available position slots")
+                    print(f"\n⚠️ No available position slots\n")
+                    execution_tracker.add_warning("No available slots")
                     execution_tracker.complete('SUCCESS')
                     if not Config.BACKTESTING:
                         account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
                     return
 
-                # Calculate optimal position sizes (independent allocation)
                 allocations = stock_position_sizing.calculate_independent_position_sizes(
                     opportunities,
                     portfolio_context
                 )
 
                 if not allocations:
-                    print("\n⚠️ No positions met minimum size requirements after allocation\n")
-                    execution_tracker.add_warning("No positions met minimum size requirements")
+                    print("\n⚠️ No positions met minimum size requirements\n")
+                    execution_tracker.add_warning("No positions met minimum size")
                     execution_tracker.complete('SUCCESS')
                     if not Config.BACKTESTING:
                         account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
@@ -538,7 +474,6 @@ class SwingTradeStrategy(Strategy):
                     cost = alloc['cost']
                     price = alloc['price']
 
-                    # Find original opportunity data
                     opp = next((o for o in opportunities if o['ticker'] == ticker), None)
                     if not opp:
                         continue
@@ -546,26 +481,21 @@ class SwingTradeStrategy(Strategy):
                     buy_signal = opp['buy_signal']
                     signal_count = alloc['signal_count']
 
-                    # Get display info
                     award_emoji = {'premium': '🥇', 'standard': '🥈', 'trial': '🔬', 'none': '⚪', 'frozen': '❄️'}.get(
                         alloc['award'], '❓')
                     conviction_label = ['', '• STANDARD', '⚡ MEDIUM', '🔥 HIGH', '🔥🔥 VERY HIGH'][min(signal_count, 4)]
 
-                    vol_display = f"{opp['vol_metrics']['risk_class'].upper()} (ATR: {opp['vol_metrics']['atr_pct']:.1f}%)"
+                    vol_display = f"{opp['vol_metrics']['risk_class'].upper()}"
 
                     print(f" * BUY: {ticker} x{quantity} {conviction_label} [{award_emoji} {alloc['award'].upper()}] "
                           f"({signal_count} signals)")
                     print(f"        Quality: {alloc['quality_score']:.0f}/100 ({alloc['quality_tier']})")
-                    print(
-                        f"        Price: ${price:.2f} | Cost: ${cost:,.2f} ({alloc['pct_portfolio']:.1f}% of portfolio)")
+                    print(f"        Price: ${price:.2f} | Cost: ${cost:,.2f} ({alloc['pct_portfolio']:.1f}%)")
                     print(f"        Signal: {buy_signal['signal_type']} | Vol: {vol_display}")
-                    print(
-                        f"        Multiplier: {alloc['total_multiplier']:.2f}x (Q:{alloc['quality_multiplier']:.2f} × "
-                        f"C:{alloc['conviction_multiplier']:.2f} × A:{alloc['award_multiplier']:.2f} × "
-                        f"V:{alloc['volatility_multiplier']:.2f} × R:{alloc['regime_multiplier']:.2f})")
+                    print(f"        Multiplier: {alloc['total_multiplier']:.2f}x")
                     print()
 
-                    # Track position with entry signal and score
+                    # Track position
                     self.position_monitor.track_position(
                         ticker,
                         current_date,
@@ -573,14 +503,13 @@ class SwingTradeStrategy(Strategy):
                         entry_score=signal_count
                     )
 
-                    # Create and submit order
+                    # Submit order
                     order = self.create_order(ticker, quantity, 'buy')
                     self.submit_order(order)
 
-                    # Record buy in cooldown tracker
+                    # Record in cooldown
                     self.ticker_cooldown.record_buy(ticker, current_date)
 
-                    # Record entry
                     execution_tracker.record_action('entries', count=1)
 
                 except Exception as e:
@@ -589,10 +518,8 @@ class SwingTradeStrategy(Strategy):
 
             print(f"{'=' * 70}\n")
 
-
-
             # =====================================================================
-            # COMPLETE EXECUTION AND SEND EMAIL
+            # COMPLETE EXECUTION
             # =====================================================================
 
             execution_tracker.complete('SUCCESS')
@@ -602,36 +529,28 @@ class SwingTradeStrategy(Strategy):
                 save_state_safe(self)
 
         except Exception as e:
-            # Catch-all for any unhandled errors
             execution_tracker.add_error("Trading Iteration", e)
             execution_tracker.complete('FAILED')
             if not Config.BACKTESTING:
                 account_email_notifications.send_daily_summary_email(self, self.get_datetime(), execution_tracker)
-            raise  # Re-raise to trigger crash notification
+            raise
 
     def on_strategy_end(self):
         """Display final statistics"""
 
-        # Profit tracking summary
         self.profit_tracker.display_final_summary()
 
-        # Cooldown statistics
         cooldown_stats = self.ticker_cooldown.get_statistics()
         print(f"\n{'=' * 80}")
         print(f"⏰ TICKER COOLDOWN STATISTICS")
         print(f"{'=' * 80}")
         print(f"Cooldown Period: {cooldown_stats['cooldown_days']} days")
-        print(f"Total Buys Recorded: {cooldown_stats['total_buys_recorded']}")
-        print(f"\nBuy Count by Ticker:")
-        for ticker, count in list(cooldown_stats['buy_count_by_ticker'].items())[:10]:
-            print(f"   {ticker}: {count} purchases")
+        print(f"Total Buys: {cooldown_stats['total_buys_recorded']}")
         print(f"{'=' * 80}\n")
 
-        # Rotation statistics (includes integrated blacklist)
         from stock_rotation import print_rotation_report
         print_rotation_report(self.stock_rotator)
 
-        # Drawdown protection summary
         account_drawdown_protection.print_protection_summary(self.drawdown_protection)
 
         return 0

@@ -1,5 +1,6 @@
 """
 State Persistence - Dual Mode (PostgreSQL for live, in-memory for backtesting)
+WITH INTEGRATED POSITION RECONCILIATION
 """
 
 from datetime import datetime
@@ -9,7 +10,7 @@ from config import Config
 
 
 class StatePersistence:
-    """Dual-mode state persistence"""
+    """Dual-mode state persistence with broker reconciliation"""
 
     def __init__(self):
         self.db = get_database()
@@ -224,8 +225,8 @@ class StatePersistence:
 
             print(f"{'=' * 80}\n")
 
-            # Validate with broker
-            self._validate_with_broker(strategy)
+            # CRITICAL: Reconcile with broker after loading state
+            self._reconcile_broker_positions(strategy)
 
             return True
 
@@ -285,35 +286,241 @@ class StatePersistence:
 
         return True
 
-    def _validate_with_broker(self, strategy):
-        """Cross-check saved state with broker positions"""
+    def _reconcile_broker_positions(self, strategy):
+        """
+        INTEGRATED RECONCILIATION - Runs on every startup
+
+        Syncs broker positions with database:
+        - Adopts orphaned positions (in broker, not in database)
+        - Cleans stale entries (in database, not in broker)
+        - Uses broker's avg_entry_price for accuracy
+        - Broker is source of truth for quantity/price
+        - Keeps cooldowns intact
+        """
+
+        print(f"\n{'=' * 80}")
+        print(f"🔄 BROKER RECONCILIATION - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"{'=' * 80}")
+
         try:
+            current_date = strategy.get_datetime()
+
+            # Get positions from broker (SOURCE OF TRUTH)
             broker_positions = strategy.get_positions()
             broker_tickers = {p.symbol for p in broker_positions}
-            state_tickers = set(strategy.position_monitor.positions_metadata.keys())
 
-            missing_metadata = broker_tickers - state_tickers
-            if missing_metadata:
-                print(f"\n⚠️ [VALIDATION] Broker has positions without metadata: {missing_metadata}")
-                for ticker in missing_metadata:
-                    strategy.position_monitor.track_position(
-                        ticker,
-                        strategy.get_datetime(),
-                        'recovered_unknown',
-                        entry_score=0
-                    )
+            # Get positions from database
+            db_tickers = set(strategy.position_monitor.positions_metadata.keys())
 
-            extra_metadata = state_tickers - broker_tickers
-            if extra_metadata:
-                print(f"\n⚠️ [VALIDATION] Cleaning metadata for closed positions: {extra_metadata}")
-                for ticker in extra_metadata:
-                    strategy.position_monitor.clean_position_metadata(ticker)
+            print(f"📊 Broker: {len(broker_tickers)} position(s)")
+            print(f"📊 Database: {len(db_tickers)} position(s)")
 
-            if not missing_metadata and not extra_metadata:
-                print(f"✅ [VALIDATION] State matches broker ({len(broker_tickers)} position(s))")
+            orphaned_count = 0
+            cleaned_count = 0
+
+            # =====================================================================
+            # CASE 1: ORPHANED POSITIONS (In broker, not in database)
+            # =====================================================================
+
+            orphaned = broker_tickers - db_tickers
+
+            if orphaned:
+                print(f"\n⚠️  ORPHANED POSITIONS: {len(orphaned)}")
+                print(f"{'─' * 80}")
+
+                for ticker in orphaned:
+                    position = next(p for p in broker_positions if p.symbol == ticker)
+                    quantity = int(position.quantity)
+
+                    # Get broker's entry price
+                    entry_price = self._get_broker_entry_price(position, strategy, ticker)
+
+                    if entry_price <= 0:
+                        print(f"   ❌ {ticker}: Invalid entry price - SKIPPING")
+                        continue
+
+                    # Get current price for highest_price
+                    try:
+                        current_price = strategy.get_last_price(ticker)
+                        highest_price = max(entry_price, current_price)
+                    except:
+                        highest_price = entry_price
+
+                    # Add to position tracking
+                    strategy.position_monitor.positions_metadata[ticker] = {
+                        'entry_date': current_date,
+                        'entry_signal': 'recovered_orphan',
+                        'entry_score': 0,
+                        'highest_price': highest_price,
+                        'profit_level_1_locked': False,
+                        'profit_level_2_locked': False,
+                        'profit_level_3_locked': False
+                    }
+
+                    # Save to database
+                    self._save_position_metadata(ticker, current_date, entry_price, highest_price)
+
+                    print(f"   ✅ {ticker}: ADOPTED - {quantity} shares @ ${entry_price:.2f}")
+
+                    # Check cooldown status (KEEP IT)
+                    if hasattr(strategy, 'ticker_cooldown'):
+                        cooldown_status = strategy.ticker_cooldown.get_status(ticker, current_date)
+                        if not cooldown_status['can_buy']:
+                            print(f"      ⏰ Cooldown: {cooldown_status['days_until_can_buy']} day(s) - KEPT")
+
+                    orphaned_count += 1
+
+                print(f"{'─' * 80}")
+
+            # =====================================================================
+            # CASE 2: MISSING FROM BROKER (In database, not in broker)
+            # =====================================================================
+
+            missing = db_tickers - broker_tickers
+
+            if missing:
+                print(f"\n🧹 STALE ENTRIES: {len(missing)}")
+                print(f"{'─' * 80}")
+
+                for ticker in missing:
+                    print(f"   🗑️  {ticker}: Position closed - cleaning metadata")
+
+                    # Remove from tracking
+                    del strategy.position_monitor.positions_metadata[ticker]
+
+                    # Remove from database
+                    self._delete_position_metadata(ticker)
+
+                    cleaned_count += 1
+
+                print(f"{'─' * 80}")
+
+            # =====================================================================
+            # SUMMARY
+            # =====================================================================
+
+            print(f"\n📋 RECONCILIATION SUMMARY:")
+            print(f"   Orphaned Adopted: {orphaned_count}")
+            print(f"   Stale Cleaned: {cleaned_count}")
+
+            if orphaned_count == 0 and cleaned_count == 0:
+                print(f"   ✅ All positions in sync!")
+
+            print(f"{'=' * 80}\n")
+
+            # Save state if anything changed
+            if orphaned_count > 0 or cleaned_count > 0:
+                save_state_safe(strategy)
+                print(f"💾 State saved after reconciliation\n")
 
         except Exception as e:
-            print(f"⚠️ [VALIDATION] Could not validate with broker: {e}")
+            print(f"\n❌ RECONCILIATION ERROR: {e}")
+            print(f"   Continuing with current state...\n")
+
+            import traceback
+            traceback.print_exc()
+
+    def _get_broker_entry_price(self, position, strategy, ticker):
+        """Get entry price from broker position"""
+
+        # Try avg_entry_price
+        if hasattr(position, 'avg_entry_price') and position.avg_entry_price:
+            try:
+                price = float(position.avg_entry_price)
+                if price > 0:
+                    return price
+            except (ValueError, TypeError):
+                pass
+
+        # Try cost_basis / quantity
+        if hasattr(position, 'cost_basis') and hasattr(position, 'quantity'):
+            try:
+                cost_basis = float(position.cost_basis)
+                quantity = float(position.quantity)
+                if quantity > 0 and cost_basis > 0:
+                    price = cost_basis / quantity
+                    if price > 0:
+                        return price
+            except (ValueError, TypeError, ZeroDivisionError):
+                pass
+
+        # Try avg_fill_price
+        if hasattr(position, 'avg_fill_price') and position.avg_fill_price:
+            try:
+                price = float(position.avg_fill_price)
+                if price > 0:
+                    return price
+            except (ValueError, TypeError):
+                pass
+
+        # Last resort: current price
+        try:
+            current_price = strategy.get_last_price(ticker)
+            print(f"      ⚠️  Using current price ${current_price:.2f}")
+            return current_price
+        except:
+            return 0.0
+
+    def _save_position_metadata(self, ticker, entry_date, entry_price, highest_price):
+        """Save position metadata to database"""
+
+        try:
+            conn = self.db.get_connection()
+
+            try:
+                cursor = conn.cursor()
+
+                cursor.execute("""
+                    INSERT INTO position_metadata 
+                    (ticker, entry_date, entry_signal, entry_score, highest_price,
+                     profit_level_1_locked, profit_level_2_locked, profit_level_3_locked)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (ticker) DO UPDATE SET
+                        entry_date = EXCLUDED.entry_date,
+                        entry_signal = EXCLUDED.entry_signal,
+                        highest_price = EXCLUDED.highest_price,
+                        updated_at = CURRENT_TIMESTAMP
+                """, (
+                    ticker,
+                    entry_date,
+                    'recovered_orphan',
+                    0,
+                    highest_price,
+                    False,
+                    False,
+                    False
+                ))
+
+                conn.commit()
+
+            finally:
+                cursor.close()
+                self.db.return_connection(conn)
+
+        except Exception as e:
+            print(f"      ⚠️  Save failed: {e}")
+
+    def _delete_position_metadata(self, ticker):
+        """Delete position metadata from database"""
+
+        try:
+            conn = self.db.get_connection()
+
+            try:
+                cursor = conn.cursor()
+
+                cursor.execute("""
+                    DELETE FROM position_metadata WHERE ticker = %s
+                """, (ticker,))
+
+                conn.commit()
+
+            finally:
+                cursor.close()
+                self.db.return_connection(conn)
+
+        except Exception as e:
+            print(f"      ⚠️  Delete failed: {e}")
 
 
 def save_state_safe(strategy):
