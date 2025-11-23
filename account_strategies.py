@@ -300,12 +300,22 @@ class SwingTradeStrategy(Strategy):
             # STEP 2: STOCK ROTATION
             # =====================================================================
 
+            # =====================================================================
+            # STEP 2: STOCK ROTATION
+            # =====================================================================
+
             try:
                 current_week = current_date.isocalendar()[1]
                 current_year = current_date.year
                 weekly_period = (current_year, current_week)
 
                 force_rotation = False
+
+                # Force initial rotation if never run
+                if self.stock_rotator.rotation_count == 0:
+                    force_rotation = True
+                    print(f"\n🌀 INITIAL ROTATION: First evaluation on startup")
+
                 if self.force_rotation_next_cycle:
                     force_rotation = True
                     print(f"\n🌀 FORCED ROTATION: No entries for {self.idle_iterations_without_buys} iterations")
@@ -341,7 +351,6 @@ class SwingTradeStrategy(Strategy):
             except Exception as e:
                 execution_tracker.add_error("Stock Rotation", e)
                 active_tickers = self.tickers
-
             # =====================================================================
             # STEP 3: COLLECT BUY OPPORTUNITIES (WITH CACHED REGIME)
             # =====================================================================
@@ -540,22 +549,44 @@ class SwingTradeStrategy(Strategy):
                 account_email_notifications.send_daily_summary_email(self, self.get_datetime(), execution_tracker)
             raise
 
-    def on_strategy_end(self):
-        """Display final statistics"""
 
-        self.profit_tracker.display_final_summary()
+def on_strategy_end(self):
+    """Display final statistics"""
 
-        cooldown_stats = self.ticker_cooldown.get_statistics()
-        print(f"\n{'=' * 80}")
-        print(f"⏰ TICKER COOLDOWN STATISTICS")
-        print(f"{'=' * 80}")
-        print(f"Cooldown Period: {cooldown_stats['cooldown_days']} days")
-        print(f"Total Buys: {cooldown_stats['total_buys_recorded']}")
-        print(f"{'=' * 80}\n")
+    self.profit_tracker.display_final_summary()
 
-        from stock_rotation import print_rotation_report
-        print_rotation_report(self.stock_rotator)
+    cooldown_stats = self.ticker_cooldown.get_statistics()
+    print(f"\n{'=' * 80}")
+    print(f"⏰ TICKER COOLDOWN STATISTICS")
+    print(f"{'=' * 80}")
+    print(f"Cooldown Period: {cooldown_stats['cooldown_days']} days")
+    print(f"Total Buys: {cooldown_stats['total_buys_recorded']}")
+    print(f"{'=' * 80}\n")
 
-        account_drawdown_protection.print_protection_summary(self.drawdown_protection)
+    # Force final rotation to ensure awards are current
+    if self.stock_rotator.rotation_count > 0 or Config.BACKTESTING:
+        print(f"\n🔄 FINAL AWARD EVALUATION...")
+        try:
+            current_date = self.get_datetime()
 
-        return 0
+            # Fetch final data for SPY and all tickers
+            import stock_data
+            all_tickers = list(set(self.tickers + ['SPY']))
+            all_stock_data = stock_data.process_data(all_tickers, current_date)
+
+            # Run final rotation to update awards
+            self.stock_rotator.rotate_stocks(
+                strategy=self,
+                all_candidates=self.tickers,
+                current_date=current_date,
+                all_stock_data=all_stock_data
+            )
+        except Exception as e:
+            print(f"[WARN] Could not run final rotation: {e}")
+
+    from stock_rotation import print_rotation_report
+    print_rotation_report(self.stock_rotator)
+
+    account_drawdown_protection.print_protection_summary(self.drawdown_protection)
+
+    return 0

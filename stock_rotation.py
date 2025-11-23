@@ -333,8 +333,8 @@ class StockRotator:
         # Reset stats
         self.ticker_stats = {}
 
-        # Get closed trades
-        closed_trades = self.profit_tracker.closed_trades
+        # Get closed trades - USE THE METHOD, NOT ATTRIBUTE
+        closed_trades = self.profit_tracker.get_closed_trades()
 
         for trade in closed_trades:
             ticker = trade['ticker']
@@ -460,6 +460,15 @@ class StockRotator:
 
         # Update statistics from profit tracker
         self.update_ticker_stats_from_tracker()
+
+        # ADD DEBUG OUTPUT - TO BE REMOVED
+        print(f"[DEBUG] Ticker stats found: {len(self.ticker_stats)}")
+        if self.ticker_stats:
+            for ticker, stats in list(self.ticker_stats.items())[:5]:  # Show first 5
+                print(f"[DEBUG]   {ticker}: {stats['trades']} trades, {stats['win_rate']:.1f}% WR")
+        else:
+            print(
+                f"[DEBUG] ⚠️  No ticker stats - profit tracker has {len(self.profit_tracker.get_closed_trades())} trades")
 
         # Calculate total system trades
         total_system_trades = sum(stats['trades'] for stats in self.ticker_stats.values())

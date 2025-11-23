@@ -102,7 +102,7 @@ class Database:
                 );
             """)
 
-            # Bot state table (single row for current state)
+            # Bot state table (single row for current state) - UPDATED WITH rotation_count
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS bot_state (
                     id INTEGER PRIMARY KEY DEFAULT 1,
@@ -111,6 +111,7 @@ class Database:
                     drawdown_protection_end_date TIMESTAMP,
                     last_rotation_date TIMESTAMP,
                     last_rotation_week VARCHAR(10),
+                    rotation_count INTEGER DEFAULT 0,
                     ticker_awards JSONB DEFAULT '{}',
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     CONSTRAINT single_row CHECK (id = 1)
@@ -426,13 +427,15 @@ class InMemoryDatabase:
 
     def update_bot_state(self, portfolio_peak, drawdown_protection_active,
                          drawdown_protection_end_date, last_rotation_date,
-                         last_rotation_week, ticker_awards):
+                         last_rotation_week, rotation_count, ticker_awards):
+        """Update bot state in memory"""
         self.bot_state = {
             'portfolio_peak': portfolio_peak,
             'drawdown_protection_active': drawdown_protection_active,
             'drawdown_protection_end_date': drawdown_protection_end_date,
             'last_rotation_date': last_rotation_date,
             'last_rotation_week': last_rotation_week,
+            'rotation_count': rotation_count,
             'ticker_awards': ticker_awards
         }
 

@@ -30,7 +30,7 @@ class StatePersistence:
         try:
             cursor = conn.cursor()
 
-            # Save bot state
+            # Save bot state - UPDATED WITH rotation_count
             cursor.execute("""
                 UPDATE bot_state SET
                     portfolio_peak = %s,
@@ -38,6 +38,7 @@ class StatePersistence:
                     drawdown_protection_end_date = %s,
                     last_rotation_date = %s,
                     last_rotation_week = %s,
+                    rotation_count = %s,
                     ticker_awards = %s,
                     updated_at = %s
                 WHERE id = 1
@@ -47,6 +48,7 @@ class StatePersistence:
                 strategy.drawdown_protection.protection_end_date,
                 strategy.stock_rotator.last_rotation_date,
                 strategy.last_rotation_week,
+                strategy.stock_rotator.rotation_count,  # ADDED
                 json.dumps(strategy.stock_rotator.ticker_awards),
                 datetime.now()
             ))
@@ -109,13 +111,14 @@ class StatePersistence:
     def _save_state_memory(self, strategy):
         """Save to in-memory database"""
 
-        # Save bot state
+        # Save bot state - UPDATED WITH rotation_count
         self.db.update_bot_state(
             portfolio_peak=strategy.drawdown_protection.portfolio_peak,
             drawdown_protection_active=strategy.drawdown_protection.protection_active,
             drawdown_protection_end_date=strategy.drawdown_protection.protection_end_date,
             last_rotation_date=strategy.stock_rotator.last_rotation_date,
             last_rotation_week=strategy.last_rotation_week,
+            rotation_count=strategy.stock_rotator.rotation_count,  # ADDED
             ticker_awards=strategy.stock_rotator.ticker_awards.copy()
         )
 
@@ -182,8 +185,14 @@ class StatePersistence:
                     strategy.stock_rotator.last_rotation_date = state[4]
                     strategy.last_rotation_week = state[5]
 
-                if state[6]:  # ticker_awards
-                    strategy.stock_rotator.ticker_awards = json.loads(state[6])
+                # Restore rotation count - ADDED
+                if state[6] is not None:  # rotation_count
+                    strategy.stock_rotator.rotation_count = state[6]
+                    print(f"✅ Rotation Count: {state[6]} rotation(s) completed")
+
+                # Restore ticker awards
+                if state[7]:  # ticker_awards
+                    strategy.stock_rotator.ticker_awards = json.loads(state[7])
                     print(f"✅ Stock Rotation: {len(strategy.stock_rotator.ticker_awards)} awards restored")
 
             # Load position metadata
@@ -256,6 +265,11 @@ class StatePersistence:
         if state['last_rotation_date']:
             strategy.stock_rotator.last_rotation_date = state['last_rotation_date']
             strategy.last_rotation_week = state['last_rotation_week']
+
+        # Restore rotation count - ADDED
+        if state.get('rotation_count') is not None:
+            strategy.stock_rotator.rotation_count = state['rotation_count']
+            print(f"✅ Rotation Count: {state['rotation_count']} rotation(s) completed")
 
         if state['ticker_awards']:
             strategy.stock_rotator.ticker_awards = state['ticker_awards'].copy()
