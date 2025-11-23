@@ -619,6 +619,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
 def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, profit_tracker, ticker_cooldown=None):
     """
     Execute exit orders using BROKER data for P&L calculation
+    WITH CONFIRMATION TRACKING
     """
 
     for order in exit_orders:
@@ -651,6 +652,12 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
         total_pnl = pnl_per_share * sell_quantity
         pnl_pct = (pnl_per_share / broker_entry_price * 100)
 
+        # === GET CONFIRMATION METADATA ===
+        metadata = position_monitor.get_position_metadata(ticker)
+        was_watchlisted = metadata.get('was_watchlisted', False) if metadata else False
+        confirmation_date = metadata.get('confirmation_date', None) if metadata else None
+        days_to_confirmation = metadata.get('days_to_confirmation', 0) if metadata else 0
+
         # === PARTIAL EXIT ===
         if exit_type == 'partial_exit':
             profit_level = order.get('profit_level', 0)
@@ -663,6 +670,8 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
             print(f"Selling: {sell_quantity} shares ({sell_pct:.0f}%) @ ${current_price:.2f}")
             print(f"P&L: ${total_pnl:+,.2f} ({pnl_pct:+.1f}%)")
             print(f"Remaining: {remaining} shares")
+            if was_watchlisted:
+                print(f"Entry: CONFIRMED after {days_to_confirmation} day(s)")
             print(f"{'=' * 70}\n")
 
             # Mark profit level
@@ -673,7 +682,7 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
             elif profit_level == 3:
                 position_monitor.mark_profit_level_3_locked(ticker)
 
-            # === RECORD THE TRADE (with entry score) ===
+            # === RECORD THE TRADE (with confirmation data) ===
             profit_tracker.record_trade(
                 ticker=ticker,
                 quantity_sold=sell_quantity,
@@ -682,7 +691,10 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
                 exit_date=current_date,
                 entry_signal=entry_signal,
                 exit_signal=order,
-                entry_score=entry_score
+                entry_score=entry_score,
+                was_watchlisted=was_watchlisted,
+                confirmation_date=confirmation_date,
+                days_to_confirmation=days_to_confirmation
             )
 
             # Execute sell
@@ -708,10 +720,12 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
             print(f"Position: {broker_quantity} shares @ ${broker_entry_price:.2f}")
             print(f"Selling: {sell_quantity} shares @ ${current_price:.2f}")
             print(f"P&L: ${total_pnl:+,.2f} ({pnl_pct:+.1f}%)")
+            if was_watchlisted:
+                print(f"Entry: CONFIRMED after {days_to_confirmation} day(s)")
             print(f"Reason: {message}")
             print(f"{'=' * 70}\n")
 
-            # === RECORD THE TRADE (with entry score) ===
+            # === RECORD THE TRADE (with confirmation data) ===
             profit_tracker.record_trade(
                 ticker=ticker,
                 quantity_sold=sell_quantity,
@@ -720,7 +734,10 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
                 exit_date=current_date,
                 entry_signal=entry_signal,
                 exit_signal=order,
-                entry_score=entry_score
+                entry_score=entry_score,
+                was_watchlisted=was_watchlisted,
+                confirmation_date=confirmation_date,
+                days_to_confirmation=days_to_confirmation
             )
 
             # Clean metadata
