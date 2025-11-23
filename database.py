@@ -164,14 +164,29 @@ class Database:
 # =============================================================================
 
 class InMemoryDatabase:
-    """
-    In-memory database that mimics PostgreSQL structure for backtesting
-    Provides same interface as Database class
-    """
+    """DataFrame-based in-memory database for backtesting"""
 
     def __init__(self):
-        self.tickers = {}  # {ticker: {'name': str, 'strategies': [], 'is_blacklisted': bool}}
-        self.closed_trades = []
+        # Use DataFrames for tabular data
+        self.tickers_df = pd.DataFrame(columns=['ticker', 'name', 'strategies', 'is_blacklisted'])
+        self.closed_trades_df = pd.DataFrame(columns=[
+            'ticker', 'quantity', 'entry_price', 'exit_price', 'pnl_dollars', 'pnl_pct',
+            'entry_signal', 'entry_score', 'exit_signal', 'exit_date'
+        ])
+        self.order_log_df = pd.DataFrame(columns=[
+            'ticker', 'side', 'quantity', 'order_type', 'limit_price', 'filled_price',
+            'submitted_at', 'signal_type', 'portfolio_value', 'cash_before', 'award',
+            'quality_score', 'broker_order_id'
+        ])
+        self.daily_metrics_df = pd.DataFrame(columns=[
+            'date', 'portfolio_value', 'cash_balance', 'num_positions', 'num_trades',
+            'realized_pnl', 'unrealized_pnl', 'win_rate', 'spy_close', 'market_regime'
+        ])
+        self.signal_performance_df = pd.DataFrame(columns=[
+            'signal_name', 'total_trades', 'wins', 'win_rate', 'total_pnl', 'avg_pnl', 'last_updated'
+        ])
+
+        # Keep dicts for other data
         self.position_metadata = {}
         self.bot_state = {
             'portfolio_peak': None,
@@ -182,48 +197,23 @@ class InMemoryDatabase:
             'ticker_awards': {}
         }
         self.cooldowns = {}
-        self.blacklist = {}  # {(ticker, strategy): {...}}
+        self.blacklist = {}
 
-        print("[MEMORY DB] In-memory database initialized for backtesting")
+        print("[MEMORY DB] DataFrame-based in-memory database initialized")
 
     def get_connection(self):
-        """Return self (no connection needed for in-memory)"""
         return self
 
     def return_connection(self, conn):
-        """No-op for in-memory"""
         pass
 
     def close_pool(self):
-        """No-op for in-memory"""
         pass
-
-    # Ticker operations
-    def get_tickers_by_strategy(self, strategy_name):
-        """Get tickers for a specific strategy"""
-        result = []
-        for ticker, data in self.tickers.items():
-            if strategy_name in data.get('strategies', []) and not data.get('is_blacklisted', False):
-                result.append(ticker)
-        return result
-
-    def insert_ticker(self, ticker, name, strategies):
-        """Insert ticker into in-memory database"""
-        self.tickers[ticker] = {
-            'name': name,
-            'strategies': strategies.copy() if isinstance(strategies, list) else [],
-            'is_blacklisted': False
-        }
-
-    def get_all_tickers(self):
-        """Get all tickers"""
-        return {k: v.copy() for k, v in self.tickers.items()}
 
     # Trade operations
     def insert_trade(self, ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct,
                      entry_signal, entry_score, exit_signal, exit_date):
-        """Insert trade into in-memory list"""
-        trade = {
+        new_row = pd.DataFrame([{
             'ticker': ticker,
             'quantity': quantity,
             'entry_price': float(entry_price),
@@ -234,48 +224,185 @@ class InMemoryDatabase:
             'entry_score': entry_score,
             'exit_signal': exit_signal,
             'exit_date': exit_date
-        }
-        self.closed_trades.append(trade)
+        }])
+        self.closed_trades_df = pd.concat([self.closed_trades_df, new_row], ignore_index=True)
 
     def get_closed_trades(self, limit=None):
-        """Get closed trades from memory"""
-        trades = sorted(self.closed_trades, key=lambda x: x['exit_date'], reverse=True)
+        if self.closed_trades_df.empty:
+            return []
+
+        df = self.closed_trades_df.sort_values('exit_date', ascending=False)
         if limit:
-            return trades[:limit]
-        return trades
+            df = df.head(limit)
+        return df.to_dict('records')
 
     def get_trades_by_signal(self, signal_name, lookback=None):
-        """Get trades for specific signal"""
-        trades = [t for t in self.closed_trades if t['entry_signal'] == signal_name]
-        trades = sorted(trades, key=lambda x: x['exit_date'], reverse=True)
+        if self.closed_trades_df.empty:
+            return []
+
+        df = self.closed_trades_df[self.closed_trades_df['entry_signal'] == signal_name]
+        df = df.sort_values('exit_date', ascending=False)
         if lookback:
-            return trades[:lookback]
-        return trades
+            df = df.head(lookback)
+        return df.to_dict('records')
 
     def get_trades_by_date(self, target_date):
-        """Get trades for specific date"""
-        return [t for t in self.closed_trades if t['exit_date'].date() == target_date]
+        if self.closed_trades_df.empty:
+            return []
+
+        df = self.closed_trades_df[self.closed_trades_df['exit_date'].dt.date == target_date]
+        return df.to_dict('records')
 
     def get_all_trades_summary(self):
-        """Get summary stats for all trades"""
-        if not self.closed_trades:
+        if self.closed_trades_df.empty:
             return {'total_trades': 0, 'total_wins': 0, 'total_realized': 0.0}
 
-        total_trades = len(self.closed_trades)
-        total_wins = sum(1 for t in self.closed_trades if t['pnl_dollars'] > 0)
-        total_realized = sum(t['pnl_dollars'] for t in self.closed_trades)
+        total_trades = len(self.closed_trades_df)
+        total_wins = (self.closed_trades_df['pnl_dollars'] > 0).sum()
+        total_realized = self.closed_trades_df['pnl_dollars'].sum()
 
         return {
             'total_trades': total_trades,
-            'total_wins': total_wins,
-            'total_realized': total_realized
+            'total_wins': int(total_wins),
+            'total_realized': float(total_realized)
         }
 
-    # Position metadata operations
+    # Order log operations
+    def insert_order_log(self, ticker, side, quantity, order_type, limit_price, filled_price,
+                         submitted_at, signal_type, portfolio_value, cash_before, award,
+                         quality_score, broker_order_id):
+        new_row = pd.DataFrame([{
+            'ticker': ticker,
+            'side': side,
+            'quantity': quantity,
+            'order_type': order_type,
+            'limit_price': float(limit_price) if limit_price else None,
+            'filled_price': float(filled_price) if filled_price else None,
+            'submitted_at': submitted_at,
+            'signal_type': signal_type,
+            'portfolio_value': float(portfolio_value),
+            'cash_before': float(cash_before),
+            'award': award,
+            'quality_score': quality_score,
+            'broker_order_id': broker_order_id
+        }])
+        self.order_log_df = pd.concat([self.order_log_df, new_row], ignore_index=True)
+
+    def get_order_log(self, ticker=None, limit=None):
+        if self.order_log_df.empty:
+            return []
+
+        df = self.order_log_df
+        if ticker:
+            df = df[df['ticker'] == ticker]
+
+        df = df.sort_values('submitted_at', ascending=False)
+        if limit:
+            df = df.head(limit)
+        return df.to_dict('records')
+
+    # Daily metrics operations
+    def upsert_daily_metrics(self, date, portfolio_value, cash_balance, num_positions,
+                             num_trades, realized_pnl, unrealized_pnl, win_rate,
+                             spy_close, market_regime):
+        # Remove existing entry for this date
+        self.daily_metrics_df = self.daily_metrics_df[self.daily_metrics_df['date'] != date]
+
+        new_row = pd.DataFrame([{
+            'date': date,
+            'portfolio_value': float(portfolio_value),
+            'cash_balance': float(cash_balance),
+            'num_positions': num_positions,
+            'num_trades': num_trades,
+            'realized_pnl': float(realized_pnl),
+            'unrealized_pnl': float(unrealized_pnl),
+            'win_rate': float(win_rate),
+            'spy_close': float(spy_close) if spy_close else None,
+            'market_regime': market_regime
+        }])
+        self.daily_metrics_df = pd.concat([self.daily_metrics_df, new_row], ignore_index=True)
+
+    def get_daily_metrics(self, date):
+        if self.daily_metrics_df.empty:
+            return None
+
+        df = self.daily_metrics_df[self.daily_metrics_df['date'] == date]
+        if df.empty:
+            return None
+        return df.iloc[0].to_dict()
+
+    def get_all_daily_metrics(self):
+        if self.daily_metrics_df.empty:
+            return []
+        return self.daily_metrics_df.sort_values('date', ascending=False).to_dict('records')
+
+    # Signal performance operations
+    def upsert_signal_performance(self, signal_name, total_trades, wins, win_rate,
+                                  total_pnl, avg_pnl):
+        # Remove existing entry
+        self.signal_performance_df = self.signal_performance_df[
+            self.signal_performance_df['signal_name'] != signal_name
+            ]
+
+        new_row = pd.DataFrame([{
+            'signal_name': signal_name,
+            'total_trades': total_trades,
+            'wins': wins,
+            'win_rate': float(win_rate),
+            'total_pnl': float(total_pnl),
+            'avg_pnl': float(avg_pnl),
+            'last_updated': datetime.now()
+        }])
+        self.signal_performance_df = pd.concat([self.signal_performance_df, new_row], ignore_index=True)
+
+    def get_signal_performance(self, signal_name):
+        if self.signal_performance_df.empty:
+            return None
+
+        df = self.signal_performance_df[self.signal_performance_df['signal_name'] == signal_name]
+        if df.empty:
+            return None
+        return df.iloc[0].to_dict()
+
+    def get_all_signal_performance(self):
+        if self.signal_performance_df.empty:
+            return []
+        return self.signal_performance_df.to_dict('records')
+
+    # Ticker operations
+    def get_tickers_by_strategy(self, strategy_name):
+        if self.tickers_df.empty:
+            return []
+
+        df = self.tickers_df[
+            (self.tickers_df['strategies'].apply(lambda x: strategy_name in x if isinstance(x, list) else False)) &
+            (self.tickers_df['is_blacklisted'] == False)
+            ]
+        return df['ticker'].tolist()
+
+    def insert_ticker(self, ticker, name, strategies):
+        # Remove existing
+        self.tickers_df = self.tickers_df[self.tickers_df['ticker'] != ticker]
+
+        new_row = pd.DataFrame([{
+            'ticker': ticker,
+            'name': name,
+            'strategies': strategies.copy() if isinstance(strategies, list) else [],
+            'is_blacklisted': False
+        }])
+        self.tickers_df = pd.concat([self.tickers_df, new_row], ignore_index=True)
+
+    def get_all_tickers(self):
+        if self.tickers_df.empty:
+            return {}
+        return {row['ticker']: {'name': row['name'], 'strategies': row['strategies'],
+                                'is_blacklisted': row['is_blacklisted']}
+                for _, row in self.tickers_df.iterrows()}
+
+    # Keep all existing dict-based methods unchanged
     def upsert_position_metadata(self, ticker, entry_date, entry_signal, entry_score,
                                  highest_price, profit_level_1_locked, profit_level_2_locked,
                                  profit_level_3_locked):
-        """Insert or update position metadata"""
         self.position_metadata[ticker] = {
             'entry_date': entry_date,
             'entry_signal': entry_signal,
@@ -287,23 +414,18 @@ class InMemoryDatabase:
         }
 
     def get_all_position_metadata(self):
-        """Get all position metadata"""
         return self.position_metadata.copy()
 
     def delete_position_metadata(self, ticker):
-        """Delete position metadata"""
         if ticker in self.position_metadata:
             del self.position_metadata[ticker]
 
     def clear_all_position_metadata(self):
-        """Clear all position metadata"""
         self.position_metadata = {}
 
-    # Bot state operations
     def update_bot_state(self, portfolio_peak, drawdown_protection_active,
                          drawdown_protection_end_date, last_rotation_date,
                          last_rotation_week, ticker_awards):
-        """Update bot state"""
         self.bot_state = {
             'portfolio_peak': portfolio_peak,
             'drawdown_protection_active': drawdown_protection_active,
@@ -314,30 +436,22 @@ class InMemoryDatabase:
         }
 
     def get_bot_state(self):
-        """Get bot state"""
         return self.bot_state.copy()
 
-    # Cooldown operations
     def upsert_cooldown(self, ticker, last_buy_date):
-        """Insert or update cooldown"""
         self.cooldowns[ticker] = last_buy_date
 
     def get_all_cooldowns(self):
-        """Get all cooldowns"""
         return self.cooldowns.copy()
 
     def delete_cooldown(self, ticker):
-        """Delete cooldown"""
         if ticker in self.cooldowns:
             del self.cooldowns[ticker]
 
     def clear_all_cooldowns(self):
-        """Clear all cooldowns"""
         self.cooldowns = {}
 
-    # Blacklist operations
     def upsert_blacklist(self, ticker, strategy, blacklist_type, expiry_date, reason):
-        """Insert or update blacklist entry"""
         key = (ticker, strategy)
         self.blacklist[key] = {
             'blacklist_type': blacklist_type,
@@ -346,7 +460,6 @@ class InMemoryDatabase:
         }
 
     def get_blacklist_by_strategy(self, strategy):
-        """Get blacklist entries for specific strategy"""
         result = {}
         for (ticker, strat), data in self.blacklist.items():
             if strat == strategy:
@@ -354,17 +467,14 @@ class InMemoryDatabase:
         return result
 
     def get_all_blacklist(self):
-        """Get all blacklist entries"""
         return self.blacklist.copy()
 
     def delete_blacklist(self, ticker, strategy):
-        """Delete blacklist entry"""
         key = (ticker, strategy)
         if key in self.blacklist:
             del self.blacklist[key]
 
     def clear_all_blacklist(self):
-        """Clear all blacklist entries"""
         self.blacklist = {}
 
 

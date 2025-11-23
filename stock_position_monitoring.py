@@ -728,6 +728,16 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
             print(f" * EXIT: {ticker} x{sell_quantity} | {message}")
             strategy.submit_order(sell_order)
 
+            if hasattr(strategy, 'order_logger'):
+                strategy.order_logger.log_order(
+                    ticker=ticker,
+                    side='sell',
+                    quantity=sell_quantity,
+                    signal_type=order['reason'],
+                    award='n/a',
+                    quality_score=0
+                )
+
         # === FULL EXIT ===
         elif exit_type == 'full_exit':
             print(f"\n{'=' * 70}")

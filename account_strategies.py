@@ -68,6 +68,10 @@ class SwingTradeStrategy(Strategy):
         # Profit tracker (PostgreSQL or in-memory)
         self.profit_tracker = account_profit_tracking.ProfitTracker(self)
 
+        # Order logger and metrics recorder
+        self.order_logger = account_profit_tracking.OrderLogger(self)
+        self.metrics_recorder = account_profit_tracking.DailyMetricsRecorder(self)
+
         # Position monitoring
         self.position_monitor = stock_position_monitoring.PositionMonitor(self)
 
@@ -507,6 +511,15 @@ class SwingTradeStrategy(Strategy):
                     order = self.create_order(ticker, quantity, 'buy')
                     self.submit_order(order)
 
+                    self.order_logger.log_order(
+                        ticker=ticker,
+                        side='buy',
+                        quantity=quantity,
+                        signal_type=buy_signal.get('signal_type', 'unknown'),
+                        award=alloc['award'],
+                        quality_score=int(alloc['quality_score'])
+                    )
+
                     # Record in cooldown
                     self.ticker_cooldown.record_buy(ticker, current_date)
 
@@ -521,6 +534,17 @@ class SwingTradeStrategy(Strategy):
             # =====================================================================
             # COMPLETE EXECUTION
             # =====================================================================
+
+            try:
+                spy_data = all_stock_data.get('SPY', {}).get('indicators', None)
+                spy_close = spy_data.get('close') if spy_data else None
+
+                self.metrics_recorder.record_daily_metrics(
+                    spy_close=spy_close,
+                    market_regime=regime_info.get('regime', 'unknown')
+                )
+            except Exception as e:
+                execution_tracker.add_error("Daily Metrics Recording", e)
 
             execution_tracker.complete('SUCCESS')
 

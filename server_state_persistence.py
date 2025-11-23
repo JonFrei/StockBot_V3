@@ -288,24 +288,17 @@ class StatePersistence:
 
     def _reconcile_broker_positions(self, strategy):
         """
-        INTEGRATED RECONCILIATION - Runs on every startup
-
-        Syncs broker positions with database:
-        - Adopts orphaned positions (in broker, not in database)
-        - Cleans stale entries (in database, not in broker)
-        - Uses broker's avg_entry_price for accuracy
-        - Broker is source of truth for quantity/price
-        - Keeps cooldowns intact
+        ENHANCED RECONCILIATION with quantity checks and logging
         """
-
         print(f"\n{'=' * 80}")
-        print(f"🔄 BROKER RECONCILIATION - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"🔄 ENHANCED BROKER RECONCILIATION - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"{'=' * 80}")
 
         try:
             current_date = strategy.get_datetime()
+            db = get_database()
 
-            # Get positions from broker (SOURCE OF TRUTH)
+            # Get positions from broker
             broker_positions = strategy.get_positions()
             broker_tickers = {p.symbol for p in broker_positions}
 
@@ -317,9 +310,10 @@ class StatePersistence:
 
             orphaned_count = 0
             cleaned_count = 0
+            updated_count = 0
 
             # =====================================================================
-            # CASE 1: ORPHANED POSITIONS (In broker, not in database)
+            # CASE 1: ORPHANED POSITIONS
             # =====================================================================
 
             orphaned = broker_tickers - db_tickers
@@ -330,23 +324,20 @@ class StatePersistence:
 
                 for ticker in orphaned:
                     position = next(p for p in broker_positions if p.symbol == ticker)
-                    quantity = int(position.quantity)
+                    broker_qty = int(position.quantity)
+                    broker_entry = self._get_broker_entry_price(position, strategy, ticker)
 
-                    # Get broker's entry price
-                    entry_price = self._get_broker_entry_price(position, strategy, ticker)
-
-                    if entry_price <= 0:
+                    if broker_entry <= 0:
                         print(f"   ❌ {ticker}: Invalid entry price - SKIPPING")
                         continue
 
-                    # Get current price for highest_price
                     try:
                         current_price = strategy.get_last_price(ticker)
-                        highest_price = max(entry_price, current_price)
+                        highest_price = max(broker_entry, current_price)
                     except:
-                        highest_price = entry_price
+                        highest_price = broker_entry
 
-                    # Add to position tracking
+                    # Add to tracking
                     strategy.position_monitor.positions_metadata[ticker] = {
                         'entry_date': current_date,
                         'entry_signal': 'recovered_orphan',
@@ -358,22 +349,71 @@ class StatePersistence:
                     }
 
                     # Save to database
-                    self._save_position_metadata(ticker, current_date, entry_price, highest_price)
+                    self._save_position_metadata(ticker, current_date, broker_entry, highest_price)
 
-                    print(f"   ✅ {ticker}: ADOPTED - {quantity} shares @ ${entry_price:.2f}")
+                    # Log reconciliation
+                    self._log_reconciliation(
+                        ticker=ticker,
+                        broker_qty=broker_qty,
+                        db_qty=0,
+                        broker_entry_price=broker_entry,
+                        db_entry_price=None,
+                        action='adopted',
+                        notes=f'Orphaned position recovered with {broker_qty} shares'
+                    )
 
-                    # Check cooldown status (KEEP IT)
-                    if hasattr(strategy, 'ticker_cooldown'):
-                        cooldown_status = strategy.ticker_cooldown.get_status(ticker, current_date)
-                        if not cooldown_status['can_buy']:
-                            print(f"      ⏰ Cooldown: {cooldown_status['days_until_can_buy']} day(s) - KEPT")
-
+                    print(f"   ✅ {ticker}: ADOPTED - {broker_qty} shares @ ${broker_entry:.2f}")
                     orphaned_count += 1
 
                 print(f"{'─' * 80}")
 
             # =====================================================================
-            # CASE 2: MISSING FROM BROKER (In database, not in broker)
+            # CASE 2: QUANTITY/PRICE MISMATCHES
+            # =====================================================================
+
+            matched = broker_tickers & db_tickers
+
+            if matched:
+                print(f"\n🔍 CHECKING MATCHED POSITIONS: {len(matched)}")
+                print(f"{'─' * 80}")
+
+                for ticker in matched:
+                    position = next(p for p in broker_positions if p.symbol == ticker)
+                    broker_qty = int(position.quantity)
+                    broker_entry = self._get_broker_entry_price(position, strategy, ticker)
+
+                    metadata = strategy.position_monitor.positions_metadata.get(ticker)
+                    db_entry = metadata.get('highest_price')  # Use highest as proxy
+
+                    # Check for entry price mismatch (>5% difference)
+                    if db_entry and abs(broker_entry - db_entry) / db_entry > 0.05:
+                        print(f"   ⚠️  {ticker}: Entry price mismatch")
+                        print(f"      Broker: ${broker_entry:.2f} | DB: ${db_entry:.2f}")
+
+                        # Update to broker's price
+                        metadata['highest_price'] = max(broker_entry, metadata['highest_price'])
+
+                        self._save_position_metadata(
+                            ticker, metadata['entry_date'], broker_entry, metadata['highest_price']
+                        )
+
+                        self._log_reconciliation(
+                            ticker=ticker,
+                            broker_qty=broker_qty,
+                            db_qty=broker_qty,
+                            broker_entry_price=broker_entry,
+                            db_entry_price=db_entry,
+                            action='updated',
+                            notes=f'Entry price adjusted by {((broker_entry - db_entry) / db_entry * 100):.1f}%'
+                        )
+
+                        updated_count += 1
+
+                if updated_count > 0:
+                    print(f"{'─' * 80}")
+
+            # =====================================================================
+            # CASE 3: MISSING FROM BROKER
             # =====================================================================
 
             missing = db_tickers - broker_tickers
@@ -385,12 +425,19 @@ class StatePersistence:
                 for ticker in missing:
                     print(f"   🗑️  {ticker}: Position closed - cleaning metadata")
 
-                    # Remove from tracking
+                    # Log before deleting
+                    self._log_reconciliation(
+                        ticker=ticker,
+                        broker_qty=0,
+                        db_qty=1,
+                        broker_entry_price=None,
+                        db_entry_price=None,
+                        action='cleaned',
+                        notes='Position no longer in broker'
+                    )
+
                     del strategy.position_monitor.positions_metadata[ticker]
-
-                    # Remove from database
                     self._delete_position_metadata(ticker)
-
                     cleaned_count += 1
 
                 print(f"{'─' * 80}")
@@ -401,15 +448,16 @@ class StatePersistence:
 
             print(f"\n📋 RECONCILIATION SUMMARY:")
             print(f"   Orphaned Adopted: {orphaned_count}")
+            print(f"   Entry Prices Updated: {updated_count}")
             print(f"   Stale Cleaned: {cleaned_count}")
 
-            if orphaned_count == 0 and cleaned_count == 0:
+            if orphaned_count == 0 and cleaned_count == 0 and updated_count == 0:
                 print(f"   ✅ All positions in sync!")
 
             print(f"{'=' * 80}\n")
 
             # Save state if anything changed
-            if orphaned_count > 0 or cleaned_count > 0:
+            if orphaned_count > 0 or cleaned_count > 0 or updated_count > 0:
                 save_state_safe(strategy)
                 print(f"💾 State saved after reconciliation\n")
 
@@ -419,6 +467,38 @@ class StatePersistence:
 
             import traceback
             traceback.print_exc()
+
+    def _log_reconciliation(self, ticker, broker_qty, db_qty, broker_entry_price,
+                            db_entry_price, action, notes):
+        """Log reconciliation action to database"""
+        if Config.BACKTESTING:
+            return  # Don't log in backtesting
+
+        db = get_database()
+        conn = db.get_connection()
+
+        try:
+            cursor = conn.cursor()
+
+            qty_diff = broker_qty - db_qty if broker_qty and db_qty else None
+
+            cursor.execute("""
+                INSERT INTO reconciliation_log
+                (ticker, broker_qty, db_qty, qty_diff, broker_entry_price,
+                 db_entry_price, action_taken, notes)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                ticker, broker_qty, db_qty, qty_diff,
+                broker_entry_price, db_entry_price, action, notes
+            ))
+
+            conn.commit()
+
+        except Exception as e:
+            print(f"      ⚠️  Reconciliation logging failed: {e}")
+        finally:
+            cursor.close()
+            db.return_connection(conn)
 
     def _get_broker_entry_price(self, position, strategy, ticker):
         """Get entry price from broker position"""

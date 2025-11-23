@@ -476,6 +476,302 @@ class ProfitTracker:
 
 
 # =============================================================================
+# ORDER EXECUTION LOGGER
+# =============================================================================
+
+class OrderLogger:
+    """
+    Logs successful order executions - dual mode support
+    """
+
+    def __init__(self, strategy):
+        self.strategy = strategy
+        self.db = get_database()
+
+    def log_order(self, ticker, side, quantity, signal_type='unknown',
+                  award='none', quality_score=0, limit_price=None):
+        """
+        Log successful order submission
+
+        Args:
+            ticker: Stock symbol
+            side: 'buy' or 'sell'
+            quantity: Number of shares
+            signal_type: Entry/exit signal name
+            award: Ticker award level
+            quality_score: Opportunity quality score
+            limit_price: Limit price if applicable
+        """
+        try:
+            # Get current price as filled price approximation
+            try:
+                filled_price = self.strategy.get_last_price(ticker)
+            except:
+                filled_price = limit_price if limit_price else None
+
+            portfolio_value = self.strategy.portfolio_value
+            cash_before = self.strategy.get_cash()
+            submitted_at = self.strategy.get_datetime()
+
+            if Config.BACKTESTING:
+                # In-memory logging
+                self.db.insert_order_log(
+                    ticker=ticker,
+                    side=side,
+                    quantity=quantity,
+                    order_type='market',
+                    limit_price=limit_price,
+                    filled_price=filled_price,
+                    submitted_at=submitted_at,
+                    signal_type=signal_type,
+                    portfolio_value=portfolio_value,
+                    cash_before=cash_before,
+                    award=award,
+                    quality_score=quality_score,
+                    broker_order_id=None
+                )
+            else:
+                # PostgreSQL logging
+                conn = self.db.get_connection()
+                try:
+                    cursor = conn.cursor()
+
+                    cursor.execute("""
+                        INSERT INTO order_log
+                        (ticker, side, quantity, order_type, limit_price, filled_price,
+                         submitted_at, signal_type, portfolio_value, cash_before,
+                         award, quality_score)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        ticker, side, quantity, 'market', limit_price, filled_price,
+                        submitted_at, signal_type, portfolio_value, cash_before,
+                        award, quality_score
+                    ))
+
+                    conn.commit()
+
+                finally:
+                    cursor.close()
+                    self.db.return_connection(conn)
+
+        except Exception as e:
+            print(f"[WARN] Failed to log order for {ticker}: {e}")
+
+
+# =============================================================================
+# DAILY METRICS RECORDER
+# =============================================================================
+
+class DailyMetricsRecorder:
+    """
+    Records daily portfolio metrics and signal performance cache - dual mode
+    """
+
+    def __init__(self, strategy):
+        self.strategy = strategy
+        self.db = get_database()
+
+    def record_daily_metrics(self, spy_close=None, market_regime=None):
+        """
+        Record daily portfolio metrics and update signal performance cache
+
+        Args:
+            spy_close: SPY closing price (optional)
+            market_regime: Current market regime (optional)
+        """
+        try:
+            current_date = self.strategy.get_datetime().date()
+
+            # Calculate metrics
+            portfolio_value = self.strategy.portfolio_value
+            cash_balance = self.strategy.get_cash()
+
+            positions = self.strategy.get_positions()
+            num_positions = len(positions)
+
+            # Calculate unrealized P&L
+            unrealized_pnl = 0
+            for position in positions:
+                try:
+                    ticker = position.symbol
+                    qty = int(position.quantity)
+
+                    entry_price = self._get_entry_price(position, ticker)
+                    current_price = self.strategy.get_last_price(ticker)
+
+                    if entry_price > 0:
+                        unrealized_pnl += (current_price - entry_price) * qty
+                except:
+                    continue
+
+            # Get today's trades
+            if Config.BACKTESTING:
+                today_trades = self.db.get_trades_by_date(current_date)
+            else:
+                conn = self.db.get_connection()
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        SELECT pnl_dollars FROM closed_trades
+                        WHERE DATE(exit_date) = %s
+                    """, (current_date,))
+                    today_trades = [{'pnl_dollars': row[0]} for row in cursor.fetchall()]
+                finally:
+                    cursor.close()
+                    self.db.return_connection(conn)
+
+            num_trades = len(today_trades)
+            realized_pnl = sum(t['pnl_dollars'] for t in today_trades)
+
+            if num_trades > 0:
+                wins = sum(1 for t in today_trades if t['pnl_dollars'] > 0)
+                win_rate = (wins / num_trades * 100)
+            else:
+                win_rate = 0
+
+            # Save daily metrics
+            if Config.BACKTESTING:
+                self.db.upsert_daily_metrics(
+                    date=current_date,
+                    portfolio_value=portfolio_value,
+                    cash_balance=cash_balance,
+                    num_positions=num_positions,
+                    num_trades=num_trades,
+                    realized_pnl=realized_pnl,
+                    unrealized_pnl=unrealized_pnl,
+                    win_rate=win_rate,
+                    spy_close=spy_close,
+                    market_regime=market_regime
+                )
+            else:
+                conn = self.db.get_connection()
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO daily_metrics
+                        (date, portfolio_value, cash_balance, num_positions, num_trades,
+                         realized_pnl, unrealized_pnl, win_rate, spy_close, market_regime)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (date) DO UPDATE SET
+                            portfolio_value = EXCLUDED.portfolio_value,
+                            cash_balance = EXCLUDED.cash_balance,
+                            num_positions = EXCLUDED.num_positions,
+                            num_trades = EXCLUDED.num_trades,
+                            realized_pnl = EXCLUDED.realized_pnl,
+                            unrealized_pnl = EXCLUDED.unrealized_pnl,
+                            win_rate = EXCLUDED.win_rate,
+                            spy_close = EXCLUDED.spy_close,
+                            market_regime = EXCLUDED.market_regime
+                    """, (
+                        current_date, portfolio_value, cash_balance, num_positions,
+                        num_trades, realized_pnl, unrealized_pnl, win_rate,
+                        spy_close, market_regime
+                    ))
+                    conn.commit()
+                finally:
+                    cursor.close()
+                    self.db.return_connection(conn)
+
+            print(f"[METRICS] Daily metrics recorded for {current_date}")
+
+            # Update signal performance cache
+            self._update_signal_performance_cache()
+
+        except Exception as e:
+            print(f"[WARN] Failed to record daily metrics: {e}")
+
+    def _get_entry_price(self, position, ticker):
+        """Helper to extract entry price from position"""
+        if hasattr(position, 'avg_entry_price') and position.avg_entry_price:
+            try:
+                return float(position.avg_entry_price)
+            except:
+                pass
+
+        if hasattr(position, 'cost_basis') and position.cost_basis:
+            try:
+                cost_basis = float(position.cost_basis)
+                qty = float(position.quantity)
+                return cost_basis / qty if qty > 0 else 0
+            except:
+                pass
+
+        try:
+            return self.strategy.get_last_price(ticker)
+        except:
+            return 0
+
+    def _update_signal_performance_cache(self):
+        """Update signal performance cache from all trades"""
+        try:
+            # Get all trades
+            all_trades = self.strategy.profit_tracker.get_closed_trades()
+
+            if not all_trades:
+                return
+
+            # Group by signal
+            signal_stats = {}
+            for trade in all_trades:
+                signal = trade['entry_signal']
+
+                if signal not in signal_stats:
+                    signal_stats[signal] = {'trades': [], 'wins': 0, 'total_pnl': 0}
+
+                signal_stats[signal]['trades'].append(trade)
+                signal_stats[signal]['total_pnl'] += trade['pnl_dollars']
+
+                if trade['pnl_dollars'] > 0:
+                    signal_stats[signal]['wins'] += 1
+
+            # Save each signal's performance
+            for signal_name, stats in signal_stats.items():
+                total_trades = len(stats['trades'])
+                wins = stats['wins']
+                win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+                total_pnl = stats['total_pnl']
+                avg_pnl = total_pnl / total_trades if total_trades > 0 else 0
+
+                if Config.BACKTESTING:
+                    self.db.upsert_signal_performance(
+                        signal_name=signal_name,
+                        total_trades=total_trades,
+                        wins=wins,
+                        win_rate=win_rate,
+                        total_pnl=total_pnl,
+                        avg_pnl=avg_pnl
+                    )
+                else:
+                    conn = self.db.get_connection()
+                    try:
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            INSERT INTO signal_performance
+                            (signal_name, total_trades, wins, win_rate, total_pnl, avg_pnl, last_updated)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (signal_name) DO UPDATE SET
+                                total_trades = EXCLUDED.total_trades,
+                                wins = EXCLUDED.wins,
+                                win_rate = EXCLUDED.win_rate,
+                                total_pnl = EXCLUDED.total_pnl,
+                                avg_pnl = EXCLUDED.avg_pnl,
+                                last_updated = EXCLUDED.last_updated
+                        """, (
+                            signal_name, total_trades, wins, win_rate,
+                            total_pnl, avg_pnl, datetime.now()
+                        ))
+                        conn.commit()
+                    finally:
+                        cursor.close()
+                        self.db.return_connection(conn)
+
+            print(f"[METRICS] Signal performance cache updated ({len(signal_stats)} signals)")
+
+        except Exception as e:
+            print(f"[WARN] Failed to update signal performance cache: {e}")
+
+
+# =============================================================================
 # DAILY SUMMARY REPORTING (Dual-mode support)
 # =============================================================================
 
