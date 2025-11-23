@@ -12,6 +12,7 @@ from psycopg2.extras import RealDictCursor
 from datetime import datetime
 import json
 from config import Config
+import pandas as pd
 
 
 class Database:

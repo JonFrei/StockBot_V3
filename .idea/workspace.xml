@@ -7,13 +7,12 @@
     <list default="true" id="d6df019d-759f-4aef-8455-f63cac562958" name="Changes" comment="com">
       <change afterPath="$PROJECT_DIR$/diagnose_entry_price.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/account_profit_tracking.py" beforeDir="false" afterPath="$PROJECT_DIR$/account_profit_tracking.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/account_broker_data.py" beforeDir="false" afterPath="$PROJECT_DIR$/account_broker_data.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/account_strategies.py" beforeDir="false" afterPath="$PROJECT_DIR$/account_strategies.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/database.py" beforeDir="false" afterPath="$PROJECT_DIR$/database.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/migration.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/server_state_persistence.py" beforeDir="false" afterPath="$PROJECT_DIR$/server_state_persistence.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/server_state_persistence.py" beforeDir="false" afterPath="$PROJECT_DIR$/server_recovery.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/stock_position_monitoring.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_position_monitoring.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test_email.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_signals.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_signals.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -164,14 +163,6 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1762775089088</updated>
-    </task>
-    <task id="LOCAL-00043" summary="com">
-      <option name="closed" value="true" />
-      <created>1763148130926</created>
-      <option name="number" value="00043" />
-      <option name="presentableId" value="LOCAL-00043" />
-      <option name="project" value="LOCAL" />
-      <updated>1763148130926</updated>
     </task>
     <task id="LOCAL-00044" summary="com">
       <option name="closed" value="true" />
@@ -557,7 +548,15 @@
       <option name="project" value="LOCAL" />
       <updated>1763838611438</updated>
     </task>
-    <option name="localTasksCounter" value="92" />
+    <task id="LOCAL-00092" summary="com">
+      <option name="closed" value="true" />
+      <created>1763867034844</created>
+      <option name="number" value="00092" />
+      <option name="presentableId" value="LOCAL-00092" />
+      <option name="project" value="LOCAL" />
+      <updated>1763867034844</updated>
+    </task>
+    <option name="localTasksCounter" value="93" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">

@@ -485,20 +485,19 @@ def check_max_holding_period(position_monitor, ticker, current_date, data, max_d
 
 def check_positions_for_exits(strategy, current_date, all_stock_data, position_monitor):
     """
-    TIGHTENED: Adaptive exit checking with faster profit targets and tighter stops
-
-    WITH OPTION 4: Progressive growth checkpoints at 14d, 28d, 42d, 56d
+    TIGHTENED: Adaptive exit checking with broker utilities
 
     Exit Priority Order:
-    1. Progressive growth checkpoints (14d, 28d, 42d, 56d) - NEW!
-    2. Max holding period (60 days with momentum exception)
-    3. Emergency stops (adaptive based on conditions)
-    4. Profit taking level 1 (FASTER: 6-10%)
-    5. Profit taking level 2 (FASTER: 15-22%)
-    6. Profit taking level 3 (FASTER: 25-35%)
-    7. Peak stop after Level 1 (NEW: -5% protection)
-    8. Trailing stops (adaptive distance, wider after Level 3)
+    1. Max holding period (30 days with momentum exception)
+    2. Emergency stops (adaptive based on conditions)
+    3. Profit taking level 1 (FASTER: 12-15%)
+    4. Profit taking level 2 (FASTER: 16-25%)
+    5. Profit taking level 3 (FASTER: 20-35%)
+    6. Trailing stops (adaptive distance, wider after Level 3)
     """
+    # Import broker utilities from account_broker_data
+    import account_broker_data
+
     exit_orders = []
 
     positions = strategy.get_positions()
@@ -510,56 +509,21 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
     for position in positions:
         ticker = position.symbol
 
-        # ===== GET DATA FROM BROKER (Source of Truth) =====
-        broker_entry_price = None
+        # ===== USE CENTRALIZED BROKER UTILITY =====
+        broker_entry_price = account_broker_data.get_broker_entry_price(position, strategy, ticker)
 
-        # Try avg_entry_price first
-        if hasattr(position, 'avg_entry_price') and position.avg_entry_price:
-            try:
-                broker_entry_price = float(position.avg_entry_price)
-            except (ValueError, TypeError):
-                pass
+        # Validate entry price
+        if not account_broker_data.validate_entry_price(broker_entry_price, ticker):
+            print(f"[WARN] Skipping {ticker} - invalid entry price after all attempts")
+            continue
 
-        # Try cost_basis / quantity (alpaca-trade-api stores this way)
-        if not broker_entry_price and hasattr(position, 'cost_basis') and position.cost_basis:
-            try:
-                cost_basis = float(position.cost_basis)
-                qty = int(position.quantity)
-                broker_entry_price = cost_basis / qty if qty > 0 else 0
-            except (ValueError, TypeError, ZeroDivisionError):
-                pass
+        # Get quantity using utility
+        broker_quantity = account_broker_data.get_position_quantity(position, ticker)
 
-        # Try fill_avg_price as backup
-        if not broker_entry_price and hasattr(position, 'fill_avg_price') and position.fill_avg_price:
-            try:
-                broker_entry_price = float(position.fill_avg_price)
-            except (ValueError, TypeError):
-                pass
-
-        # Try avg_fill_price as backup
-        if not broker_entry_price and hasattr(position, 'avg_fill_price') and position.avg_fill_price:
-            try:
-                broker_entry_price = float(position.avg_fill_price)
-            except (ValueError, TypeError):
-                pass
-
-        # Use current_price as last resort for pre-existing positions
-        if not broker_entry_price or broker_entry_price <= 0:
-            try:
-                broker_entry_price = float(position.current_price)
-                print(
-                    f"[INFO] {ticker} - Using current_price as entry (pre-existing position): ${broker_entry_price:.2f}")
-            except (ValueError, TypeError, AttributeError):
-                pass
-
-        # SAFETY CHECK: Skip if still invalid after all attempts
-        if not broker_entry_price or broker_entry_price <= 0:
-            print(f"[WARN] Skipping {ticker} - invalid entry price after all attempts: {broker_entry_price}")
+        if broker_quantity <= 0:
+            print(f"[WARN] Skipping {ticker} - invalid quantity: {broker_quantity}")
             continue
         # =================================================
-
-        # Get quantity from broker
-        broker_quantity = int(position.quantity)
 
         if ticker not in all_stock_data:
             continue
@@ -591,8 +555,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         # === CHECK EXIT CONDITIONS (Using Adaptive Parameters) ===
         exit_signal = None
 
-        # 2. Max holding period (60 days with momentum exception)
-        # if not exit_signal:
+        # 1. Max holding period
         exit_signal = check_max_holding_period(
             position_monitor=position_monitor,
             ticker=ticker,
@@ -602,7 +565,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
             profit_level_2_locked=metadata.get('profit_level_2_locked', False)
         )
 
-        # 3. Emergency stop (adaptive)
+        # 2. Emergency stop
         if not exit_signal:
             exit_signal = check_emergency_stop(
                 pnl_pct=pnl_pct,
@@ -611,7 +574,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
                 stop_pct=adaptive_params['emergency_stop_pct']
             )
 
-        # 4. Profit taking (3 LEVELS - TIGHTENED targets)
+        # 3. Profit taking
         if not exit_signal:
             exit_signal = check_profit_taking_adaptive(
                 pnl_pct=pnl_pct,
@@ -626,7 +589,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
                 profit_level_3_locked=metadata.get('profit_level_3_locked', False)
             )
 
-        # 5. Trailing stop (adaptive distance, WIDER after Level 3)
+        # 4. Trailing stop
         if not exit_signal:
             exit_signal = check_trailing_stop(
                 profit_level_2_locked=metadata.get('profit_level_2_locked', False),
@@ -652,7 +615,6 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
             exit_orders.append(exit_signal)
 
     return exit_orders
-
 
 def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, profit_tracker, ticker_cooldown=None):
     """

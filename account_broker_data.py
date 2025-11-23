@@ -5,9 +5,11 @@ Handles:
 - Trading window times and validation
 - Market holiday detection
 - Trading frequency controls
+- Broker position utilities (entry price extraction, validation)
 """
 
 from datetime import time, date
+from typing import Any, Tuple, Optional
 import pytz
 from config import Config
 
@@ -16,7 +18,7 @@ from config import Config
 # =============================================================================
 
 TRADING_START_TIME = time(10, 0)  # 10:00 AM EST
-TRADING_END_TIME = time(16, 0)  # 11:00 AM EST
+TRADING_END_TIME = time(16, 0)  # 4:00 PM EST
 
 # =============================================================================
 # US MARKET HOLIDAYS (2025)
@@ -149,3 +151,194 @@ def print_trading_window_info():
     print(f"Duration:   1 hour")
     print(f"Frequency:  Once per day")
     print(f"{'=' * 80}\n")
+
+
+# =============================================================================
+# BROKER POSITION UTILITIES
+# =============================================================================
+
+def get_broker_entry_price(position: Any, strategy: Any = None, ticker: str = "") -> float:
+    """
+    Extract entry price from broker position object
+
+    Tries multiple attributes in order of preference:
+    1. avg_entry_price (most reliable)
+    2. cost_basis / quantity (alpaca-trade-api format)
+    3. avg_fill_price
+    4. fill_avg_price (alternative naming)
+    5. current_price (last resort for pre-existing positions)
+
+    Args:
+        position: Broker position object
+        strategy: Strategy instance (optional, for getting current price as fallback)
+        ticker: Ticker symbol (optional, for logging)
+
+    Returns:
+        float: Entry price, or 0.0 if unable to determine
+    """
+
+    # Try avg_entry_price first (most common)
+    if hasattr(position, 'avg_entry_price') and position.avg_entry_price:
+        try:
+            price = float(position.avg_entry_price)
+            if price > 0:
+                return price
+        except (ValueError, TypeError):
+            pass
+
+    # Try cost_basis / quantity (alpaca-trade-api format)
+    if hasattr(position, 'cost_basis') and hasattr(position, 'quantity'):
+        try:
+            cost_basis = float(position.cost_basis)
+            quantity = float(position.quantity)
+            if quantity > 0 and cost_basis > 0:
+                price = cost_basis / quantity
+                if price > 0:
+                    return price
+        except (ValueError, TypeError, ZeroDivisionError):
+            pass
+
+    # Try fill_avg_price
+    if hasattr(position, 'fill_avg_price') and position.fill_avg_price:
+        try:
+            price = float(position.fill_avg_price)
+            if price > 0:
+                return price
+        except (ValueError, TypeError):
+            pass
+
+    # Try avg_fill_price (alternative naming)
+    if hasattr(position, 'avg_fill_price') and position.avg_fill_price:
+        try:
+            price = float(position.avg_fill_price)
+            if price > 0:
+                return price
+        except (ValueError, TypeError):
+            pass
+
+    # Last resort: use current_price for pre-existing positions
+    if strategy and ticker:
+        try:
+            current_price = strategy.get_last_price(ticker)
+            if current_price > 0:
+                print(f"[WARN] {ticker} - Using current price ${current_price:.2f} as entry (pre-existing position)")
+                return current_price
+        except Exception as e:
+            print(f"[ERROR] {ticker} - Could not get current price: {e}")
+
+    # Try current_price attribute as absolute fallback
+    if hasattr(position, 'current_price') and position.current_price:
+        try:
+            price = float(position.current_price)
+            if price > 0:
+                if ticker:
+                    print(f"[INFO] {ticker} - Using position.current_price ${price:.2f} as entry")
+                return price
+        except (ValueError, TypeError):
+            pass
+
+    return 0.0
+
+
+def validate_entry_price(entry_price: float, ticker: str = "", min_price: float = 0.01) -> bool:
+    """
+    Validate that entry price is reasonable
+
+    Args:
+        entry_price: Entry price to validate
+        ticker: Ticker symbol (for logging)
+        min_price: Minimum acceptable price (default $0.01)
+
+    Returns:
+        bool: True if valid, False otherwise
+    """
+    if entry_price <= 0:
+        if ticker:
+            print(f"[ERROR] {ticker} - Invalid entry price: ${entry_price:.2f} (must be > 0)")
+        return False
+
+    if entry_price < min_price:
+        if ticker:
+            print(f"[WARN] {ticker} - Entry price ${entry_price:.2f} below minimum ${min_price:.2f}")
+        return False
+
+    return True
+
+
+def get_position_quantity(position: Any, ticker: str = "") -> int:
+    """
+    Extract quantity from broker position object
+
+    Args:
+        position: Broker position object
+        ticker: Ticker symbol (for logging)
+
+    Returns:
+        int: Position quantity, or 0 if unable to determine
+    """
+    if hasattr(position, 'quantity'):
+        try:
+            qty = int(position.quantity)
+            if qty > 0:
+                return qty
+            elif qty < 0:
+                # Handle short positions (convert to positive)
+                return abs(qty)
+        except (ValueError, TypeError):
+            pass
+
+    if ticker:
+        print(f"[ERROR] {ticker} - Could not extract quantity from position")
+
+    return 0
+
+
+def calculate_position_pnl(entry_price: float, current_price: float, quantity: int) -> Tuple[float, float]:
+    """
+    Calculate position P&L
+
+    Args:
+        entry_price: Entry price per share
+        current_price: Current price per share
+        quantity: Number of shares
+
+    Returns:
+        tuple: (pnl_dollars, pnl_pct)
+    """
+    if entry_price <= 0 or quantity <= 0:
+        return 0.0, 0.0
+
+    pnl_per_share = current_price - entry_price
+    pnl_dollars = pnl_per_share * quantity
+    pnl_pct = (pnl_per_share / entry_price * 100)
+
+    return pnl_dollars, pnl_pct
+
+
+def format_price(price: float, decimals: int = 2) -> str:
+    """
+    Format price for display
+
+    Args:
+        price: Price to format
+        decimals: Number of decimal places (default 2)
+
+    Returns:
+        str: Formatted price string
+    """
+    return f"${price:,.{decimals}f}"
+
+
+def format_pnl(pnl_dollars: float, pnl_pct: float) -> str:
+    """
+    Format P&L for display with color indicator
+
+    Args:
+        pnl_dollars: P&L in dollars
+        pnl_pct: P&L percentage
+
+    Returns:
+        str: Formatted P&L string with emoji
+    """
+    emoji = "✅" if pnl_dollars > 0 else "❌"
+    return f"{emoji} ${pnl_dollars:+,.2f} ({pnl_pct:+.1f}%)"

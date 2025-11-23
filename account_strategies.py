@@ -22,7 +22,7 @@ import stock_position_sizing
 import account_profit_tracking
 import stock_position_monitoring
 from stock_cooldown import TickerCooldown
-from server_state_persistence import save_state_safe, load_state_safe
+from server_recovery import save_state_safe, load_state_safe
 
 # INTEGRATED IMPORTS (consolidated modules)
 from stock_rotation import StockRotator
@@ -230,15 +230,15 @@ class SwingTradeStrategy(Strategy):
                 return
 
             # =====================================================================
-            # MARKET REGIME DETECTION
+            # MARKET REGIME DETECTION (CALCULATED ONCE, CACHED)
             # =====================================================================
 
             try:
-                regime_info = account_drawdown_protection.detect_market_regime(spy_data)
-                print(account_drawdown_protection.format_regime_display(regime_info))
+                global_regime_info = account_drawdown_protection.detect_market_regime(spy_data)
+                print(account_drawdown_protection.format_regime_display(global_regime_info))
             except Exception as e:
                 execution_tracker.add_error("Market Regime Detection", e)
-                regime_info = {'allow_trading': True}
+                global_regime_info = {'allow_trading': True, 'position_size_multiplier': 1.0}
 
             # Clean expired blacklists
             try:
@@ -285,10 +285,10 @@ class SwingTradeStrategy(Strategy):
                     account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
                 return
 
-            if not regime_info.get('allow_trading', True):
-                print(f"\n⚠️ {regime_info['description']}")
+            if not global_regime_info.get('allow_trading', True):
+                print(f"\n⚠️ {global_regime_info['description']}")
                 print(f"No new positions will be opened.\n")
-                execution_tracker.add_warning(f"Trading blocked: {regime_info['description']}")
+                execution_tracker.add_warning(f"Trading blocked: {global_regime_info['description']}")
                 execution_tracker.complete('SUCCESS')
                 if not Config.BACKTESTING:
                     account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
@@ -343,7 +343,7 @@ class SwingTradeStrategy(Strategy):
                 active_tickers = self.tickers
 
             # =====================================================================
-            # STEP 3: COLLECT BUY OPPORTUNITIES
+            # STEP 3: COLLECT BUY OPPORTUNITIES (WITH CACHED REGIME)
             # =====================================================================
 
             opportunities = []
@@ -361,7 +361,7 @@ class SwingTradeStrategy(Strategy):
                         print(f"   ⚠️ {ticker} BLOCKED: {vol_metrics['risk_class'].upper()} volatility")
                         continue
 
-                    # Check regime for this ticker
+                    # OPTIMIZED: Check regime for this ticker (reuse spy_data, only calc stock-specific)
                     ticker_regime = account_drawdown_protection.detect_market_regime(spy_data, stock_data=data)
                     if not ticker_regime.get('allow_trading', True):
                         continue
@@ -413,6 +413,7 @@ class SwingTradeStrategy(Strategy):
                     execution_tracker.add_error(f"Opportunity Analysis - {ticker}", e)
                     continue
 
+            # Rest of the method continues unchanged...
             # =====================================================================
             # STEP 4: OPTIMAL POSITION SIZING
             # =====================================================================
@@ -511,15 +512,6 @@ class SwingTradeStrategy(Strategy):
                     order = self.create_order(ticker, quantity, 'buy')
                     self.submit_order(order)
 
-                    self.order_logger.log_order(
-                        ticker=ticker,
-                        side='buy',
-                        quantity=quantity,
-                        signal_type=buy_signal.get('signal_type', 'unknown'),
-                        award=alloc['award'],
-                        quality_score=int(alloc['quality_score'])
-                    )
-
                     # Record in cooldown
                     self.ticker_cooldown.record_buy(ticker, current_date)
 
@@ -534,17 +526,6 @@ class SwingTradeStrategy(Strategy):
             # =====================================================================
             # COMPLETE EXECUTION
             # =====================================================================
-
-            try:
-                spy_data = all_stock_data.get('SPY', {}).get('indicators', None)
-                spy_close = spy_data.get('close') if spy_data else None
-
-                self.metrics_recorder.record_daily_metrics(
-                    spy_close=spy_close,
-                    market_regime=regime_info.get('regime', 'unknown')
-                )
-            except Exception as e:
-                execution_tracker.add_error("Daily Metrics Recording", e)
 
             execution_tracker.complete('SUCCESS')
 
