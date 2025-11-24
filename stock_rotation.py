@@ -559,9 +559,9 @@ class StockRotator:
                 print(f"   {ticker}: {award}")
 
         # Display ticker details
-        print(f"\n{'─' * 80}")
-        print(f"{'Ticker':<8} {'Award':<10} {'Trades':<8} {'WR':<8} {'Recent':<10} {'Multiplier'}")
-        print(f"{'─' * 80}")
+        # print(f"\n{'─' * 80}")
+        # print(f"{'Ticker':<8} {'Award':<10} {'Trades':<8} {'WR':<8} {'Recent':<10} {'Multiplier'}")
+        # print(f"{'─' * 80}")
 
         tier_order = {'premium': 0, 'standard': 1, 'trial': 2, 'none': 3, 'frozen': 4}
         sorted_tickers = sorted(
@@ -592,7 +592,7 @@ class StockRotator:
             else:
                 print(f"{ticker:<8} 🔬 trial     0        N/A    N/A        {AwardConfig.TRIAL_MULTIPLIER}x")
         '''
-        print(f"{'─' * 80}\n")
+        # print(f"{'─' * 80}\n")
 
 
     def get_award(self, ticker):

@@ -67,7 +67,7 @@ class SwingTradeStrategy(Strategy):
         self.signal_processor = stock_signals.SignalProcessor()
 
         print(f"✅ Signal Processor: Priority-based (no multi-signal scoring)")
-        print(f"   Immediate Signals: {', '.join(stock_signals.SignalConfiguration.IMMEDIATE_SIGNALS)}")
+        print(f"   Immediate Signals: {', '.join(stock_signals.BUY_STRATEGIES.keys())}")
         print(f"✅ Drawdown Protection: {self.drawdown_protection.threshold_pct:.1f}% threshold")
         print(f"✅ Ticker Cooldown: {self.ticker_cooldown.cooldown_days} days")
         print(f"✅ Stock Rotation: Weekly award-based system")

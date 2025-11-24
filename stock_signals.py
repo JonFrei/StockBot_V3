@@ -64,27 +64,6 @@ SignalList = List[str]
 
 
 # ===================================================================================
-# SIGNAL CONFIGURATION
-# ===================================================================================
-
-class SignalConfiguration:
-    """
-    Signal processing configuration
-
-    All signals are immediate buys - processed in priority order
-    """
-
-    # All signals are immediate (no confirmation required)
-    IMMEDIATE_SIGNALS = [
-        'swing_trade_1',  # Priority 1: Early momentum catch
-        'golden_cross',  # Priority 2: Major trend change
-        'consolidation_breakout',  # Priority 3: Breakout with volume
-        'swing_trade_2',  # Priority 4: Pullback in trend
-        'bollinger_buy',  # Priority 5: Oversold bounce
-    ]
-
-
-# ===================================================================================
 # SIGNAL PROCESSOR
 # ===================================================================================
 
@@ -96,9 +75,6 @@ class SignalProcessor:
     - Check signals in priority order
     - One signal per ticker (first match wins)
     """
-
-    def __init__(self, immediate_signals: List[str] = None):
-        self.immediate_signals = immediate_signals or SignalConfiguration.IMMEDIATE_SIGNALS
 
     def process_ticker(self, ticker: str, data: Dict, spy_data: Optional[Dict] = None) -> Dict:
         """
@@ -118,8 +94,8 @@ class SignalProcessor:
         """
 
         # Check immediate signals (priority order, first match wins)
-        for signal_name in self.immediate_signals:
-            signal_func = BUY_STRATEGIES.get(signal_name)
+        for key, val in BUY_STRATEGIES:
+            signal_func = val
             if not signal_func:
                 continue
 
@@ -127,8 +103,8 @@ class SignalProcessor:
 
             if result and result.get('side') == 'buy':
                 return {
-                    'action': 'buy_now',
-                    'signal_type': signal_name,
+                    'action': 'buy',
+                    'signal_type': key,
                     'signal_data': result
                 }
 
@@ -523,9 +499,9 @@ def _no_signal(reason: str) -> SignalResult:
     }
 
 
-# =======================================================================================================================
+# ===================================================================================
 # STRATEGY REGISTRY
-# =======================================================================================================================
+# ===================================================================================
 
 BUY_STRATEGIES: Dict[str, Any] = {
     'consolidation_breakout': consolidation_breakout,
