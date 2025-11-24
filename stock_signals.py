@@ -18,7 +18,7 @@ class SignalConfig:
     # ===================================================================
     # GLOBAL SCORING
     # ===================================================================
-    MIN_SCORE_THRESHOLD = 40
+    MIN_SCORE_THRESHOLD = 55
 
     # ===================================================================
     # SWING_TRADE_1: Working well in backtest (71.3% WR)
@@ -85,14 +85,6 @@ class SignalProcessor:
     def process_ticker(self, ticker: str, data: Dict, spy_data: Optional[Dict] = None) -> Dict:
         """
         Process ticker through ALL signals, return best score
-
-        Returns:
-            {
-                'action': 'buy' | 'skip',
-                'signal_type': str or None,
-                'signal_data': dict or None,
-                'all_scores': dict (for debugging)
-            }
         """
         all_scores = {}
         best_signal = None
@@ -122,6 +114,7 @@ class SignalProcessor:
                 'action': 'buy',
                 'signal_type': best_signal,
                 'signal_data': best_result,
+                'score': best_score,  # ← ADD THIS LINE
                 'all_scores': all_scores
             }
 
@@ -129,6 +122,7 @@ class SignalProcessor:
             'action': 'skip',
             'signal_type': None,
             'signal_data': None,
+            'score': 0,  # ← ADD THIS LINE TOO
             'all_scores': all_scores
         }
 

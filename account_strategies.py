@@ -576,7 +576,7 @@ class SwingTradeStrategy(Strategy):
     def on_strategy_end(self):
         """Display final statistics with signal scores"""
 
-        self.profit_tracker.display_final_summary()
+        # self.profit_tracker.display_final_summary()
 
         cooldown_stats = self.ticker_cooldown.get_statistics()
         print(f"\n{'=' * 80}")
@@ -610,6 +610,7 @@ class SwingTradeStrategy(Strategy):
         from stock_rotation import print_rotation_report
         print_rotation_report(self.stock_rotator)
 
+        self.profit_tracker.display_final_summary()
         account_drawdown_protection.print_protection_summary(self.drawdown_protection)
 
         return 0
