@@ -202,6 +202,31 @@ class SwingTradeStrategy(Strategy):
                 global_regime_info = account_drawdown_protection.detect_market_regime(spy_data)
                 print(account_drawdown_protection.format_regime_display(global_regime_info))
 
+                current_drawdown = self.drawdown_protection.calculate_drawdown(self.portfolio_value)
+
+                if current_drawdown <= -5.0 and global_regime_info.get('allow_trading', True):
+                    # Check if SPY is still near 200 SMA (market not officially bear yet)
+                    if spy_data:
+                        spy_close = spy_data.get('close', 0)
+                        spy_sma200 = spy_data.get('sma200', 0)
+                        spy_from_200 = ((spy_close - spy_sma200) / spy_sma200 * 100) if spy_sma200 > 0 else -100
+
+                        # If SPY within 3% of 200 SMA but we're down 5%+ = early warning
+                        if abs(spy_from_200) < 3.0:
+                            print(
+                                f"\n🔴 EARLY WARNING: Portfolio {current_drawdown:.1f}% drawdown while SPY only {spy_from_200:+.1f}% from 200 SMA")
+                            print(f"⚠️ Blocking new positions - portfolio underperforming market")
+                            print(f"No new positions will be opened.\n")
+
+                            execution_tracker.add_warning(
+                                f"Portfolio underperformance: {current_drawdown:.1f}% vs market")
+                            execution_tracker.complete('SUCCESS')
+                            if not Config.BACKTESTING:
+                                account_email_notifications.send_daily_summary_email(
+                                    self, current_date, execution_tracker
+                                )
+                            return
+
                 if not global_regime_info.get('allow_trading', True):
                     print(f"\n⚠️ {global_regime_info['description']}")
                     print(f"🚫 BEAR MARKET DETECTED - FORCE CLOSING ALL POSITIONS")
@@ -415,6 +440,10 @@ class SwingTradeStrategy(Strategy):
                     quality_score = stock_position_sizing.calculate_opportunity_quality(
                         ticker, data, spy_data, signal_count=1
                     )
+
+                    if quality_score < 40:
+                        print(f"   ⚠️ {ticker}: Quality {quality_score:.0f}/100 too weak (below 40 floor) - SKIPPED")
+                        continue
 
                     # Get multipliers
                     award = self.stock_rotator.get_award(ticker)

@@ -333,10 +333,7 @@ class StockRotator:
         # Reset stats
         self.ticker_stats = {}
 
-        # Get closed trades - USE THE METHOD, NOT ATTRIBUTE
-        closed_trades = self.profit_tracker.get_closed_trades()
-
-        for trade in closed_trades:
+        for trade in self.profit_tracker.get_closed_trades():
             ticker = trade['ticker']
             is_winner = trade['pnl_dollars'] > 0
 

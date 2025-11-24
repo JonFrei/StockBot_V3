@@ -61,13 +61,13 @@ class SignalConfig:
     # ===================================================================
     # BOLLINGER_BUY: Loosened for more volume
     # ===================================================================
-    BB_DISTANCE_FROM_LOWER_MAX = 4.0
+    BB_DISTANCE_FROM_LOWER_MAX = 2.5  # CHANGED from 4.0
     BB_RSI_MIN = 25
     BB_RSI_MAX = 48
-    BB_VOLUME_RATIO_MIN = 1.0
+    BB_VOLUME_RATIO_MIN = 1.2  # CHANGED from 1.0
     BB_ADX_MIN = 15
     BB_STOCH_MAX = 35
-    BB_REQUIRE_DAILY_BOUNCE = False
+    BB_REQUIRE_DAILY_BOUNCE = True  # CHANGED from False
 
 
 # Type aliases
