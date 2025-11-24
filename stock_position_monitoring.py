@@ -20,34 +20,34 @@ class AdaptiveExitConfig:
     """
 
     # === STRONG CONDITIONS (Score 7-10) ===
-    STRONG_EMERGENCY_STOP = -5.5
-    STRONG_PROFIT_TARGET_1 = 15.0
+    STRONG_EMERGENCY_STOP = -5.0
+    STRONG_PROFIT_TARGET_1 = 10.0
     STRONG_PROFIT_TARGET_1_SELL = 33.0
-    STRONG_PROFIT_TARGET_2 = 25.0
+    STRONG_PROFIT_TARGET_2 = 20.0
     STRONG_PROFIT_TARGET_2_SELL = 33.0
-    STRONG_PROFIT_TARGET_3 = 35.0
+    STRONG_PROFIT_TARGET_3 = 30.0
     STRONG_PROFIT_TARGET_3_SELL = 50.0  # CHANGED: leaves ~17% for trailing
     # Trailing Stop
-    STRONG_TRAILING_STOP = 8.0
-    STRONG_TRAILING_STOP_FINAL = 10.0  # TIGHTER after Level 3
+    STRONG_TRAILING_STOP = 5.0
+    STRONG_TRAILING_STOP_FINAL = 8.0  # TIGHTER after Level 3
 
     # === NEUTRAL CONDITIONS (Score 4-6) ===
     NEUTRAL_EMERGENCY_STOP = -5.0
-    NEUTRAL_PROFIT_TARGET_1 = 15.0
+    NEUTRAL_PROFIT_TARGET_1 = 10.0
     NEUTRAL_PROFIT_TARGET_1_SELL = 33.0
-    NEUTRAL_PROFIT_TARGET_2 = 22.0
+    NEUTRAL_PROFIT_TARGET_2 = 18.0
     NEUTRAL_PROFIT_TARGET_2_SELL = 33.0
-    NEUTRAL_PROFIT_TARGET_3 = 30.0
+    NEUTRAL_PROFIT_TARGET_3 = 25.0
     NEUTRAL_PROFIT_TARGET_3_SELL = 50.0  # CHANGED: leaves ~17% for trailing
     # Trailing Stop
-    NEUTRAL_TRAILING_STOP = 6.0
-    NEUTRAL_TRAILING_STOP_FINAL = 10.0  # TIGHTER after Level 3
+    NEUTRAL_TRAILING_STOP = 5.0
+    NEUTRAL_TRAILING_STOP_FINAL = 8.0  # TIGHTER after Level 3
 
     # === WEAK CONDITIONS (Score 0-3) ===
-    WEAK_EMERGENCY_STOP = -4.5
-    WEAK_PROFIT_TARGET_1 = 12.0
+    WEAK_EMERGENCY_STOP = -5.0
+    WEAK_PROFIT_TARGET_1 = 10.0
     WEAK_PROFIT_TARGET_1_SELL = 33.0
-    WEAK_PROFIT_TARGET_2 = 16.0
+    WEAK_PROFIT_TARGET_2 = 15.0
     WEAK_PROFIT_TARGET_2_SELL = 33.0
     WEAK_PROFIT_TARGET_3 = 20.0
     WEAK_PROFIT_TARGET_3_SELL = 50.0  # CHANGED: leaves ~17% for trailing
@@ -56,9 +56,9 @@ class AdaptiveExitConfig:
     WEAK_TRAILING_STOP_FINAL = 8.0  # TIGHTER after Level 3
 
     # === MAX HOLDING PERIODS (Profit-Level Based) ===
-    MAX_HOLD_BEFORE_LEVEL_1 = 30  # Must reach +12-15% within 20 days
-    MAX_HOLD_AT_LEVEL_1 = 60  # Must reach +20-25% within 30 days after Level 1
-    MAX_HOLD_AT_LEVEL_2 = 90  # Must reach +30-35% within 40 days after Level 2
+    MAX_HOLD_BEFORE_LEVEL_1 = 20  # Must reach +12-15% within 20 days
+    MAX_HOLD_AT_LEVEL_1 = 45  # Must reach +20-25% within 30 days after Level 1
+    MAX_HOLD_AT_LEVEL_2 = 45  # Must reach +30-35% within 40 days after Level 2
     # After Level 3: No time limit - trailing stops + special exits handle it
 
     # === LEVEL 3 SPECIAL EXITS ===
@@ -73,113 +73,100 @@ class AdaptiveExitConfig:
 
 def calculate_market_condition_score(data):
     """
-    Score market conditions from 0-10 based on multiple indicators
+    Simple 3-Factor Market Condition Scoring (0-10)
 
-    Scoring Breakdown:
-    - ADX (Trend Strength): 0-3 points
-    - MACD (Momentum): 0-2.5 points
-    - EMA Alignment (Structure): 0-2 points
-    - Volume (Confirmation): 0-1.5 points
-    - RSI (Not Overbought): 0-1 point
-
-    Total: 0-10 points
-
-    Args:
-        data: Dictionary with technical indicators
+    Three critical factors:
+    1. Trend Strength (ADX) - 0-4 points
+    2. Momentum Quality (MACD + Price Structure) - 0-4 points
+    3. Volume Confirmation - 0-2 points
 
     Returns:
         dict: {
             'score': float (0-10),
             'condition': str ('strong', 'neutral', 'weak'),
-            'breakdown': dict (individual component scores)
+            'breakdown': dict
         }
     """
     score = 0.0
     breakdown = {}
 
-    # 1. ADX - Trend Strength (0-3 points)
+    # =================================================================
+    # FACTOR 1: TREND STRENGTH (0-4 points)
+    # =================================================================
     adx = data.get('adx', 0)
-    if adx > 40:
-        adx_score = 3.0
-    elif adx > 30:
-        adx_score = 2.0
-    elif adx > 20:
-        adx_score = 1.0
-    else:
-        adx_score = 0.0
-    score += adx_score
-    breakdown['adx'] = adx_score
 
-    # 2. MACD - Momentum (0-2.5 points)
+    if adx >= 30:
+        trend_score = 4.0  # Very strong trend
+    elif adx >= 25:
+        trend_score = 3.0  # Strong trend
+    elif adx >= 20:
+        trend_score = 2.0  # Moderate trend
+    elif adx >= 15:
+        trend_score = 1.0  # Weak trend
+    else:
+        trend_score = 0.0  # No trend (choppy)
+
+    score += trend_score
+    breakdown['trend_strength'] = trend_score
+
+    # =================================================================
+    # FACTOR 2: MOMENTUM QUALITY (0-4 points)
+    # =================================================================
+    close = data.get('close', 0)
+    ema20 = data.get('ema20', 0)
+    ema50 = data.get('ema50', 0)
     macd = data.get('macd', 0)
     macd_signal = data.get('macd_signal', 0)
     macd_hist = data.get('macd_histogram', 0)
 
-    if macd > macd_signal and macd_hist > 0:
-        # Bullish and expanding
-        macd_score = 2.5
-    elif macd > macd_signal:
-        # Bullish but not expanding
-        macd_score = 1.5
-    elif macd < macd_signal and macd_hist < 0:
-        # Bearish crossover - penalize
-        macd_score = 0.0
-    else:
-        macd_score = 0.5
-    score += macd_score
-    breakdown['macd'] = macd_score
+    momentum_score = 0.0
 
-    # 3. EMA Alignment (0-2 points)
-    close = data.get('close', 0)
-    ema8 = data.get('ema8', 0)
-    ema12 = data.get('ema12', 0)
-    ema20 = data.get('ema20', 0)
-    ema50 = data.get('ema50', 0)
+    # Price structure (0-2 points)
+    if close > ema20 > ema50:
+        momentum_score += 2.0  # Perfect bullish structure
+    elif close > ema20:
+        momentum_score += 1.0  # Decent structure
+    # else: 0 points (broken structure)
 
-    if close > ema8 > ema12 > ema20 > ema50:
-        # Perfect bullish alignment
-        ema_score = 2.0
-    elif close > ema20 > ema50:
-        # Decent structure
-        ema_score = 1.0
-    else:
-        # Broken structure
-        ema_score = 0.0
-    score += ema_score
-    breakdown['ema'] = ema_score
+    # MACD momentum (0-2 points)
+    if macd > macd_signal:
+        if macd_hist > 0:
+            momentum_score += 2.0  # Bullish and expanding
+        else:
+            momentum_score += 1.0  # Bullish but weakening
+    # else: 0 points (bearish)
 
-    # 4. Volume Confirmation (0-1.5 points)
+    score += momentum_score
+    breakdown['momentum_quality'] = momentum_score
+
+    # =================================================================
+    # FACTOR 3: VOLUME CONFIRMATION (0-2 points)
+    # =================================================================
     volume_ratio = data.get('volume_ratio', 0)
-    if volume_ratio > 1.5:
-        vol_score = 1.5
-    elif volume_ratio > 1.0:
-        vol_score = 0.75
-    else:
-        vol_score = 0.0
-    score += vol_score
-    breakdown['volume'] = vol_score
 
-    # 5. RSI (0-1 point)
-    rsi = data.get('rsi', 50)
-    if 50 <= rsi <= 65:
-        # Healthy bullish
-        rsi_score = 1.0
-    elif (40 <= rsi < 50) or (65 < rsi <= 75):
-        # Acceptable
-        rsi_score = 0.5
+    if volume_ratio >= 1.5:
+        volume_score = 2.0  # Strong volume
+    elif volume_ratio >= 1.2:
+        volume_score = 1.5  # Good volume
+    elif volume_ratio >= 1.0:
+        volume_score = 1.0  # Average volume
+    elif volume_ratio >= 0.8:
+        volume_score = 0.5  # Weak volume
     else:
-        # Extreme
-        rsi_score = 0.0
-    score += rsi_score
-    breakdown['rsi'] = rsi_score
+        volume_score = 0.0  # Very weak volume
 
-    # Determine condition
+    score += volume_score
+    breakdown['volume_confirmation'] = volume_score
+
+    # =================================================================
+    # CLASSIFY CONDITION
+    # =================================================================
     if score >= 7.0:
-        condition = 'strong'
+        condition = 'strong'  # 7-10: Strong conditions
     elif score >= 4.0:
-        condition = 'neutral'
+        condition = 'neutral'  # 4-6.9: Neutral conditions
     else:
-        condition = 'weak'
+        condition = 'weak'  # 0-3.9: Weak conditions
 
     return {
         'score': round(score, 2),

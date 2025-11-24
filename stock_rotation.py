@@ -28,7 +28,7 @@ class AwardConfig:
     """Centralized configuration for award system"""
 
     # === AWARD MULTIPLIERS ===
-    PREMIUM_MULTIPLIER = 1.3
+    PREMIUM_MULTIPLIER = 1.5
     STANDARD_MULTIPLIER = 1.0
     TRIAL_MULTIPLIER = 1.0
     NO_AWARD_MULTIPLIER = 0.6

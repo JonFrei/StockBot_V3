@@ -84,33 +84,21 @@ def calculate_opportunity_quality(ticker, data, spy_data, signal_count):
     score = 0.0
 
     # =================================================================
-    # 1. SIGNAL STRENGTH (0-30 points)
-    # =================================================================
-    if signal_count >= 4:
-        score += 30  # Exceptional conviction
-    elif signal_count == 3:
-        score += 25  # High conviction
-    elif signal_count == 2:
-        score += 20  # Medium conviction
-    else:
-        score += 15  # Single signal
-
-    # =================================================================
-    # 2. TECHNICAL SETUP QUALITY (0-30 points)
+    # 2. TECHNICAL SETUP QUALITY (0-40 points)
     # =================================================================
 
-    # ADX - Trend Strength (0-10 points)
+    # ADX - Trend Strength (0-12 points)
     adx = data.get('adx', 0)
     if adx > 35:
-        score += 10  # Very strong trend
+        score += 12  # Very strong trend
     elif adx > 28:
-        score += 8
+        score += 10
     elif adx > 22:
-        score += 6
+        score += 8
     elif adx > 18:
-        score += 4
+        score += 6
 
-    # MACD - Momentum (0-7 points)
+    # MACD - Momentum (0-10 points)
     macd = data.get('macd', 0)
     macd_signal = data.get('macd_signal', 0)
     macd_hist = data.get('macd_histogram', 0)
@@ -118,35 +106,35 @@ def calculate_opportunity_quality(ticker, data, spy_data, signal_count):
 
     if macd > macd_signal:
         if macd_hist > macd_hist_prev > 0:
-            score += 7  # Bullish and accelerating
+            score += 10  # Bullish and accelerating
         elif macd_hist > 0:
-            score += 5  # Bullish
+            score += 8  # Bullish
         else:
-            score += 3  # Recently turned bullish
+            score += 6  # Recently turned bullish
 
-    # EMA Alignment (0-8 points)
+    # EMA Alignment (0-10 points)
     close = data.get('close', 0)
     ema8 = data.get('ema8', 0)
     ema20 = data.get('ema20', 0)
     ema50 = data.get('ema50', 0)
 
     if close > ema8 > ema20 > ema50:
-        score += 8  # Perfect alignment
+        score += 10  # Perfect alignment
     elif close > ema20 > ema50:
-        score += 6  # Good structure
+        score += 8  # Good structure
     elif close > ema20:
-        score += 3  # Basic structure
+        score += 6  # Basic structure
 
-    # Volume Confirmation (0-5 points)
+    # Volume Confirmation (0-8 points)
     volume_ratio = data.get('volume_ratio', 0)
     if volume_ratio > 2.0:
-        score += 5  # Exceptional volume
+        score += 8  # Exceptional volume
     elif volume_ratio > 1.5:
-        score += 4
+        score += 6
     elif volume_ratio > 1.2:
-        score += 3
+        score += 4
     elif volume_ratio > 1.0:
-        score += 1
+        score += 2
 
     # =================================================================
     # 3. RISK/REWARD PROFILE (0-20 points)
