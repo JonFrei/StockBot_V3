@@ -60,7 +60,7 @@ class SwingTradeStrategy(Strategy):
 
         # Drawdown protection
         self.drawdown_protection = account_drawdown_protection.create_default_protection(
-            threshold_pct=-10.0,
+            threshold_pct=-8.0,  # CHANGED from -10.0
             recovery_days=5
         )
 
@@ -201,16 +201,47 @@ class SwingTradeStrategy(Strategy):
             try:
                 global_regime_info = account_drawdown_protection.detect_market_regime(spy_data)
                 print(account_drawdown_protection.format_regime_display(global_regime_info))
+
+                # CRITICAL: Block ALL new positions if bear market detected
+                if not global_regime_info.get('allow_trading', True):
+                    print(f"\n⚠️ {global_regime_info['description']}")
+                    print(f"🚫 No new positions will be opened.\n")
+                    execution_tracker.add_warning(f"Trading blocked: {global_regime_info['description']}")
+
+                    # Still check exits (let positions close naturally or hit stops)
+                    try:
+                        exit_orders = stock_position_monitoring.check_positions_for_exits(
+                            strategy=self,
+                            current_date=current_date,
+                            all_stock_data=all_stock_data,
+                            position_monitor=self.position_monitor
+                        )
+
+                        stock_position_monitoring.execute_exit_orders(
+                            strategy=self,
+                            exit_orders=exit_orders,
+                            current_date=current_date,
+                            position_monitor=self.position_monitor,
+                            profit_tracker=self.profit_tracker,
+                            ticker_cooldown=self.ticker_cooldown
+                        )
+
+                        if exit_orders:
+                            execution_tracker.record_action('exits', count=len(exit_orders))
+
+                    except Exception as e:
+                        execution_tracker.add_error("Position Exit Processing", e)
+
+                    execution_tracker.complete('SUCCESS')
+                    if not Config.BACKTESTING:
+                        account_email_notifications.send_daily_summary_email(
+                            self, current_date, execution_tracker
+                        )
+                    return  # EXIT - No new positions
+
             except Exception as e:
                 execution_tracker.add_error("Market Regime Detection", e)
                 global_regime_info = {'allow_trading': True, 'position_size_multiplier': 1.0}
-
-            # Clean expired blacklists
-            try:
-                if self.stock_rotator.blacklist:
-                    self.stock_rotator.blacklist.clean_expired_blacklists(current_date)
-            except Exception as e:
-                execution_tracker.add_error("Blacklist Cleanup", e)
 
             # =================================================================
             # STEP 1: CHECK POSITIONS FOR EXITS

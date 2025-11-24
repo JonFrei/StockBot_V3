@@ -1,20 +1,11 @@
 """
 Portfolio Drawdown Protection System + Market Regime Detection + Circuit Breaker
 
-INTEGRATED: Market regime detection now part of this module
-
-Protects portfolio from deep drawdowns by:
-1. Tracking portfolio peak (highest value achieved)
-2. Monitoring current drawdown percentage
-3. Triggering circuit breaker when threshold exceeded
-4. Closing all positions and going to cash
-5. Enforcing recovery period before allowing new entries
-
-PLUS: Market regime detection for adaptive position sizing
-
-PLUS: CircuitBreaker class for API failure protection
-
-PRIORITY 4: ADJUSTED - Bear market now allows 30% position sizing instead of blocking entirely
+ENHANCED BEAR MARKET DETECTION:
+- EMA50 slope analysis (catches declining trends)
+- Multi-timeframe confirmation
+- Volume deterioration detection
+- Blocks trading BEFORE major drawdowns occur
 
 Usage:
     protection = DrawdownProtection(
@@ -25,80 +16,186 @@ Usage:
     # In strategy loop:
     if protection.should_trigger(portfolio_value):
         protection.activate(strategy, current_date)
-        return  # Skip rest of iteration
-
-    if protection.is_in_recovery(current_date):
-        # Only process exits, no new entries
         return
 
-    # Market regime detection
     regime_info = detect_market_regime(spy_data, stock_data)
-
+    if not regime_info['allow_trading']:
+        return  # Skip new positions
 """
 
 from datetime import timedelta, datetime
+import pandas as pd
 
 
 # =============================================================================
-# INTEGRATED: MARKET REGIME DETECTION
+# ENHANCED MARKET REGIME DETECTION
 # =============================================================================
 
 def detect_market_regime(spy_data, stock_data=None):
     """
-    Detect current market regime from SPY indicators
+    Detect current market regime with ENHANCED BEAR MARKET DETECTION
 
-    INTEGRATED: Now includes 200 SMA / SPY regime filter (moved from signals.py)
-    PRIORITY 4: Bear market now allows 30% sizing instead of blocking (was 0%)
+    NEW CHECKS (prevents March-July 2025 drawdown):
+    1. EMA50 slope analysis - catches death cross FORMING
+    2. Volume deterioration - detects weakening conviction
+    3. Price momentum check - confirms trend direction
+    4. Multiple timeframe alignment - stronger confirmation
 
-    Uses ADX (trend strength), ATR (volatility), price vs SMA50/200
-    to categorize market conditions.
-
-    Args:
-        spy_data: Dictionary with SPY indicators
-        stock_data: Optional dict with stock indicators (for 200 SMA check)
+    PRIORITY 1: BEAR MARKET (BLOCKING)
+    - EMA50 declining over 10 days
+    - SPY below 200 SMA
+    - Stock >5% below 200 SMA
+    - Negative price momentum
 
     Returns:
         dict: {
-            'regime': str ('trending', 'choppy', 'volatile', 'bear_market'),
-            'position_size_multiplier': float (0.3-1.0),
+            'regime': str,
+            'position_size_multiplier': float (0.0-1.0),
             'emergency_stop_multiplier': float (0.75-1.0),
-            'max_positions': int (0-10),
+            'max_positions': int,
             'description': str,
-            'allow_trading': bool
+            'allow_trading': bool,
+            'warnings': list
         }
     """
-    # =======================================================================
-    # PRIORITY CHECK: BEAR MARKET PROTECTION (moved from signals.py)
-    # PRIORITY 4: Now allows 30% sizing instead of blocking
-    # =======================================================================
 
-    if stock_data:
-        stock_close = stock_data.get('close', 0)
-        stock_sma200 = stock_data.get('sma200', 0)
-        distance_from_200 = ((stock_close - stock_sma200) / stock_sma200 * 100) if stock_sma200 > 0 else -100
-    else:
-        distance_from_200 = 0
+    warnings = []
+
+    # =======================================================================
+    # CRITICAL: ENHANCED BEAR MARKET DETECTION
+    # =======================================================================
 
     if spy_data:
         spy_close = spy_data.get('close', 0)
         spy_sma200 = spy_data.get('sma200', 0)
-        spy_below_200 = spy_close < spy_sma200 if spy_sma200 > 0 else False
-    else:
-        spy_below_200 = False
+        spy_ema50 = spy_data.get('ema50', 0)
+        spy_ema20 = spy_data.get('ema20', 0)
+        spy_raw = spy_data.get('raw', None)
 
-    # BEAR MARKET: PRIORITY 4 - Allow 30% sizing instead of blocking
-    if (stock_data and distance_from_200 < -5.0) or spy_below_200:
-        return {
-            'regime': 'bear_market',
-            'position_size_multiplier': 0.3,  # CHANGED FROM 0.0 TO 0.3
-            'emergency_stop_multiplier': 1.0,
-            'max_positions': 5,  # CHANGED FROM 0 TO 5
-            'description': f'🔴 BEAR MARKET: Reduced sizing (Stock: {distance_from_200:.1f}% from 200 SMA, SPY below 200 SMA: {spy_below_200})',
-            'allow_trading': True  # CHANGED FROM False TO True
-        }
+        # === CHECK 1: Classic Bear Market (SPY below 200 SMA) ===
+        spy_below_200 = spy_close < spy_sma200 if spy_sma200 > 0 else False
+
+        if spy_below_200:
+            distance_below = ((spy_close - spy_sma200) / spy_sma200 * 100) if spy_sma200 > 0 else 0
+            return {
+                'regime': 'bear_market',
+                'position_size_multiplier': 0.0,
+                'emergency_stop_multiplier': 1.0,
+                'max_positions': 0,
+                'description': f'🔴 BEAR MARKET: SPY {distance_below:.1f}% below 200 SMA - TRADING BLOCKED',
+                'allow_trading': False,
+                'warnings': ['SPY below 200 SMA']
+            }
+
+        # === CHECK 2: DEATH CROSS FORMING (EMA50 declining) ===
+        if spy_raw is not None and len(spy_raw) >= 60:
+            # Calculate EMA50 slope over last 10 days
+            ema50_series = spy_raw['close'].ewm(span=50, adjust=False).mean()
+
+            if len(ema50_series) >= 11:
+                ema50_current = ema50_series.iloc[-1]
+                ema50_10d_ago = ema50_series.iloc[-11]
+
+                # Calculate slope (% change per day)
+                ema50_slope = ((ema50_current - ema50_10d_ago) / ema50_10d_ago * 100) / 10
+
+                # If EMA50 declining more than 0.15% per day = death cross forming
+                if ema50_slope < -0.15:
+                    warnings.append(f'SPY EMA50 declining ({ema50_slope:.2f}%/day)')
+
+                    return {
+                        'regime': 'bear_market',
+                        'position_size_multiplier': 0.0,
+                        'emergency_stop_multiplier': 1.0,
+                        'max_positions': 0,
+                        'description': f'🔴 BEAR MARKET FORMING: SPY EMA50 declining {ema50_slope:.2f}%/day - TRADING BLOCKED',
+                        'allow_trading': False,
+                        'warnings': warnings
+                    }
+
+        # === CHECK 3: DEATH CROSS PRESENT (EMA20 < EMA50) ===
+        if spy_ema20 > 0 and spy_ema50 > 0:
+            if spy_ema20 < spy_ema50:
+                warnings.append('SPY death cross (EMA20 < EMA50)')
+
+                return {
+                    'regime': 'bear_market',
+                    'position_size_multiplier': 0.0,
+                    'emergency_stop_multiplier': 1.0,
+                    'max_positions': 0,
+                    'description': f'🔴 DEATH CROSS: SPY EMA20 < EMA50 - TRADING BLOCKED',
+                    'allow_trading': False,
+                    'warnings': warnings
+                }
+
+        # === CHECK 4: NEGATIVE PRICE MOMENTUM ===
+        if spy_raw is not None and len(spy_raw) >= 10:
+            recent_closes = spy_raw['close'].iloc[-10:].values
+            momentum_10d = ((recent_closes[-1] - recent_closes[0]) / recent_closes[0] * 100)
+
+            # If SPY down >3% over 10 days while near 200 SMA = warning
+            if momentum_10d < -3.0:
+                distance_from_200 = ((spy_close - spy_sma200) / spy_sma200 * 100) if spy_sma200 > 0 else 0
+
+                if distance_from_200 < 3.0:  # Within 3% of 200 SMA
+                    warnings.append(f'SPY momentum: {momentum_10d:.1f}% over 10d')
+
+                    return {
+                        'regime': 'bear_market',
+                        'position_size_multiplier': 0.0,
+                        'emergency_stop_multiplier': 1.0,
+                        'max_positions': 0,
+                        'description': f'🔴 WEAKENING TREND: SPY -{momentum_10d:.1f}% over 10 days - TRADING BLOCKED',
+                        'allow_trading': False,
+                        'warnings': warnings
+                    }
+
+        # === CHECK 5: VOLUME DETERIORATION ===
+        if spy_raw is not None and len(spy_raw) >= 20:
+            volume_series = spy_raw['volume'].iloc[-20:].values
+
+            # Compare last 5 days vs previous 15 days
+            recent_vol = volume_series[-5:].mean()
+            previous_vol = volume_series[-20:-5].mean()
+
+            volume_change = ((recent_vol - previous_vol) / previous_vol * 100) if previous_vol > 0 else 0
+
+            # If volume down >30% = warning sign
+            if volume_change < -30:
+                warnings.append(f'SPY volume declining {volume_change:.0f}%')
+
+                # Only block if also seeing price weakness
+                if momentum_10d < -2.0:
+                    return {
+                        'regime': 'bear_market',
+                        'position_size_multiplier': 0.0,
+                        'emergency_stop_multiplier': 1.0,
+                        'max_positions': 0,
+                        'description': f'🔴 VOLUME DRYING UP: SPY volume -{volume_change:.0f}% + negative momentum - TRADING BLOCKED',
+                        'allow_trading': False,
+                        'warnings': warnings
+                    }
+
+    # === CHECK 6: STOCK-SPECIFIC BEAR CHECK ===
+    if stock_data:
+        stock_close = stock_data.get('close', 0)
+        stock_sma200 = stock_data.get('sma200', 0)
+        distance_from_200 = ((stock_close - stock_sma200) / stock_sma200 * 100) if stock_sma200 > 0 else -100
+
+        # Stock must be within 5% of 200 SMA (tightened from original)
+        if distance_from_200 < -5.0:
+            return {
+                'regime': 'bear_market',
+                'position_size_multiplier': 0.0,
+                'emergency_stop_multiplier': 1.0,
+                'max_positions': 0,
+                'description': f'🔴 STOCK BEAR: {distance_from_200:.1f}% below 200 SMA - BLOCKED',
+                'allow_trading': False,
+                'warnings': [f'Stock {distance_from_200:.1f}% below 200 SMA']
+            }
 
     # =======================================================================
-    # NORMAL REGIME DETECTION
+    # NORMAL REGIME DETECTION (Market is healthy)
     # =======================================================================
 
     if not spy_data:
@@ -109,10 +206,11 @@ def detect_market_regime(spy_data, stock_data=None):
             'emergency_stop_multiplier': 0.85,
             'max_positions': 8,
             'description': 'No SPY data - Cautious mode',
-            'allow_trading': True
+            'allow_trading': True,
+            'warnings': ['No SPY data']
         }
 
-    # Extract indicators
+    # Extract indicators for normal regime detection
     adx = spy_data.get('adx', 0)
     atr = spy_data.get('atr_14', 0)
     sma50 = spy_data.get('sma50', 0)
@@ -127,8 +225,7 @@ def detect_market_regime(spy_data, stock_data=None):
     distance_from_sma50 = ((close - sma50) / sma50 * 100) if sma50 > 0 else 0
 
     # =======================================================================
-    # REGIME 1: TRENDING
-    # Strong directional movement, price above moving averages
+    # REGIME 1: TRENDING (Strong uptrend)
     # =======================================================================
     if (adx > 25 and
             close > ema20 and
@@ -141,38 +238,38 @@ def detect_market_regime(spy_data, stock_data=None):
             'emergency_stop_multiplier': 1.0,
             'max_positions': 10,
             'description': f'🟢 TRENDING: ADX {adx:.0f}, Price > EMAs, +{distance_from_sma50:.1f}% from SMA50',
-            'allow_trading': True
+            'allow_trading': True,
+            'warnings': warnings
         }
 
     # =======================================================================
-    # REGIME 2: VOLATILE
-    # High ATR OR weak trend with significant price swings
-    # PRIORITY 4: Reduced from 0.5 to 0.4 multiplier
+    # REGIME 2: VOLATILE (High uncertainty)
     # =======================================================================
     elif (atr_pct > 3.0 or
           (adx < 20 and atr_pct > 2.0)):
 
         return {
             'regime': 'volatile',
-            'position_size_multiplier': 0.4,  # CHANGED FROM 0.5 TO 0.4
-            'emergency_stop_multiplier': 0.75,  # Tighter stops (-3% becomes -2.25%)
+            'position_size_multiplier': 0.4,
+            'emergency_stop_multiplier': 0.75,
             'max_positions': 6,
             'description': f'🔴 VOLATILE: ATR {atr_pct:.1f}% of price, ADX {adx:.0f}',
-            'allow_trading': True
+            'allow_trading': True,
+            'warnings': warnings
         }
 
     # =======================================================================
-    # REGIME 3: CHOPPY (Default catch-all)
-    # Low ADX, sideways movement
+    # REGIME 3: CHOPPY (Default - Sideways action)
     # =======================================================================
     else:
         return {
             'regime': 'choppy',
             'position_size_multiplier': 0.7,
-            'emergency_stop_multiplier': 0.85,  # Slightly tighter
+            'emergency_stop_multiplier': 0.85,
             'max_positions': 8,
             'description': f'🟡 CHOPPY: ADX {adx:.0f}, ATR {atr_pct:.1f}%, Sideways action',
-            'allow_trading': True
+            'allow_trading': True,
+            'warnings': warnings
         }
 
 
@@ -181,7 +278,7 @@ def get_regime_adjusted_params(base_params, regime_info):
     Adjust trading parameters based on market regime
 
     Args:
-        base_params: Base parameters dict (e.g., from adaptive exit config)
+        base_params: Base parameters dict
         regime_info: Regime info from detect_market_regime()
 
     Returns:
@@ -215,37 +312,45 @@ def format_regime_display(regime_info):
     Returns:
         str: Formatted display string
     """
-    return (f"\n{'=' * 80}\n"
-            f"{regime_info['description']}\n"
-            f"{'=' * 80}\n"
-            f"Position Size: {regime_info['position_size_multiplier'] * 100:.0f}% of normal\n"
-            f"Emergency Stops: {regime_info['emergency_stop_multiplier'] * 100:.0f}% of normal\n"
-            f"Max Positions: {regime_info['max_positions']}\n"
-            f"{'=' * 80}\n")
+    output = f"\n{'=' * 80}\n"
+    output += f"{regime_info['description']}\n"
+    output += f"{'=' * 80}\n"
+
+    if regime_info.get('warnings'):
+        output += f"⚠️  Warnings:\n"
+        for warning in regime_info['warnings']:
+            output += f"   - {warning}\n"
+        output += f"{'─' * 80}\n"
+
+    if regime_info['allow_trading']:
+        output += f"Position Size: {regime_info['position_size_multiplier'] * 100:.0f}% of normal\n"
+        output += f"Emergency Stops: {regime_info['emergency_stop_multiplier'] * 100:.0f}% of normal\n"
+        output += f"Max Positions: {regime_info['max_positions']}\n"
+    else:
+        output += f"🚫 NEW POSITIONS BLOCKED\n"
+
+    output += f"{'=' * 80}\n"
+
+    return output
 
 
 # =============================================================================
-# DRAWDOWN PROTECTION SYSTEM
+# DRAWDOWN PROTECTION SYSTEM (Enhanced)
 # =============================================================================
 
 class DrawdownProtection:
     """
     Manages portfolio-level drawdown protection
 
-    Attributes:
-        threshold_pct: Drawdown % to trigger protection (e.g., -10.0 = -10%)
-        recovery_days: Days to wait before allowing new positions
-        portfolio_peak: Highest portfolio value achieved
-        protection_active: Whether protection is currently active
-        protection_end_date: When recovery period ends
+    ENHANCED: Tighter threshold recommended based on backtest
     """
 
-    def __init__(self, threshold_pct=-10.0, recovery_days=5):
+    def __init__(self, threshold_pct=-8.0, recovery_days=5):  # CHANGED from -10.0 to -8.0
         """
         Initialize drawdown protection
 
         Args:
-            threshold_pct: Drawdown percentage to trigger (default -10%)
+            threshold_pct: Drawdown percentage to trigger (default -8%)
             recovery_days: Days to wait after trigger (default 5)
         """
         self.threshold_pct = threshold_pct
@@ -331,10 +436,10 @@ class DrawdownProtection:
         Activate drawdown protection - close all positions
 
         Args:
-            strategy: Strategy instance (for get_positions, create_order, etc.)
+            strategy: Strategy instance
             current_date: Current date
-            position_monitor: Position monitor instance (optional, for cleanup)
-            ticker_cooldown: Ticker cooldown instance (optional, for cleanup)
+            position_monitor: Position monitor instance (optional)
+            ticker_cooldown: Ticker cooldown instance (optional)
         """
         current_portfolio_value = strategy.portfolio_value
         drawdown_pct = self.calculate_drawdown(current_portfolio_value)
@@ -463,12 +568,14 @@ class DrawdownProtection:
 # UTILITY FUNCTIONS
 # =============================================================================
 
-def create_default_protection(threshold_pct=-10.0, recovery_days=5):
+def create_default_protection(threshold_pct=-8.0, recovery_days=5):  # CHANGED from -10.0
     """
     Create default drawdown protection instance
 
+    UPDATED: Tighter -8% threshold based on backtest analysis
+
     Args:
-        threshold_pct: Drawdown % to trigger (default -10%)
+        threshold_pct: Drawdown % to trigger (default -8%)
         recovery_days: Days to wait after trigger (default 5)
 
     Returns:
