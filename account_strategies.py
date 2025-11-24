@@ -1,9 +1,10 @@
 """
-SwingTradeStrategy - COMPLETE WITH PRIORITY-BASED SIGNAL SYSTEM AND CONFIRMATION
+SwingTradeStrategy - WITH CENTRALIZED SCORING SYSTEM
 
 Integrated Features:
-- Priority-based signal processing (no multi-signal scoring)
-- All existing features (rotation, drawdown protection, etc.)
+- Centralized 0-100 scoring for all signals
+- Best score wins (replaces priority-based)
+- Score tracking in trades and summaries
 """
 
 from lumibot.strategies import Strategy
@@ -30,7 +31,7 @@ broker = Alpaca(Config.get_alpaca_config())
 class SwingTradeStrategy(Strategy):
 
     def initialize(self, send_emails=True):
-        """Initialize strategy with clean signal architecture"""
+        """Initialize strategy with centralized scoring system"""
         if Config.BACKTESTING:
             self.sleeptime = "1D"
         else:
@@ -63,11 +64,12 @@ class SwingTradeStrategy(Strategy):
             recovery_days=5
         )
 
-        # NEW: Signal processing system
+        # CENTRALIZED SCORING SYSTEM
         self.signal_processor = stock_signals.SignalProcessor()
 
-        print(f"✅ Signal Processor: Priority-based (no multi-signal scoring)")
-        print(f"   Immediate Signals: {', '.join(stock_signals.BUY_STRATEGIES.keys())}")
+        print(f"✅ Signal Processor: Centralized Scoring (0-100)")
+        print(f"   Minimum Score Threshold: {stock_signals.SignalConfig.MIN_SCORE_THRESHOLD}")
+        print(f"   Available Signals: {', '.join(stock_signals.BUY_STRATEGIES.keys())}")
         print(f"✅ Drawdown Protection: {self.drawdown_protection.threshold_pct:.1f}% threshold")
         print(f"✅ Ticker Cooldown: {self.ticker_cooldown.cooldown_days} days")
         print(f"✅ Stock Rotation: Weekly award-based system")
@@ -262,14 +264,15 @@ class SwingTradeStrategy(Strategy):
                 return
 
             # =================================================================
-            # STEP 2: SCAN FOR SIGNALS AND COLLECT OPPORTUNITIES
+            # STEP 2: SCAN FOR SIGNALS WITH CENTRALIZED SCORING
             # =================================================================
 
             print(f"\n{'=' * 80}")
-            print(f"🔍 SCANNING FOR SIGNALS")
+            print(f"🔍 SCANNING FOR SIGNALS (Centralized Scoring System)")
             print(f"{'=' * 80}")
 
             all_opportunities = []
+            signal_competition_log = []  # Track all scores for transparency
 
             for ticker in all_tickers:
                 try:
@@ -283,7 +286,6 @@ class SwingTradeStrategy(Strategy):
 
                     # Get data
                     if ticker not in all_stock_data:
-                        print(f"   ⚠️ {ticker}: No data available")
                         continue
 
                     data = all_stock_data[ticker]['indicators']
@@ -291,7 +293,7 @@ class SwingTradeStrategy(Strategy):
                     # Volatility filter
                     vol_metrics = data.get('volatility_metrics', {})
                     if not vol_metrics.get('allow_trading', True):
-                        print(f"   ⚠️ {ticker}: BLOCKED by volatility ({vol_metrics.get('risk_class', 'unknown')})")
+                        print(f"   ⚠️ {ticker} BLOCKED: {vol_metrics['risk_class'].upper()} volatility")
                         continue
 
                     # Check regime for this ticker
@@ -299,30 +301,58 @@ class SwingTradeStrategy(Strategy):
                     if not ticker_regime.get('allow_trading', True):
                         continue
 
-                    # Process through signal pipeline
+                    # === PROCESS THROUGH CENTRALIZED SCORING SYSTEM ===
                     signal_result = self.signal_processor.process_ticker(ticker, data, spy_data)
 
-                    if signal_result['action'] == 'skip':
-                        print(f"      ❌ No signal: {signal_result.get('signal_data', {}).get('msg', 'Unknown reason')}")
+                    # Log all scores for transparency
+                    if signal_result.get('all_scores'):
+                        signal_competition_log.append({
+                            'ticker': ticker,
+                            'scores': signal_result['all_scores'],
+                            'winner': signal_result.get('signal_type'),
+                            'action': signal_result['action']
+                        })
 
                     if signal_result['action'] == 'buy':
+                        winning_score = signal_result['score']
+                        all_scores = signal_result['all_scores']
+
+                        # Show which signal won and competition
+                        competitors = sorted(
+                            [(sig, score) for sig, score in all_scores.items() if score > 0],
+                            key=lambda x: x[1],
+                            reverse=True
+                        )
+
+                        competition_str = ", ".join([f"{sig}: {score:.0f}" for sig, score in competitors[:3]])
+
+                        print(f"🟢 SIGNAL: {ticker} - {signal_result['signal_type']} (Score: {winning_score:.0f}/100)")
+                        print(f"   Competition: {competition_str}")
+
                         all_opportunities.append({
                             'ticker': ticker,
                             'signal_type': signal_result['signal_type'],
                             'signal_data': signal_result['signal_data'],
+                            'score': winning_score,  # Store for position sizing
+                            'all_scores': all_scores,
                             'data': data,
                             'regime': ticker_regime,
                             'vol_metrics': vol_metrics,
-                            'source': 'immediate'
+                            'source': 'scored'
                         })
-                        print(f"🟢 SIGNAL: {ticker} - {signal_result['signal_type']}")
+                    elif signal_result['action'] == 'skip' and signal_result.get('reason'):
+                        # Show why it was skipped if scores exist
+                        if signal_result.get('all_scores'):
+                            best_score = max(signal_result['all_scores'].values())
+                            if best_score > 0:
+                                print(f"   ⚠️ {ticker}: Best score {best_score:.0f}/100 - {signal_result['reason']}")
 
                 except Exception as e:
                     execution_tracker.add_error(f"Signal Processing - {ticker}", e)
                     continue
 
             if not all_opportunities:
-                print(f"   (No signals found)")
+                print(f"   (No signals above threshold of {stock_signals.SignalConfig.MIN_SCORE_THRESHOLD})")
 
             # =================================================================
             # STEP 3: POSITION SIZING
@@ -366,8 +396,9 @@ class SwingTradeStrategy(Strategy):
                 for opp in all_opportunities:
                     ticker = opp['ticker']
                     data = opp['data']
+                    signal_score = opp['score']  # Use centralized score
 
-                    # Calculate quality score (single signal = 1)
+                    # Calculate quality score (using signal score as base)
                     quality_score = stock_position_sizing.calculate_opportunity_quality(
                         ticker, data, spy_data, signal_count=1
                     )
@@ -383,6 +414,7 @@ class SwingTradeStrategy(Strategy):
                         'data': data,
                         'buy_signal': opp['signal_data'],
                         'quality_score': quality_score,
+                        'signal_score': signal_score,  # NEW: Store signal score
                         'signal_count': 1,
                         'award': award,
                         'award_multiplier': award_multiplier,
@@ -439,6 +471,7 @@ class SwingTradeStrategy(Strategy):
                         continue
 
                     signal_type = opp['signal_type']
+                    signal_score = opp.get('signal_score', 0)  # Get signal score
 
                     award_emoji = {
                         'premium': '🥇', 'standard': '🥈', 'trial': '🔬',
@@ -448,18 +481,18 @@ class SwingTradeStrategy(Strategy):
                     vol_display = opp['vol_metrics']['risk_class'].upper()
 
                     print(f" 🟢 BUY: {ticker} x{quantity} [{award_emoji} {alloc['award'].upper()}]")
-                    print(f"        Signal: {signal_type}")
+                    print(f"        Signal: {signal_type} (Score: {signal_score:.0f}/100)")
                     print(f"        Quality: {alloc['quality_score']:.0f}/100 ({alloc['quality_tier']})")
                     print(f"        Price: ${price:.2f} | Cost: ${cost:,.2f} ({alloc['pct_portfolio']:.1f}%)")
                     print(f"        Vol: {vol_display} | Multiplier: {alloc['total_multiplier']:.2f}x")
                     print()
 
-                    # Track position
+                    # Track position WITH SIGNAL SCORE
                     self.position_monitor.track_position(
                         ticker,
                         current_date,
                         signal_type,
-                        entry_score=1
+                        entry_score=signal_score  # Store signal score (0-100)
                     )
 
                     # Submit order
@@ -469,7 +502,7 @@ class SwingTradeStrategy(Strategy):
                     # Record in cooldown
                     self.ticker_cooldown.record_buy(ticker, current_date)
 
-                    # Log order
+                    # Log order WITH SIGNAL SCORE
                     if hasattr(self, 'order_logger'):
                         self.order_logger.log_order(
                             ticker=ticker,
@@ -477,7 +510,7 @@ class SwingTradeStrategy(Strategy):
                             quantity=quantity,
                             signal_type=signal_type,
                             award=alloc['award'],
-                            quality_score=alloc['quality_score']
+                            quality_score=signal_score  # Use signal score (0-100)
                         )
 
                     execution_tracker.record_action('entries', count=1)
@@ -510,7 +543,7 @@ class SwingTradeStrategy(Strategy):
             raise
 
     def on_strategy_end(self):
-        """Display final statistics"""
+        """Display final statistics with signal scores"""
 
         self.profit_tracker.display_final_summary()
 

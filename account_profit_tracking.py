@@ -339,11 +339,17 @@ class ProfitTracker:
         self._display_ticker_performance(closed_trades)
 
         # Display last 50 trades
+        # Display last 75 trades WITH SCORES
         print(f"\n📋 Trade Details (Last 75):")
+        print(f"{'Ticker':<8} {'P&L':<16} {'Score':<8} {'Signal':<20} {'Exit'}")
+        print(f"{'-' * 80}")
+
         for t in closed_trades[:75]:
-            score_display = f"[{t.get('entry_score', 0):.0f}]"
-            print(f"   {t['ticker']:6} | ${t['pnl_dollars']:+9,.2f} ({t['pnl_pct']:+6.2f}%) | "
-                  f"{score_display:5} {t['entry_signal']:15} → {t['exit_signal']:20}")
+            entry_score = t.get('entry_score', 0)
+            score_display = f"[{entry_score:.0f}]" if entry_score > 0 else "[--]"
+            pnl_str = f"${t['pnl_dollars']:+9,.2f} ({t['pnl_pct']:+6.2f}%)"
+
+            print(f"{t['ticker']:<8} {pnl_str:<16} {score_display:<8} {t['entry_signal']:<20} {t['exit_signal']}")
 
         # Display open positions
         self._display_open_positions()
@@ -351,14 +357,16 @@ class ProfitTracker:
         print(f"\n{'=' * 80}\n")
 
     def _display_signal_performance(self, closed_trades):
-        """Display performance by signal"""
+        """Display performance by signal WITH AVERAGE SCORES"""
         from collections import defaultdict
 
         signal_stats = defaultdict(lambda: {
             'trades': [],
             'wins': 0,
             'losses': 0,
-            'total_pnl': 0.0
+            'total_pnl': 0.0,
+            'total_score': 0.0,
+            'score_count': 0
         })
 
         for trade in closed_trades:
@@ -371,8 +379,14 @@ class ProfitTracker:
             else:
                 signal_stats[signal]['losses'] += 1
 
+            # Track scores
+            entry_score = trade.get('entry_score', 0)
+            if entry_score > 0:
+                signal_stats[signal]['total_score'] += entry_score
+                signal_stats[signal]['score_count'] += 1
+
         print(f"\n🎯 PERFORMANCE BY ENTRY SIGNAL:")
-        print(f"{'─' * 80}")
+        print(f"{'─' * 90}")
 
         sorted_signals = sorted(signal_stats.items(), key=lambda x: x[1]['total_pnl'], reverse=True)
 
@@ -387,15 +401,19 @@ class ProfitTracker:
             avg_win = sum(wins) / len(wins) if wins else 0
             avg_loss = sum(losses) / len(losses) if losses else 0
 
+            # Calculate average score
+            avg_score = (stats['total_score'] / stats['score_count']) if stats['score_count'] > 0 else 0
+
             print(f"\n   📊 {signal_name}")
             print(f"      Trades: {total_trades} ({stats['wins']}W / {stats['losses']}L)")
             print(f"      Win Rate: {win_rate:.1f}%")
+            print(f"      Avg Entry Score: {avg_score:.0f}/100")  # NEW
             print(f"      Total P&L: ${stats['total_pnl']:+,.2f}")
             print(f"      Avg P&L: ${avg_pnl:+,.2f}")
             print(f"      Avg Win: ${avg_win:,.2f}")
             print(f"      Avg Loss: ${avg_loss:,.2f}")
 
-        print(f"\n{'─' * 80}")
+        print(f"\n{'─' * 90}")
 
     def _display_ticker_performance(self, closed_trades):
         """Display performance by ticker"""
