@@ -94,7 +94,7 @@ class SignalProcessor:
         """
 
         # Check immediate signals (priority order, first match wins)
-        for key, val in BUY_STRATEGIES:
+        for key, val in BUY_STRATEGIES.items():
             signal_func = val
             if not signal_func:
                 continue
@@ -506,7 +506,7 @@ def _no_signal(reason: str) -> SignalResult:
 BUY_STRATEGIES: Dict[str, Any] = {
     'consolidation_breakout': consolidation_breakout,
     'swing_trade_1': swing_trade_1,
-    'swing_trade_2': swing_trade_2,
+    # 'swing_trade_2': swing_trade_2,
     'golden_cross': golden_cross,
-    'bollinger_buy': bollinger_buy,
+    # 'bollinger_buy': bollinger_buy,
 }

@@ -283,6 +283,7 @@ class SwingTradeStrategy(Strategy):
 
                     # Get data
                     if ticker not in all_stock_data:
+                        print(f"   ⚠️ {ticker}: No data available")
                         continue
 
                     data = all_stock_data[ticker]['indicators']
@@ -290,7 +291,7 @@ class SwingTradeStrategy(Strategy):
                     # Volatility filter
                     vol_metrics = data.get('volatility_metrics', {})
                     if not vol_metrics.get('allow_trading', True):
-                        print(f"   ⚠️ {ticker} BLOCKED: {vol_metrics['risk_class'].upper()} volatility")
+                        print(f"   ⚠️ {ticker}: BLOCKED by volatility ({vol_metrics.get('risk_class', 'unknown')})")
                         continue
 
                     # Check regime for this ticker
@@ -301,7 +302,10 @@ class SwingTradeStrategy(Strategy):
                     # Process through signal pipeline
                     signal_result = self.signal_processor.process_ticker(ticker, data, spy_data)
 
-                    if signal_result['action'] == 'buy_now':
+                    if signal_result['action'] == 'skip':
+                        print(f"      ❌ No signal: {signal_result.get('signal_data', {}).get('msg', 'Unknown reason')}")
+
+                    if signal_result['action'] == 'buy':
                         all_opportunities.append({
                             'ticker': ticker,
                             'signal_type': signal_result['signal_type'],
