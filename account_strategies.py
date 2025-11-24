@@ -202,41 +202,23 @@ class SwingTradeStrategy(Strategy):
                 global_regime_info = account_drawdown_protection.detect_market_regime(spy_data)
                 print(account_drawdown_protection.format_regime_display(global_regime_info))
 
-                # CRITICAL: Block ALL new positions if bear market detected
                 if not global_regime_info.get('allow_trading', True):
                     print(f"\n⚠️ {global_regime_info['description']}")
-                    print(f"🚫 No new positions will be opened.\n")
-                    execution_tracker.add_warning(f"Trading blocked: {global_regime_info['description']}")
+                    print(f"🚫 BEAR MARKET DETECTED - FORCE CLOSING ALL POSITIONS")
 
-                    # Still check exits (let positions close naturally or hit stops)
-                    try:
-                        exit_orders = stock_position_monitoring.check_positions_for_exits(
-                            strategy=self,
-                            current_date=current_date,
-                            all_stock_data=all_stock_data,
-                            position_monitor=self.position_monitor
-                        )
+                    # Force exit ALL positions immediately
+                    positions = self.get_positions()
+                    for position in positions:
+                        ticker = position.symbol
+                        qty = int(position.quantity)
+                        if qty > 0:
+                            print(f"   🚪 Bear Market Exit: {ticker} x{qty}")
+                            sell_order = self.create_order(ticker, qty, 'sell')
+                            self.submit_order(sell_order)
 
-                        stock_position_monitoring.execute_exit_orders(
-                            strategy=self,
-                            exit_orders=exit_orders,
-                            current_date=current_date,
-                            position_monitor=self.position_monitor,
-                            profit_tracker=self.profit_tracker,
-                            ticker_cooldown=self.ticker_cooldown
-                        )
-
-                        if exit_orders:
-                            execution_tracker.record_action('exits', count=len(exit_orders))
-
-                    except Exception as e:
-                        execution_tracker.add_error("Position Exit Processing", e)
-
-                    execution_tracker.complete('SUCCESS')
-                    if not Config.BACKTESTING:
-                        account_email_notifications.send_daily_summary_email(
-                            self, current_date, execution_tracker
-                        )
+                            # Clean tracking
+                            self.position_monitor.clean_position_metadata(ticker)
+                            self.ticker_cooldown.clear(ticker)
                     return  # EXIT - No new positions
 
             except Exception as e:

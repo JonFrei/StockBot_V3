@@ -24,7 +24,7 @@ class AdaptiveExitConfig:
     STRONG_PROFIT_TARGET_3 = 35.0  # CHANGED from 40.0
     STRONG_PROFIT_TARGET_3_SELL = 34.0  # UNCHANGED
     # Trailing Stop
-    STRONG_TRAILING_STOP = 12.0  # CHANGED from 12.0
+    STRONG_TRAILING_STOP = 8.0  # CHANGED from 12.0
     STRONG_TRAILING_STOP_FINAL = 18.0  # CHANGED from 18.0
 
     # === NEUTRAL CONDITIONS (Score 4-6) ===
@@ -36,7 +36,7 @@ class AdaptiveExitConfig:
     NEUTRAL_PROFIT_TARGET_3 = 30.0  # CHANGED from 35.0
     NEUTRAL_PROFIT_TARGET_3_SELL = 34.0  # UNCHANGED
     # Trailing Stop
-    NEUTRAL_TRAILING_STOP = 10.0  # CHANGED from 10.0
+    NEUTRAL_TRAILING_STOP = 6.0  # CHANGED from 10.0
     NEUTRAL_TRAILING_STOP_FINAL = 15.0  # CHANGED from 15.0
 
     # === WEAK CONDITIONS (Score 0-3) ===
@@ -48,7 +48,7 @@ class AdaptiveExitConfig:
     WEAK_PROFIT_TARGET_3 = 20.0  # CHANGED from 30.0
     WEAK_PROFIT_TARGET_3_SELL = 34.0  # UNCHANGED
     # Trailing Stop
-    WEAK_TRAILING_STOP = 6.0  # CHANGED from 6.0
+    WEAK_TRAILING_STOP = 4.0  # CHANGED from 6.0
     WEAK_TRAILING_STOP_FINAL = 8.0  # CHANGED from 12.0
 
 
