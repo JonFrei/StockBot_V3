@@ -56,9 +56,9 @@ class AdaptiveExitConfig:
     WEAK_TRAILING_STOP_FINAL = 8.0  # TIGHTER after Level 3
 
     # === MAX HOLDING PERIODS (Profit-Level Based) ===
-    MAX_HOLD_BEFORE_LEVEL_1 = 20  # Must reach +12-15% within 20 days
-    MAX_HOLD_AT_LEVEL_1 = 45  # Must reach +20-25% within 30 days after Level 1
-    MAX_HOLD_AT_LEVEL_2 = 45  # Must reach +30-35% within 40 days after Level 2
+    MAX_HOLD_BEFORE_LEVEL_1 = 60  # Must reach +12-15% within 20 days
+    MAX_HOLD_AT_LEVEL_1 = 60  # Must reach +20-25% within 30 days after Level 1
+    MAX_HOLD_AT_LEVEL_2 = 60  # Must reach +30-35% within 40 days after Level 2
     # After Level 3: No time limit - trailing stops + special exits handle it
 
     # === LEVEL 3 SPECIAL EXITS ===
@@ -548,6 +548,14 @@ def check_max_holding_period(position_monitor, ticker, current_date, data):
     profit_level_2_locked = metadata.get('profit_level_2_locked', False)
     profit_level_3_locked = metadata.get('profit_level_3_locked', False)
 
+    profit_status = ""
+    if profit_level_3_locked:
+        profit_status = "P3_locked"
+    elif profit_level_2_locked:
+        profit_status = "P2_locked"
+    elif profit_level_1_locked:
+        profit_status = "P1_locked"
+
     # === AFTER LEVEL 3: NO TIME LIMIT ===
     if profit_level_3_locked:
         return None  # Let trailing stops + special exits handle it
@@ -571,20 +579,24 @@ def check_max_holding_period(position_monitor, ticker, current_date, data):
                     volume_ratio > 1.0):
                 return None  # Still has momentum
 
+            reason = f'max_holding_period_{profit_status}' if profit_status else 'max_holding_period'
+
             return {
                 'type': 'full_exit',
-                'reason': 'max_holding_period',
+                'reason': reason,
                 'sell_pct': 100.0,
-                'message': f'⏰ Level 2 Max Hold ({days_held}d) - Not Advancing to Level 3'
+                'message': f'⏰ Level 2 Max Hold ({days_held}d) {profit_status} - Not Advancing to Level 3'
             }
         return None
 
     # === AFTER LEVEL 1: 30 DAYS TO REACH LEVEL 2 ===
     elif profit_level_1_locked:
+        reason = f'max_holding_period_{profit_status}' if profit_status else 'max_holding_period'
+
         if days_held >= AdaptiveExitConfig.MAX_HOLD_AT_LEVEL_1:
             return {
                 'type': 'full_exit',
-                'reason': 'max_holding_period',
+                'reason': reason,
                 'sell_pct': 100.0,
                 'message': f'⏰ Level 1 Max Hold ({days_held}d) - Not Advancing to Level 2'
             }
