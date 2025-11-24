@@ -53,7 +53,6 @@ def _load_tickers_from_json(config_file='ticker_config.json'):
         print(f"\n📁 Loading tickers from JSON: {config_file}")
         print(f"   Core stocks: {len(config.get('core_stocks', []))}")
         print(f"   Swing Trade Stocks: {len(config.get('swing_trade_stocks', []))}")
-        print(f"   Watch List: {len(config.get('watch_list', []))}")
 
         return {
             'core_stocks': config.get('core_stocks', []),

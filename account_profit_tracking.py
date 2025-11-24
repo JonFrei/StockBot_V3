@@ -22,8 +22,7 @@ class ProfitTracker:
         self.db = get_database()
 
     def record_trade(self, ticker, quantity_sold, entry_price, exit_price,
-                     exit_date, entry_signal, exit_signal, entry_score=0,
-                     was_watchlisted=False, confirmation_date=None, days_to_confirmation=0):
+                     exit_date, entry_signal, exit_signal, entry_score=0):
         """Record completed trade to database (PostgreSQL or in-memory) with confirmation tracking"""
 
         # Calculate P&L
@@ -46,10 +45,7 @@ class ProfitTracker:
                     entry_signal=entry_signal,
                     entry_score=entry_score,
                     exit_signal=exit_signal.get('reason', 'unknown'),
-                    exit_date=exit_date,
-                    was_watchlisted=was_watchlisted,
-                    confirmation_date=confirmation_date,
-                    days_to_confirmation=days_to_confirmation
+                    exit_date=exit_date
                 )
             else:
                 # PostgreSQL insert with confirmation tracking
@@ -71,10 +67,7 @@ class ProfitTracker:
                     entry_signal,
                     entry_score,
                     exit_signal.get('reason', 'unknown'),
-                    exit_date,
-                    was_watchlisted,
-                    confirmation_date,
-                    days_to_confirmation
+                    exit_date
                 ))
 
                 conn.commit()
@@ -82,11 +75,9 @@ class ProfitTracker:
 
             # Display immediate feedback
             emoji = "✅" if total_pnl > 0 else "❌"
-            watchlist_label = " [CONFIRMED]" if was_watchlisted else ""
-            conf_label = f" ({days_to_confirmation}d)" if was_watchlisted and days_to_confirmation > 0 else ""
 
             print(
-                f"\n{emoji} TRADE CLOSED: {ticker}{watchlist_label}{conf_label} | ${total_pnl:+,.2f} ({pnl_pct:+.1f}%) | "
+                f"\n{emoji} TRADE CLOSED: {ticker} | ${total_pnl:+,.2f} ({pnl_pct:+.1f}%) | "
                 f"{quantity_sold} shares @ ${entry_price:.2f} → ${exit_price:.2f}")
 
             # Notify blacklist
@@ -130,8 +121,7 @@ class ProfitTracker:
             if limit:
                 cursor.execute("""
                     SELECT ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct,
-                           entry_signal, entry_score, exit_signal, exit_date,
-                           was_watchlisted, confirmation_date, days_to_confirmation
+                           entry_signal, entry_score, exit_signal, exit_date
                     FROM closed_trades
                     ORDER BY exit_date DESC
                     LIMIT %s
@@ -139,8 +129,7 @@ class ProfitTracker:
             else:
                 cursor.execute("""
                     SELECT ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct,
-                           entry_signal, entry_score, exit_signal, exit_date,
-                           was_watchlisted, confirmation_date, days_to_confirmation
+                           entry_signal, entry_score, exit_signal, exit_date
                     FROM closed_trades
                     ORDER BY exit_date DESC
                 """)
@@ -157,10 +146,7 @@ class ProfitTracker:
                     'entry_signal': row[6],
                     'entry_score': row[7],
                     'exit_signal': row[8],
-                    'exit_date': row[9],
-                    'was_watchlisted': row[10] if len(row) > 10 else False,
-                    'confirmation_date': row[11] if len(row) > 11 else None,
-                    'days_to_confirmation': row[12] if len(row) > 12 else 0
+                    'exit_date': row[9]
                 })
 
             return trades
@@ -307,65 +293,6 @@ class ProfitTracker:
             print(f"   Total P&L: ${immediate_pnl:+,.2f}")
             print(f"   Avg P&L: ${immediate_avg:+,.2f}")
 
-        # Confirmed trades stats
-        if confirmed_trades:
-            confirmed_wins = sum(1 for t in confirmed_trades if t['pnl_dollars'] > 0)
-            confirmed_wr = (confirmed_wins / len(confirmed_trades) * 100)
-            confirmed_pnl = sum(t['pnl_dollars'] for t in confirmed_trades)
-            confirmed_avg = confirmed_pnl / len(confirmed_trades)
-
-            avg_days = sum(t.get('days_to_confirmation', 0) for t in confirmed_trades) / len(confirmed_trades)
-
-            print(f"\n✅ CONFIRMED ENTRIES (From Watchlist):")
-            print(f"   Trades: {len(confirmed_trades)}")
-            print(f"   Win Rate: {confirmed_wr:.1f}% ({confirmed_wins}/{len(confirmed_trades)})")
-            print(f"   Total P&L: ${confirmed_pnl:+,.2f}")
-            print(f"   Avg P&L: ${confirmed_avg:+,.2f}")
-            print(f"   Avg Days to Confirmation: {avg_days:.1f}")
-
-        # Comparison
-        if immediate_trades and confirmed_trades:
-            wr_improvement = confirmed_wr - immediate_wr
-            pnl_improvement = confirmed_avg - immediate_avg
-
-            print(f"\n📊 COMPARISON:")
-            print(f"   Win Rate Improvement: {wr_improvement:+.1f}%")
-            print(f"   Avg P&L Improvement: ${pnl_improvement:+,.2f}")
-
-            if wr_improvement > 0:
-                print(f"   ✅ Confirmation system improving win rate!")
-            else:
-                print(f"   ⚠️  Immediate entries performing better")
-
-        # Per-signal breakdown
-        print(f"\n{'─' * 80}")
-        print(f"📋 BY SIGNAL TYPE:")
-        print(f"{'─' * 80}")
-
-        signal_stats = {}
-        for trade in all_trades:
-            signal = trade['entry_signal']
-            was_watchlisted = trade.get('was_watchlisted', False)
-
-            key = (signal, was_watchlisted)
-            if key not in signal_stats:
-                signal_stats[key] = {'trades': 0, 'wins': 0, 'total_pnl': 0}
-
-            signal_stats[key]['trades'] += 1
-            if trade['pnl_dollars'] > 0:
-                signal_stats[key]['wins'] += 1
-            signal_stats[key]['total_pnl'] += trade['pnl_dollars']
-
-        for (signal, was_watchlisted), stats in sorted(signal_stats.items()):
-            wr = (stats['wins'] / stats['trades'] * 100) if stats['trades'] > 0 else 0
-            avg_pnl = stats['total_pnl'] / stats['trades'] if stats['trades'] > 0 else 0
-
-            label = f"{signal} [CONFIRMED]" if was_watchlisted else f"{signal} [IMMEDIATE]"
-            emoji = "✅" if was_watchlisted else "🟢"
-
-            print(f"\n{emoji} {label}")
-            print(f"   Trades: {stats['trades']} | WR: {wr:.1f}% | Avg: ${avg_pnl:+,.2f}")
-
         print(f"\n{'=' * 80}\n")
 
     def display_final_summary(self):
@@ -412,13 +339,11 @@ class ProfitTracker:
         self._display_ticker_performance(closed_trades)
 
         # Display last 50 trades
-        print(f"\n📋 Trade Details (Last 50):")
-        for t in closed_trades[:50]:
+        print(f"\n📋 Trade Details (Last 75):")
+        for t in closed_trades[:75]:
             score_display = f"[{t.get('entry_score', 0):.0f}]"
-            watchlist_marker = " ✅" if t.get('was_watchlisted', False) else ""
-            days_marker = f" ({t.get('days_to_confirmation', 0)}d)" if t.get('was_watchlisted', False) else ""
             print(f"   {t['ticker']:6} | ${t['pnl_dollars']:+9,.2f} ({t['pnl_pct']:+6.2f}%) | "
-                  f"{score_display:5} {t['entry_signal']:15} → {t['exit_signal']:20}{watchlist_marker}{days_marker}")
+                  f"{score_display:5} {t['entry_signal']:15} → {t['exit_signal']:20}")
 
         # Display open positions
         self._display_open_positions()

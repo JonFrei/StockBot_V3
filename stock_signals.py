@@ -21,14 +21,14 @@ class SignalConfig:
     ST1_ADX_MIN = 20
     ST1_ADX_MAX = 35
 
-    # SWING_TRADE_2: Pullback in Trend (RELAXED FOR WATCHLIST)
-    ST2_PULLBACK_MIN = 1.0  # RELAXED from 2.0 - catch smaller pullbacks
-    ST2_PULLBACK_MAX = 12.0  # RELAXED from 8.0 - allow deeper pullbacks
-    ST2_RSI_MIN = 35  # RELAXED from 42 - allow more oversold entries
-    ST2_RSI_MAX = 70  # RELAXED from 65 - allow momentum entries
-    ST2_VOLUME_RATIO_MIN = 0.8  # RELAXED from 1.25 - don't require volume surge on entry
-    ST2_ADX_MIN = 15  # RELAXED from 22 - allow weaker trends
-    ST2_DAILY_CHANGE_MIN = -5.0  # RELAXED from -3.0 - allow bigger drops (we confirm later)
+    # SWING_TRADE_2: Pullback in Trend (IMPROVED)
+    ST2_PULLBACK_MIN = 2.0  # Keep - shallow pullbacks are fine
+    ST2_PULLBACK_MAX = 8.0  # TIGHTENED from 12.0 - avoid broken trends
+    ST2_RSI_MIN = 42  # INCREASED from 40 - avoid weak bounces
+    ST2_RSI_MAX = 65  # REDUCED from 68 - avoid overbought entries
+    ST2_VOLUME_RATIO_MIN = 1.25  # INCREASED from 1.15 - require stronger confirmation
+    ST2_ADX_MIN = 22  # INCREASED from 18 - require stronger trend
+    ST2_DAILY_CHANGE_MIN = -3.0  # TIGHTENED from -4.0 - avoid catching falling knives
 
     # CONSOLIDATION_BREAKOUT - QUALITY FOCUSED
     CB_RANGE_MAX = 18.0  # Keep - wider consolidations OK
@@ -49,12 +49,12 @@ class SignalConfig:
     GC_RSI_MIN = 45
     GC_RSI_MAX = 70
 
-    # BOLLINGER_BUY (RELAXED FOR WATCHLIST)
-    BB_BOLLINGER_PROXIMITY = 1.05  # RELAXED from 1.02 - within 5% of lower band
-    BB_RSI_MIN = 25  # RELAXED from 30 - deeper oversold OK
-    BB_RSI_MAX = 50  # RELAXED from 42 - allow more room
-    BB_VOLUME_RATIO_MIN = 0.8  # RELAXED from 1.5 - volume surge not required initially
-    BB_ADX_MIN = 15  # RELAXED from 20 - weaker trends OK
+    # BOLLINGER_BUY
+    BB_BOLLINGER_PROXIMITY = 1.02  # Within 2% of lower band
+    BB_RSI_MIN = 30
+    BB_RSI_MAX = 42
+    BB_VOLUME_RATIO_MIN = 1.5
+    BB_ADX_MIN = 20
 
 
 # Type aliases for clarity
@@ -67,28 +67,20 @@ SignalList = List[str]
 # SIGNAL CONFIGURATION
 # ===================================================================================
 
-# ===================================================================================
-# SIGNAL CONFIGURATION
-# ===================================================================================
-
 class SignalConfiguration:
     """
     Signal processing configuration
 
-    Signals are processed in priority order within each category
+    All signals are immediate buys - processed in priority order
     """
 
-    # IMMEDIATE SIGNALS (buy now, processed in priority order)
+    # All signals are immediate (no confirmation required)
     IMMEDIATE_SIGNALS = [
         'swing_trade_1',  # Priority 1: Early momentum catch
         'golden_cross',  # Priority 2: Major trend change
         'consolidation_breakout',  # Priority 3: Breakout with volume
-    ]
-
-    # CONFIRMATION-REQUIRED SIGNALS (add to watchlist first)
-    CONFIRMATION_SIGNALS = [
-        'swing_trade_2',  # Pullback - wait for bounce to start
-        'bollinger_buy',  # Oversold - wait for reversal signs
+        'swing_trade_2',  # Priority 4: Pullback in trend
+        'bollinger_buy',  # Priority 5: Oversold bounce
     ]
 
 
@@ -102,13 +94,11 @@ class SignalProcessor:
 
     Responsibilities:
     - Check signals in priority order
-    - Route to immediate buy vs watchlist
     - One signal per ticker (first match wins)
     """
 
-    def __init__(self, immediate_signals: List[str] = None, confirmation_signals: List[str] = None):
+    def __init__(self, immediate_signals: List[str] = None):
         self.immediate_signals = immediate_signals or SignalConfiguration.IMMEDIATE_SIGNALS
-        self.confirmation_signals = confirmation_signals or SignalConfiguration.CONFIRMATION_SIGNALS
 
     def process_ticker(self, ticker: str, data: Dict, spy_data: Optional[Dict] = None) -> Dict:
         """
@@ -121,13 +111,13 @@ class SignalProcessor:
 
         Returns:
             {
-                'action': 'buy_now' | 'add_to_watchlist' | 'skip',
+                'action': 'buy_now' | 'skip',
                 'signal_type': str or None,
                 'signal_data': dict or None
             }
         """
 
-        # PHASE 1: Check immediate signals (priority order, first match wins)
+        # Check immediate signals (priority order, first match wins)
         for signal_name in self.immediate_signals:
             signal_func = BUY_STRATEGIES.get(signal_name)
             if not signal_func:
@@ -142,458 +132,12 @@ class SignalProcessor:
                     'signal_data': result
                 }
 
-        # PHASE 2: Check confirmation-required signals (first match wins)
-        for signal_name in self.confirmation_signals:
-            signal_func = BUY_STRATEGIES.get(signal_name)
-            if not signal_func:
-                continue
-
-            result = signal_func(data)
-
-            if result and result.get('side') == 'buy':
-                return {
-                    'action': 'add_to_watchlist',
-                    'signal_type': signal_name,
-                    'signal_data': result
-                }
-
         # No signals triggered
         return {
             'action': 'skip',
             'signal_type': None,
             'signal_data': None
         }
-
-
-# ===================================================================================
-# WATCHLIST MANAGER
-# ===================================================================================
-
-class Watchlist:
-    """
-    Manages tickers awaiting entry confirmation with database persistence
-
-    Responsibilities:
-    - Store watchlist entries with metadata
-    - Check signal-specific confirmations
-    - Auto-expire stale entries
-    - Log all activity to database
-    """
-
-    def __init__(self, strategy=None):
-        self.strategy = strategy
-        self.entries = {}  # In-memory cache
-
-        # Tracking statistics
-        self.stats = {
-            'signals_added': {},  # {signal_type: count}
-            'confirmations_passed': {},  # {signal_type: count}
-            'confirmations_failed': {},  # {signal_type: {reason: count}}
-            'expired_entries': {},  # {signal_type: count}
-        }
-
-        self._load_from_database()
-
-    def _load_from_database(self):
-        """Load watchlist from database on initialization"""
-        from config import Config
-        if not self.strategy or Config.BACKTESTING:
-            return
-
-        from database import get_database
-        from config import Config
-
-        db = get_database()
-        conn = db.get_connection()
-
-        try:
-            self.entries = db.load_all_watchlist_entries(conn)
-            if self.entries:
-                print(f"[WATCHLIST] Loaded {len(self.entries)} entries from database")
-                for ticker, entry in self.entries.items():
-                    age = (datetime.now() - entry['date_added']).days
-                    print(f"   - {ticker}: {entry['signal_type']} (age: {age} days)")
-        except Exception as e:
-            print(f"[WARN] Could not load watchlist from database: {e}")
-        finally:
-            db.return_connection(conn)
-
-    def add(self, ticker: str, signal_type: str, signal_data: Dict, current_date: datetime):
-        """Add ticker to watchlist and save to database"""
-        self.entries[ticker] = {
-            'signal_type': signal_type,
-            'signal_data': signal_data,
-            'date_added': current_date,
-            'entry_price_at_signal': signal_data.get('limit_price', 0)
-        }
-
-        # Track addition
-        if signal_type not in self.stats['signals_added']:
-            self.stats['signals_added'][signal_type] = 0
-        self.stats['signals_added'][signal_type] += 1
-
-        print(f"📋 WATCHLIST ADD: {ticker} - {signal_type} (awaiting confirmation)")
-
-        # Save to database
-        if not Config.BACKTESTING:
-            self._save_to_database(ticker)
-        else:
-            # For backtesting, use in-memory storage
-            from database import get_database
-            db = get_database()
-            db.upsert_watchlist_entry(
-                ticker,
-                signal_type,
-                signal_data,
-                current_date,
-                signal_data.get('limit_price', 0)
-            )
-
-    def remove(self, ticker: str, removal_reason: str = 'confirmed', current_price: float = 0):
-        """Remove ticker from watchlist and log to history"""
-        if ticker not in self.entries:
-            return
-
-        entry = self.entries[ticker]
-
-        # Log to history
-        self._log_removal(
-            ticker,
-            entry['signal_type'],
-            entry['date_added'],
-            removal_reason,
-            was_confirmed=(removal_reason == 'confirmed'),
-            entry_price=entry['entry_price_at_signal'],
-            current_price=current_price
-        )
-
-        # Delete from database
-        if not Config.BACKTESTING:
-            self._delete_from_database(ticker)
-        else:
-            from database import get_database
-            db = get_database()
-            db.delete_watchlist_entry(ticker)
-
-        # Remove from memory
-        del self.entries[ticker]
-
-    def contains(self, ticker: str) -> bool:
-        """Check if ticker is on watchlist"""
-        return ticker in self.entries
-
-    def get_all_tickers(self) -> List[str]:
-        """Get all tickers on watchlist"""
-        return list(self.entries.keys())
-
-    def check_confirmations(self, all_stock_data: Dict, current_date: datetime) -> List[Dict]:
-        """
-        Check all watchlist entries for confirmations
-
-        Args:
-            all_stock_data: Dict of {ticker: {'indicators': {...}}}
-            current_date: Current date
-
-        Returns:
-            List of dicts with confirmation results
-        """
-        results = []
-
-        for ticker in list(self.entries.keys()):
-            entry = self.entries[ticker]
-
-            # Check if we have data for this ticker
-            if ticker not in all_stock_data:
-                continue
-
-            data = all_stock_data[ticker]['indicators']
-            current_price = data.get('close', 0)
-            watchlist_age = (current_date - entry['date_added']).days
-
-            # Route to appropriate confirmation function
-            is_confirmed, reason = self._check_confirmation(
-                ticker,
-                data,
-                entry['signal_type'],
-                watchlist_age,
-                entry['entry_price_at_signal']
-            )
-
-            # Track confirmation result
-            signal_type = entry['signal_type']
-            if is_confirmed:
-                if signal_type not in self.stats['confirmations_passed']:
-                    self.stats['confirmations_passed'][signal_type] = 0
-                self.stats['confirmations_passed'][signal_type] += 1
-            else:
-                if signal_type not in self.stats['confirmations_failed']:
-                    self.stats['confirmations_failed'][signal_type] = {}
-                if reason not in self.stats['confirmations_failed'][signal_type]:
-                    self.stats['confirmations_failed'][signal_type][reason] = 0
-                self.stats['confirmations_failed'][signal_type][reason] += 1
-
-            results.append({
-                'ticker': ticker,
-                'signal_type': entry['signal_type'],
-                'signal_data': entry['signal_data'],
-                'confirmed': is_confirmed,
-                'reason': reason,
-                'watchlist_age': watchlist_age,
-                'current_price': current_price,
-                'date_added': entry['date_added']
-            })
-
-        return results
-
-    def _check_confirmation(self, ticker: str, data: Dict, signal_type: str,
-                            age_days: int, entry_price: float) -> Tuple[bool, str]:
-        """Route to signal-specific confirmation logic"""
-
-        if signal_type == 'swing_trade_2':
-            return self._confirm_swing_trade_2(ticker, data, age_days)
-
-        elif signal_type == 'bollinger_buy':
-            return self._confirm_bollinger_buy(ticker, data, age_days)
-
-        else:
-            # Unknown signal type - confirm immediately as safety
-            return True, "No confirmation logic defined"
-
-    def _confirm_swing_trade_2(self, ticker: str, data: Dict, age_days: int) -> Tuple[bool, str]:
-        """
-        Confirm pullback is reversing
-
-        Requirements:
-        - Price stabilizing (not falling hard)
-        - Stochastic recovering from oversold
-        - MACD momentum improving
-        - Volume present
-        """
-
-        daily_change = data.get('daily_change_pct', 0)
-        stoch_k = data.get('stoch_k', 50)
-        macd_hist = data.get('macd_histogram', 0)
-        macd_hist_prev = data.get('macd_hist_prev', 0)
-        volume_ratio = data.get('volume_ratio', 0)
-        ema20 = data.get('ema20', 0)
-
-        # 1. Age check - RELAXED to 5 days
-        if age_days > 5:
-            self.remove(ticker, removal_reason='expired', current_price=close)
-            return False, "Setup expired (>5 days)"
-
-        # 2. Price stabilization - RELAXED threshold
-        if daily_change < -3.0:
-            return False, f"Still dropping hard ({daily_change:.1f}%)"
-
-        # 3. Basic volume check - VERY RELAXED
-        if volume_ratio < 0.7:
-            return False, f"Very low volume ({volume_ratio:.2f}x)"
-
-        # 4. Still in reasonable distance from EMA20
-        if ema20 > 0:
-            distance = abs((close - ema20) / ema20 * 100)
-            if distance > 15.0:
-                self.remove(ticker, removal_reason='invalidated', current_price=close)
-                return False, f"Too far from EMA20 ({distance:.1f}%)"
-
-        # All checks passed
-        return True, f"✅ Pullback reversing (K={stoch_k:.0f}, Vol={volume_ratio:.2f}x)"
-
-    def _confirm_bollinger_buy(self, ticker: str, data: Dict, age_days: int) -> Tuple[bool, str]:
-        """
-        Confirm oversold bounce starting
-
-        Requirements:
-        - Price bouncing (green day)
-        - Still near lower Bollinger Band
-        - RSI recovering but not overbought
-        - Strong volume surge
-        """
-
-        close = data.get('close', 0)
-        bollinger_lower = data.get('bollinger_lower', 0)
-        rsi = data.get('rsi', 50)
-        volume_ratio = data.get('volume_ratio', 0)
-        daily_change = data.get('daily_change_pct', 0)
-
-        # 1. Age check - RELAXED to 3 days
-        if age_days > 3:
-            self.remove(ticker, removal_reason='expired', current_price=close)
-            return False, "Bounce window expired (>3 days)"
-
-        # 2. Price stabilization (RELAXED - just not crashing)
-        if daily_change < -2.0:
-            return False, f"Still dropping ({daily_change:.1f}%)"
-
-        # 3. Bollinger distance check - RELAXED
-        if bollinger_lower > 0:
-            distance_from_lower = ((close - bollinger_lower) / bollinger_lower * 100)
-            if distance_from_lower > 8.0:  # RELAXED from 3.0
-                self.remove(ticker, removal_reason='invalidated', current_price=close)
-                return False, f"Too far from band ({distance_from_lower:.1f}%)"
-
-        # 4. RSI range - VERY RELAXED
-        if rsi > 65:  # RELAXED from 50
-            self.remove(ticker, removal_reason='invalidated', current_price=close)
-            return False, f"Already recovered (RSI={rsi:.0f})"
-
-        # 5. Volume - RELAXED
-        if volume_ratio < 0.8:  # RELAXED from 1.5
-            return False, f"Very low volume ({volume_ratio:.2f}x)"
-
-        # All checks passed
-        return True, f"✅ Oversold reversal (RSI={rsi:.0f}, Vol={volume_ratio:.2f}x)"
-
-    def age_out_stale_entries(self, current_date: datetime, max_age_days: int = 5):
-        """
-        Remove entries older than max_age_days
-
-        Args:
-            current_date: Current date
-            max_age_days: Maximum days to keep entries
-        """
-        expired = []
-
-        for ticker, entry in self.entries.items():
-            age = (current_date - entry['date_added']).days
-            if age > max_age_days:
-                expired.append(ticker)
-
-        for ticker in expired:
-            entry = self.entries[ticker]
-            signal_type = entry['signal_type']
-            age = (current_date - entry['date_added']).days
-
-            # Track expiration
-            if signal_type not in self.stats['expired_entries']:
-                self.stats['expired_entries'][signal_type] = 0
-            self.stats['expired_entries'][signal_type] += 1
-
-            print(f"🗑️  WATCHLIST EXPIRED: {ticker} - {signal_type} (>{max_age_days} days old)")
-
-            # Get current price for logging
-            if self.strategy:
-                try:
-                    current_price = self.strategy.get_last_price(ticker)
-                except:
-                    current_price = entry['entry_price_at_signal']
-            else:
-                current_price = entry['entry_price_at_signal']
-
-            self.remove(ticker, removal_reason='expired', current_price=current_price)
-
-    def get_statistics(self) -> Dict:
-        """Get watchlist statistics"""
-        if not self.entries:
-            return {
-                'total_entries': 0,
-                'by_signal': {}
-            }
-
-        by_signal = {}
-        for entry in self.entries.values():
-            signal_type = entry['signal_type']
-            by_signal[signal_type] = by_signal.get(signal_type, 0) + 1
-
-        return {
-            'total_entries': len(self.entries),
-            'by_signal': by_signal
-        }
-
-    def get_detailed_statistics(self) -> Dict:
-        """
-        Get comprehensive watchlist statistics including confirmation tracking
-
-        Returns:
-            dict: Detailed stats about watchlist performance
-        """
-        total_added = sum(self.stats['signals_added'].values())
-        total_passed = sum(self.stats['confirmations_passed'].values())
-        total_failed = sum(
-            sum(reasons.values()) for reasons in self.stats['confirmations_failed'].values()
-        )
-        total_expired = sum(self.stats['expired_entries'].values())
-
-        return {
-            'total_entries': len(self.entries),
-            'signals_added': dict(self.stats['signals_added']),
-            'confirmations_passed': dict(self.stats['confirmations_passed']),
-            'confirmations_failed': dict(self.stats['confirmations_failed']),
-            'expired_entries': dict(self.stats['expired_entries']),
-            'totals': {
-                'added': total_added,
-                'passed': total_passed,
-                'failed': total_failed,
-                'expired': total_expired,
-                'pass_rate': (total_passed / total_added * 100) if total_added > 0 else 0
-            }
-        }
-
-    def _save_to_database(self, ticker: str):
-        """Save single entry to database"""
-        from database import get_database
-        db = get_database()
-        conn = db.get_connection()
-
-        try:
-            entry = self.entries[ticker]
-            db.save_watchlist_entry(
-                conn,
-                ticker,
-                entry['signal_type'],
-                entry['signal_data'],
-                entry['date_added'],
-                entry['entry_price_at_signal']
-            )
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            print(f"[ERROR] Failed to save watchlist entry {ticker}: {e}")
-        finally:
-            db.return_connection(conn)
-
-    def _delete_from_database(self, ticker: str):
-        """Delete entry from database"""
-        from database import get_database
-        db = get_database()
-        conn = db.get_connection()
-
-        try:
-            db.delete_watchlist_entry(conn, ticker)
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            print(f"[ERROR] Failed to delete watchlist entry {ticker}: {e}")
-        finally:
-            db.return_connection(conn)
-
-    def _log_removal(self, ticker, signal_type, date_added, removal_reason,
-                     was_confirmed, entry_price, current_price):
-        """Log removal to watchlist_history"""
-        from database import get_database
-        from config import Config
-
-        db = get_database()
-
-        if Config.BACKTESTING:
-            db.log_watchlist_removal(
-                ticker, signal_type, date_added, removal_reason,
-                was_confirmed, entry_price, current_price
-            )
-        else:
-            conn = db.get_connection()
-            try:
-                db.log_watchlist_removal(
-                    conn, ticker, signal_type, date_added, removal_reason,
-                    was_confirmed, entry_price, current_price
-                )
-                conn.commit()
-            except Exception as e:
-                conn.rollback()
-                print(f"[ERROR] Failed to log watchlist removal {ticker}: {e}")
-            finally:
-                db.return_connection(conn)
 
 
 # ===================================================================================
@@ -683,10 +227,10 @@ def swing_trade_2(data: IndicatorData) -> SignalResult:
     Pullback Buy - Catches PULLBACKS in established trends
 
     Strategy: Buy quality pullbacks in confirmed uptrends
-    - Pullback to EMA20 (2-12% away)
-    - RSI oversold but not extreme (40-68)
-    - Volume confirming (1.15x+)
-    - ADX confirming trend (18+)
+    - Pullback to EMA20 (2-8% away)
+    - RSI oversold but not extreme (42-65)
+    - Volume confirming (1.25x+)
+    - ADX confirming trend (22+)
 
     Args:
         data: Stock indicator data
@@ -745,9 +289,9 @@ def swing_trade_2(data: IndicatorData) -> SignalResult:
         return _no_signal(f'Price dropping too fast ({daily_change_pct:.1f}%)')
 
     # 10. Stochastic confirmation - must not be in extreme oversold
-    # stoch_k = data.get('stoch_k', 50)
-    # if stoch_k < 20:
-    #     return _no_signal(f'Stochastic too oversold ({stoch_k:.0f})')
+    stoch_k = data.get('stoch_k', 50)
+    if stoch_k < 20:
+        return _no_signal(f'Stochastic too oversold ({stoch_k:.0f})')
 
     return {
         'side': 'buy',
@@ -764,18 +308,11 @@ def consolidation_breakout(data: IndicatorData) -> SignalResult:
 
     Strategy: Only take HIGH CONVICTION breakouts
     - Tighter consolidation range
-    - Stronger volume surge (1.5x+)
-    - Higher RSI floor (50+) = already in bullish zone
-    - Closer to EMA20 (within 8%)
+    - Stronger volume surge (1.4x+)
+    - Higher RSI floor (52+) = already in bullish zone
+    - Closer to EMA20 (within 10%)
     - MACD must be bullish
     - ADX must show trend formation (22+)
-
-    Changes vs old version:
-    - Volume: 1.15x → 1.5x (much stronger surge required)
-    - RSI: 45+ → 50+ (must already be bullish)
-    - EMA20 distance: 10% → 8% (closer entry)
-    - Added: ADX 22+ requirement
-    - Added: MACD bullish requirement
     """
     close = data.get('close', 0)
     ema20 = data.get('ema20', 0)
@@ -809,37 +346,26 @@ def consolidation_breakout(data: IndicatorData) -> SignalResult:
     if close < high_10d * SignalConfig.CB_BREAKOUT_THRESHOLD:
         return _no_signal('Not breaking out')
 
-    # 4. STRONG volume surge (NEW: 1.5x minimum)
+    # 4. STRONG volume surge
     if volume_ratio < SignalConfig.CB_VOLUME_RATIO_MIN:
         return _no_signal(f'Volume {volume_ratio:.1f}x too weak (need {SignalConfig.CB_VOLUME_RATIO_MIN}x+)')
 
-    # 5. RSI in bullish zone (NEW: 50+ minimum)
+    # 5. RSI in bullish zone
     if not (SignalConfig.CB_RSI_MIN <= rsi <= SignalConfig.CB_RSI_MAX):
         return _no_signal(f'RSI {rsi:.0f} outside {SignalConfig.CB_RSI_MIN}-{SignalConfig.CB_RSI_MAX}')
 
-    # 6. Not overextended (NEW: tighter 8% max)
+    # 6. Not overextended
     distance_to_ema20 = abs((close - ema20) / ema20 * 100) if ema20 > 0 else 100
     if distance_to_ema20 > SignalConfig.CB_EMA20_DISTANCE_MAX:
         return _no_signal(f'Too far from EMA20 ({distance_to_ema20:.1f}% > {SignalConfig.CB_EMA20_DISTANCE_MAX}%)')
 
-    # 7. NEW: ADX shows trend formation
+    # 7. ADX shows trend formation
     if adx < SignalConfig.CB_ADX_MIN:
         return _no_signal(f'ADX {adx:.0f} too weak (need {SignalConfig.CB_ADX_MIN}+)')
 
-    # 8. NEW: MACD bullish
+    # 8. MACD bullish
     if SignalConfig.CB_MACD_REQUIRED and macd <= macd_signal:
         return _no_signal('MACD not bullish')
-
-    macd_hist = data.get('macd_histogram', 0)
-    macd_hist_prev = data.get('macd_hist_prev', 0)
-
-    # Bonus quality indicator (not required, but confirms strength)
-    momentum_accelerating = macd_hist > macd_hist_prev > 0
-
-    if momentum_accelerating:
-        quality_note = "ACCELERATING"
-    else:
-        quality_note = "standard"
 
     return {
         'side': 'buy',
@@ -958,16 +484,16 @@ def bollinger_buy(data: IndicatorData) -> SignalResult:
         return _no_signal(f'Volume {volume_ratio:.1f}x below {SignalConfig.BB_VOLUME_RATIO_MIN}x')
 
     # MACD momentum confirmation
-     #if macd <= macd_signal:
-     #    return _no_signal('MACD not bullish')
+    if macd <= macd_signal:
+        return _no_signal('MACD not bullish')
 
     # OBV confirmation
-    # if not obv_trending_up:
-    #     return _no_signal('OBV not confirming')
+    if not obv_trending_up:
+        return _no_signal('OBV not confirming')
 
     # Starting to bounce
-    #  if daily_change_pct <= 0:
-    #     return _no_signal('Not bouncing yet')
+    if daily_change_pct <= 0:
+        return _no_signal('Not bouncing yet')
 
     return {
         'side': 'buy',
