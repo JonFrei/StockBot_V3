@@ -1,56 +1,70 @@
 """
-Adaptive Position Monitoring System - TIGHTENED EXIT STRATEGY
+Adaptive Position Monitoring System - PROFIT-LEVEL-BASED STRATEGY
 
-WITH OPTION 4: Progressive Growth Checkpoints (14d, 28d, 42d, 56d)
+UPDATED STRATEGY:
+- Hold periods based on reaching profit levels (20/30/40 days)
+- Trailing stops active at ALL levels
+- After Level 3: Special exits (emergency stop, stagnation check)
+- Level 3 sells 50% of remaining (leaves ~17% for final trailing)
 """
 
 
 # =============================================================================
-# ADAPTIVE CONFIGURATION - TIGHTENED FOR BETTER PROTECTION
+# ADAPTIVE CONFIGURATION - PROFIT-LEVEL BASED
 # =============================================================================
 
 class AdaptiveExitConfig:
     """
-        Dynamic exit parameters based on market conditions
-
+    Dynamic exit parameters based on market conditions
+    WITH PROFIT-LEVEL-BASED MAX HOLD PERIODS
     """
 
     # === STRONG CONDITIONS (Score 7-10) ===
-    STRONG_EMERGENCY_STOP = -4.5
-    STRONG_PROFIT_TARGET_1 = 15.0  # CHANGED from 12.0
-    STRONG_PROFIT_TARGET_1_SELL = 33.0  # CHANGED from 40.0
-    STRONG_PROFIT_TARGET_2 = 25.0  # CHANGED from 25.0
-    STRONG_PROFIT_TARGET_2_SELL = 33.0  # UNCHANGED
-    STRONG_PROFIT_TARGET_3 = 35.0  # CHANGED from 40.0
-    STRONG_PROFIT_TARGET_3_SELL = 34.0  # UNCHANGED
+    STRONG_EMERGENCY_STOP = -5.5
+    STRONG_PROFIT_TARGET_1 = 15.0
+    STRONG_PROFIT_TARGET_1_SELL = 33.0
+    STRONG_PROFIT_TARGET_2 = 25.0
+    STRONG_PROFIT_TARGET_2_SELL = 33.0
+    STRONG_PROFIT_TARGET_3 = 35.0
+    STRONG_PROFIT_TARGET_3_SELL = 50.0  # CHANGED: leaves ~17% for trailing
     # Trailing Stop
-    STRONG_TRAILING_STOP = 8.0  # CHANGED from 12.0
-    STRONG_TRAILING_STOP_FINAL = 18.0  # CHANGED from 18.0
+    STRONG_TRAILING_STOP = 8.0
+    STRONG_TRAILING_STOP_FINAL = 10.0  # TIGHTER after Level 3
 
     # === NEUTRAL CONDITIONS (Score 4-6) ===
-    NEUTRAL_EMERGENCY_STOP = -4.0
-    NEUTRAL_PROFIT_TARGET_1 = 15.0  # CHANGED from 10.0
-    NEUTRAL_PROFIT_TARGET_1_SELL = 33.0  # CHANGED from 40.0
-    NEUTRAL_PROFIT_TARGET_2 = 22.0  # CHANGED from 20.0
-    NEUTRAL_PROFIT_TARGET_2_SELL = 33.0  # UNCHANGED
-    NEUTRAL_PROFIT_TARGET_3 = 30.0  # CHANGED from 35.0
-    NEUTRAL_PROFIT_TARGET_3_SELL = 34.0  # UNCHANGED
+    NEUTRAL_EMERGENCY_STOP = -5.0
+    NEUTRAL_PROFIT_TARGET_1 = 15.0
+    NEUTRAL_PROFIT_TARGET_1_SELL = 33.0
+    NEUTRAL_PROFIT_TARGET_2 = 22.0
+    NEUTRAL_PROFIT_TARGET_2_SELL = 33.0
+    NEUTRAL_PROFIT_TARGET_3 = 30.0
+    NEUTRAL_PROFIT_TARGET_3_SELL = 50.0  # CHANGED: leaves ~17% for trailing
     # Trailing Stop
-    NEUTRAL_TRAILING_STOP = 6.0  # CHANGED from 10.0
-    NEUTRAL_TRAILING_STOP_FINAL = 15.0  # CHANGED from 15.0
+    NEUTRAL_TRAILING_STOP = 6.0
+    NEUTRAL_TRAILING_STOP_FINAL = 10.0  # TIGHTER after Level 3
 
     # === WEAK CONDITIONS (Score 0-3) ===
-    WEAK_EMERGENCY_STOP = -3.5
-    WEAK_PROFIT_TARGET_1 = 12.0  # CHANGED from 8.0
-    WEAK_PROFIT_TARGET_1_SELL = 33.0  # CHANGED from 40.0
-    WEAK_PROFIT_TARGET_2 = 16.0  # CHANGED from 18.0
-    WEAK_PROFIT_TARGET_2_SELL = 33.0  # UNCHANGED
-    WEAK_PROFIT_TARGET_3 = 20.0  # CHANGED from 30.0
-    WEAK_PROFIT_TARGET_3_SELL = 34.0  # UNCHANGED
+    WEAK_EMERGENCY_STOP = -4.5
+    WEAK_PROFIT_TARGET_1 = 12.0
+    WEAK_PROFIT_TARGET_1_SELL = 33.0
+    WEAK_PROFIT_TARGET_2 = 16.0
+    WEAK_PROFIT_TARGET_2_SELL = 33.0
+    WEAK_PROFIT_TARGET_3 = 20.0
+    WEAK_PROFIT_TARGET_3_SELL = 50.0  # CHANGED: leaves ~17% for trailing
     # Trailing Stop
-    WEAK_TRAILING_STOP = 4.0  # CHANGED from 6.0
-    WEAK_TRAILING_STOP_FINAL = 8.0  # CHANGED from 12.0
+    WEAK_TRAILING_STOP = 4.0
+    WEAK_TRAILING_STOP_FINAL = 8.0  # TIGHTER after Level 3
 
+    # === MAX HOLDING PERIODS (Profit-Level Based) ===
+    MAX_HOLD_BEFORE_LEVEL_1 = 30  # Must reach +12-15% within 20 days
+    MAX_HOLD_AT_LEVEL_1 = 60  # Must reach +20-25% within 30 days after Level 1
+    MAX_HOLD_AT_LEVEL_2 = 90  # Must reach +30-35% within 40 days after Level 2
+    # After Level 3: No time limit - trailing stops + special exits handle it
+
+    # === LEVEL 3 SPECIAL EXITS ===
+    LEVEL_3_EMERGENCY_STOP_OFFSET = -8.0  # Exit if price falls X% below Level 3 trigger
+    LEVEL_3_STAGNATION_DAYS = 14  # Exit if no new peak for 14 days
+    LEVEL_3_STAGNATION_VOLUME_THRESHOLD = 0.8  # Must have volume < 0.8x avg to exit
 
 
 # =============================================================================
@@ -251,7 +265,7 @@ class PositionMonitor:
         """
         Record position metadata for monitoring
 
-        ENHANCED: Handles recovered/orphaned positions gracefully
+        ENHANCED: Tracks Level 3 data for special exits
         """
         if ticker not in self.positions_metadata:
             current_price = self._get_current_price(ticker)
@@ -261,6 +275,8 @@ class PositionMonitor:
                 'entry_signal': entry_signal,
                 'entry_score': entry_score,
                 'highest_price': current_price,
+                'last_peak_date': entry_date,  # NEW: Track when last peak occurred
+                'level_3_trigger_price': None,  # NEW: Price when Level 3 first triggered
                 'profit_level_1_locked': False,
                 'profit_level_2_locked': False,
                 'profit_level_3_locked': False
@@ -272,18 +288,24 @@ class PositionMonitor:
         else:
             # Update highest price for existing position
             current_price = self._get_current_price(ticker)
-            self.positions_metadata[ticker]['highest_price'] = max(
-                self.positions_metadata[ticker].get('highest_price', 0),
-                current_price
-            )
+            old_highest = self.positions_metadata[ticker].get('highest_price', 0)
+
+            if current_price > old_highest:
+                self.positions_metadata[ticker]['highest_price'] = current_price
+                self.positions_metadata[ticker]['last_peak_date'] = entry_date  # Update peak date
 
     def update_highest_price(self, ticker, current_price):
         """Update highest price for trailing stop calculations"""
         if ticker in self.positions_metadata:
-            self.positions_metadata[ticker]['highest_price'] = max(
-                self.positions_metadata[ticker]['highest_price'],
-                current_price
-            )
+            old_highest = self.positions_metadata[ticker]['highest_price']
+
+            if current_price > old_highest:
+                self.positions_metadata[ticker]['highest_price'] = current_price
+                # Update last peak date when new high is reached
+                try:
+                    self.positions_metadata[ticker]['last_peak_date'] = self.strategy.get_datetime()
+                except:
+                    pass  # Don't fail on datetime issues
 
     def mark_profit_level_1_locked(self, ticker):
         """Mark that we took profit at level 1"""
@@ -295,10 +317,15 @@ class PositionMonitor:
         if ticker in self.positions_metadata:
             self.positions_metadata[ticker]['profit_level_2_locked'] = True
 
-    def mark_profit_level_3_locked(self, ticker):
-        """Mark that we took profit at level 3"""
+    def mark_profit_level_3_locked(self, ticker, trigger_price):
+        """
+        Mark that we took profit at level 3
+
+        NEW: Also stores the Level 3 trigger price for emergency stop calculation
+        """
         if ticker in self.positions_metadata:
             self.positions_metadata[ticker]['profit_level_3_locked'] = True
+            self.positions_metadata[ticker]['level_3_trigger_price'] = trigger_price
 
     def clean_position_metadata(self, ticker):
         """Remove metadata when position is fully closed"""
@@ -370,7 +397,9 @@ def check_profit_taking_adaptive(pnl_pct, profit_target_1, profit_target_2, prof
                                  sell_pct_1, sell_pct_2, sell_pct_3,
                                  profit_level_1_locked, profit_level_2_locked, profit_level_3_locked):
     """
-    3-level adaptive profit taking with TIGHTENED targets
+    3-level adaptive profit taking
+
+    UPDATED: Level 3 now sells 50% of remaining (leaves ~17% for trailing)
     """
 
     # Level 1
@@ -397,13 +426,18 @@ def check_profit_taking_adaptive(pnl_pct, profit_target_1, profit_target_2, prof
 
     # Level 3
     if profit_level_2_locked and not profit_level_3_locked and pnl_pct >= profit_target_3:
-        remaining_pct = 100.0 - sell_pct_1 - sell_pct_2 - sell_pct_3
+        # Calculate remaining after Level 1 and 2
+        remaining_after_level_2 = 100.0 - sell_pct_1 - sell_pct_2
+        # Sell 50% of remaining
+        sell_amount = remaining_after_level_2 * 0.50
+        final_remaining = remaining_after_level_2 - sell_amount
+
         return {
             'type': 'partial_exit',
             'reason': 'profit_level_3',
-            'sell_pct': sell_pct_3,
+            'sell_pct': sell_amount,
             'profit_level': 3,
-            'message': f'🚀 Level 3 @ +{profit_target_3:.0f}%: Selling {sell_pct_3:.0f}%, trailing {remaining_pct:.0f}% (BIG WINNER!)'
+            'message': f'🚀 Level 3 @ +{profit_target_3:.0f}%: Selling {sell_amount:.0f}%, trailing {final_remaining:.0f}% (BIG WINNER!)'
         }
 
     return None
@@ -412,12 +446,14 @@ def check_profit_taking_adaptive(pnl_pct, profit_target_1, profit_target_2, prof
 def check_trailing_stop(profit_level_2_locked, profit_level_3_locked, highest_price,
                         current_price, trail_pct, trail_pct_final, pnl_pct):
     """
-    Adaptive trailing stop with wider stops after Level 3
+    Adaptive trailing stop - ACTIVE AT ALL LEVELS
+
+    UPDATED: Uses tighter trailing stop after Level 3
     """
     if not profit_level_2_locked:
         return None
 
-    # Use wider trailing stop after Level 3
+    # Use tighter trailing stop after Level 3
     if profit_level_3_locked:
         active_trail_pct = trail_pct_final
         label = f"FINAL trail {trail_pct_final:.0f}%"
@@ -437,13 +473,82 @@ def check_trailing_stop(profit_level_2_locked, profit_level_3_locked, highest_pr
     return None
 
 
-def check_max_holding_period(position_monitor, ticker, current_date, data, max_days=60, profit_level_2_locked = False):
+def check_level_3_special_exits(position_monitor, ticker, current_date, data):
     """
-    Exit positions held longer than 60 days
+    LEVEL 3 SPECIAL EXITS (Your strategy)
 
-    Still allows momentum exception:
-    - If stock still has strong trend (ADX > 25, above EMAs, MACD bullish), let it ride
-    - Otherwise exit to free up capital faster
+    Only active after profit_level_3_locked = True
+
+    Exits:
+    1. Emergency stop: Price falls 4% below Level 3 trigger price
+    2. Stagnation: No new peak for 14 days + low volume (<0.8x)
+
+    Note: Trailing stop handles the drawdown-from-peak exit
+    """
+    metadata = position_monitor.get_position_metadata(ticker)
+    if not metadata:
+        return None
+
+    profit_level_3_locked = metadata.get('profit_level_3_locked', False)
+    if not profit_level_3_locked:
+        return None
+
+    current_price = data.get('close', 0)
+    level_3_trigger_price = metadata.get('level_3_trigger_price')
+
+    if not level_3_trigger_price or current_price <= 0:
+        return None
+
+    # === EXIT 1: EMERGENCY STOP (Level 3 - 4%) ===
+    # Prevents giving back profits below Level 3 trigger
+    emergency_threshold_pct = AdaptiveExitConfig.LEVEL_3_EMERGENCY_STOP_OFFSET
+    emergency_threshold = level_3_trigger_price * (1 + emergency_threshold_pct / 100)
+
+    if current_price <= emergency_threshold:
+        pnl_from_trigger = ((current_price - level_3_trigger_price) / level_3_trigger_price * 100)
+        return {
+            'type': 'full_exit',
+            'reason': 'level_3_emergency_stop',
+            'sell_pct': 100.0,
+            'message': f'🚨 Level 3 Emergency: {pnl_from_trigger:.1f}% from Level 3 trigger (${level_3_trigger_price:.2f})'
+        }
+
+    # === EXIT 2: STAGNATION (14 days + low volume) ===
+    last_peak_date = metadata.get('last_peak_date')
+    if last_peak_date:
+        try:
+            days_since_peak = (current_date - last_peak_date).days
+        except:
+            days_since_peak = 0
+
+        if days_since_peak >= AdaptiveExitConfig.LEVEL_3_STAGNATION_DAYS:
+            volume_ratio = data.get('volume_ratio', 1.0)
+
+            if volume_ratio < AdaptiveExitConfig.LEVEL_3_STAGNATION_VOLUME_THRESHOLD:
+                highest_price = metadata.get('highest_price', current_price)
+                price_from_peak = ((current_price - highest_price) / highest_price * 100)
+
+                return {
+                    'type': 'full_exit',
+                    'reason': 'level_3_stagnation',
+                    'sell_pct': 100.0,
+                    'message': f'💤 Level 3 Stagnation: {days_since_peak}d flat ({price_from_peak:+.1f}% from peak), low volume ({volume_ratio:.1f}x)'
+                }
+
+    return None
+
+
+def check_max_holding_period(position_monitor, ticker, current_date, data):
+    """
+    PROFIT-LEVEL-BASED MAX HOLD PERIODS
+
+    NEW STRATEGY:
+    - Before Level 1: Max 20 days (must reach +12-15%)
+    - After Level 1: Max 30 days (must reach +20-25%)
+    - After Level 2: Max 40 days (must reach +30-35%)
+    - After Level 3: NO TIME LIMIT (trailing stops + special exits handle it)
+
+    This replaces the old fixed 60-day limit
     """
     metadata = position_monitor.get_position_metadata(ticker)
     if not metadata:
@@ -452,32 +557,62 @@ def check_max_holding_period(position_monitor, ticker, current_date, data, max_d
     entry_date = metadata['entry_date']
     days_held = (current_date - entry_date).days
 
-    if profit_level_2_locked:
-        max_days = 90  # Give big winners more time
+    profit_level_1_locked = metadata.get('profit_level_1_locked', False)
+    profit_level_2_locked = metadata.get('profit_level_2_locked', False)
+    profit_level_3_locked = metadata.get('profit_level_3_locked', False)
 
-    if days_held >= max_days:
-        # Get momentum indicators
-        adx = data.get('adx', 0)
-        close = data.get('close', 0)
-        ema20 = data.get('ema20', 0)
-        ema50 = data.get('ema50', 0)
-        macd = data.get('macd', 0)
-        macd_signal = data.get('macd_signal', 0)
+    # === AFTER LEVEL 3: NO TIME LIMIT ===
+    if profit_level_3_locked:
+        return None  # Let trailing stops + special exits handle it
 
-        # EXCEPTION: Strong trend = keep position (let trailing stop handle exit)
-        if (close > ema20 > ema50 and
-                adx > 25 and
-                macd > macd_signal):
-            return None  # Keep riding the trend
+    # === AFTER LEVEL 2: 40 DAYS TO REACH LEVEL 3 ===
+    elif profit_level_2_locked:
+        if days_held >= AdaptiveExitConfig.MAX_HOLD_AT_LEVEL_2:
+            # Check momentum exception
+            adx = data.get('adx', 0)
+            close = data.get('close', 0)
+            ema20 = data.get('ema20', 0)
+            ema50 = data.get('ema50', 0)
+            macd = data.get('macd', 0)
+            macd_signal = data.get('macd_signal', 0)
+            volume_ratio = data.get('volume_ratio', 0)
 
-        # Weak/broken trend = exit
-        return {
-            'type': 'full_exit',
-            'reason': 'max_holding_period',
-            'sell_pct': 100.0,
-            'message': f'⏰ Max Hold ({days_held}d) + Weakening Trend'
-        }
-    return None
+            # Strong momentum exception (let it run to Level 3)
+            if (close > ema20 > ema50 and
+                    adx > 25 and
+                    macd > macd_signal and
+                    volume_ratio > 1.0):
+                return None  # Still has momentum
+
+            return {
+                'type': 'full_exit',
+                'reason': 'max_holding_period',
+                'sell_pct': 100.0,
+                'message': f'⏰ Level 2 Max Hold ({days_held}d) - Not Advancing to Level 3'
+            }
+        return None
+
+    # === AFTER LEVEL 1: 30 DAYS TO REACH LEVEL 2 ===
+    elif profit_level_1_locked:
+        if days_held >= AdaptiveExitConfig.MAX_HOLD_AT_LEVEL_1:
+            return {
+                'type': 'full_exit',
+                'reason': 'max_holding_period',
+                'sell_pct': 100.0,
+                'message': f'⏰ Level 1 Max Hold ({days_held}d) - Not Advancing to Level 2'
+            }
+        return None
+
+    # === BEFORE LEVEL 1: 20 DAYS TO REACH LEVEL 1 ===
+    else:
+        if days_held >= AdaptiveExitConfig.MAX_HOLD_BEFORE_LEVEL_1:
+            return {
+                'type': 'full_exit',
+                'reason': 'max_holding_period',
+                'sell_pct': 100.0,
+                'message': f'⏰ Pre-Level 1 Max Hold ({days_held}d) - Position Not Working'
+            }
+        return None
 
 
 # =============================================================================
@@ -486,15 +621,13 @@ def check_max_holding_period(position_monitor, ticker, current_date, data, max_d
 
 def check_positions_for_exits(strategy, current_date, all_stock_data, position_monitor):
     """
-    TIGHTENED: Adaptive exit checking with broker utilities
+    UPDATED EXIT PRIORITY ORDER:
 
-    Exit Priority Order:
-    1. Max holding period (30 days with momentum exception)
-    2. Emergency stops (adaptive based on conditions)
-    3. Profit taking level 1 (FASTER: 12-15%)
-    4. Profit taking level 2 (FASTER: 16-25%)
-    5. Profit taking level 3 (FASTER: 20-35%)
-    6. Trailing stops (adaptive distance, wider after Level 3)
+    1. Level 3 special exits (emergency stop, stagnation)
+    2. Emergency stops (regular)
+    3. Max holding period (profit-level based: 20/30/40 days)
+    4. Profit taking (triggers Level 1, 2, 3)
+    5. Trailing stops (active at ALL levels, tighter after Level 3)
     """
     # Import broker utilities from account_broker_data
     import account_broker_data
@@ -553,20 +686,18 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         pnl_pct = ((current_price - broker_entry_price) / broker_entry_price * 100)
         pnl_dollars = (current_price - broker_entry_price) * broker_quantity
 
-        # === CHECK EXIT CONDITIONS (Using Adaptive Parameters) ===
+        # === CHECK EXIT CONDITIONS (UPDATED PRIORITY ORDER) ===
         exit_signal = None
 
-        # 1. Max holding period
-        exit_signal = check_max_holding_period(
+        # 1. Level 3 special exits (if at Level 3)
+        exit_signal = check_level_3_special_exits(
             position_monitor=position_monitor,
             ticker=ticker,
             current_date=current_date,
-            data=data,
-            max_days=30,
-            profit_level_2_locked=metadata.get('profit_level_2_locked', False)
+            data=data
         )
 
-        # 2. Emergency stop
+        # 2. Regular emergency stop (if not at Level 3 or no Level 3 exit)
         if not exit_signal:
             exit_signal = check_emergency_stop(
                 pnl_pct=pnl_pct,
@@ -575,7 +706,16 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
                 stop_pct=adaptive_params['emergency_stop_pct']
             )
 
-        # 3. Profit taking
+        # 3. Max holding period (profit-level based)
+        if not exit_signal:
+            exit_signal = check_max_holding_period(
+                position_monitor=position_monitor,
+                ticker=ticker,
+                current_date=current_date,
+                data=data
+            )
+
+        # 4. Profit taking
         if not exit_signal:
             exit_signal = check_profit_taking_adaptive(
                 pnl_pct=pnl_pct,
@@ -590,7 +730,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
                 profit_level_3_locked=metadata.get('profit_level_3_locked', False)
             )
 
-        # 4. Trailing stop
+        # 5. Trailing stops (active at ALL levels)
         if not exit_signal:
             exit_signal = check_trailing_stop(
                 profit_level_2_locked=metadata.get('profit_level_2_locked', False),
@@ -617,10 +757,12 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
 
     return exit_orders
 
+
 def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, profit_tracker, ticker_cooldown=None):
     """
     Execute exit orders using BROKER data for P&L calculation
-    WITH CONFIRMATION TRACKING
+
+    UPDATED: Handles Level 3 trigger price storage
     """
 
     for order in exit_orders:
@@ -673,9 +815,10 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
             elif profit_level == 2:
                 position_monitor.mark_profit_level_2_locked(ticker)
             elif profit_level == 3:
-                position_monitor.mark_profit_level_3_locked(ticker)
+                # NEW: Store Level 3 trigger price for emergency stop
+                position_monitor.mark_profit_level_3_locked(ticker, current_price)
 
-            # === RECORD THE TRADE (with confirmation data) ===
+            # === RECORD THE TRADE ===
             profit_tracker.record_trade(
                 ticker=ticker,
                 quantity_sold=sell_quantity,
@@ -713,7 +856,7 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
             print(f"Reason: {message}")
             print(f"{'=' * 70}\n")
 
-            # === RECORD THE TRADE (with confirmation data) ===
+            # === RECORD THE TRADE ===
             profit_tracker.record_trade(
                 ticker=ticker,
                 quantity_sold=sell_quantity,
