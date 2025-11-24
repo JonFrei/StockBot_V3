@@ -461,15 +461,6 @@ class StockRotator:
         # Update statistics from profit tracker
         self.update_ticker_stats_from_tracker()
 
-        # ADD DEBUG OUTPUT - TO BE REMOVED
-        print(f"[DEBUG] Ticker stats found: {len(self.ticker_stats)}")
-        if self.ticker_stats:
-            for ticker, stats in list(self.ticker_stats.items())[:5]:  # Show first 5
-                print(f"[DEBUG]   {ticker}: {stats['trades']} trades, {stats['win_rate']:.1f}% WR")
-        else:
-            print(
-                f"[DEBUG] ⚠️  No ticker stats - profit tracker has {len(self.profit_tracker.get_closed_trades())} trades")
-
         # Calculate total system trades
         total_system_trades = sum(stats['trades'] for stats in self.ticker_stats.values())
 
@@ -577,7 +568,7 @@ class StockRotator:
             self.ticker_awards.items(),
             key=lambda x: (tier_order.get(x[1], 5), x[0])
         )
-
+        '''
         for ticker, award in sorted_tickers:
             if ticker in self.ticker_stats:
                 stats = self.ticker_stats[ticker]
@@ -600,8 +591,9 @@ class StockRotator:
                 print(f"{ticker:<8} {award_emoji} {award:<8} {trades:<8} {wr:>5.1f}%  {recent_str:<10} {multiplier}x")
             else:
                 print(f"{ticker:<8} 🔬 trial     0        N/A    N/A        {AwardConfig.TRIAL_MULTIPLIER}x")
-
+        '''
         print(f"{'─' * 80}\n")
+
 
     def get_award(self, ticker):
         """Get current award for a ticker"""

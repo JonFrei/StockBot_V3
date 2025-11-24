@@ -21,14 +21,14 @@ class SignalConfig:
     ST1_ADX_MIN = 20
     ST1_ADX_MAX = 35
 
-    # SWING_TRADE_2: Pullback in Trend (IMPROVED)
-    ST2_PULLBACK_MIN = 2.0  # Keep - shallow pullbacks are fine
-    ST2_PULLBACK_MAX = 8.0  # TIGHTENED from 12.0 - avoid broken trends
-    ST2_RSI_MIN = 42  # INCREASED from 40 - avoid weak bounces
-    ST2_RSI_MAX = 65  # REDUCED from 68 - avoid overbought entries
-    ST2_VOLUME_RATIO_MIN = 1.25  # INCREASED from 1.15 - require stronger confirmation
-    ST2_ADX_MIN = 22  # INCREASED from 18 - require stronger trend
-    ST2_DAILY_CHANGE_MIN = -3.0  # TIGHTENED from -4.0 - avoid catching falling knives
+    # SWING_TRADE_2: Pullback in Trend (RELAXED FOR WATCHLIST)
+    ST2_PULLBACK_MIN = 1.0  # RELAXED from 2.0 - catch smaller pullbacks
+    ST2_PULLBACK_MAX = 12.0  # RELAXED from 8.0 - allow deeper pullbacks
+    ST2_RSI_MIN = 35  # RELAXED from 42 - allow more oversold entries
+    ST2_RSI_MAX = 70  # RELAXED from 65 - allow momentum entries
+    ST2_VOLUME_RATIO_MIN = 0.8  # RELAXED from 1.25 - don't require volume surge on entry
+    ST2_ADX_MIN = 15  # RELAXED from 22 - allow weaker trends
+    ST2_DAILY_CHANGE_MIN = -5.0  # RELAXED from -3.0 - allow bigger drops (we confirm later)
 
     # CONSOLIDATION_BREAKOUT - QUALITY FOCUSED
     CB_RANGE_MAX = 18.0  # Keep - wider consolidations OK
@@ -49,12 +49,12 @@ class SignalConfig:
     GC_RSI_MIN = 45
     GC_RSI_MAX = 70
 
-    # BOLLINGER_BUY
-    BB_BOLLINGER_PROXIMITY = 1.02  # Within 2% of lower band
-    BB_RSI_MIN = 30
-    BB_RSI_MAX = 42
-    BB_VOLUME_RATIO_MIN = 1.5
-    BB_ADX_MIN = 20
+    # BOLLINGER_BUY (RELAXED FOR WATCHLIST)
+    BB_BOLLINGER_PROXIMITY = 1.05  # RELAXED from 1.02 - within 5% of lower band
+    BB_RSI_MIN = 25  # RELAXED from 30 - deeper oversold OK
+    BB_RSI_MAX = 50  # RELAXED from 42 - allow more room
+    BB_VOLUME_RATIO_MIN = 0.8  # RELAXED from 1.5 - volume surge not required initially
+    BB_ADX_MIN = 15  # RELAXED from 20 - weaker trends OK
 
 
 # Type aliases for clarity
@@ -183,6 +183,15 @@ class Watchlist:
     def __init__(self, strategy=None):
         self.strategy = strategy
         self.entries = {}  # In-memory cache
+
+        # Tracking statistics
+        self.stats = {
+            'signals_added': {},  # {signal_type: count}
+            'confirmations_passed': {},  # {signal_type: count}
+            'confirmations_failed': {},  # {signal_type: {reason: count}}
+            'expired_entries': {},  # {signal_type: count}
+        }
+
         self._load_from_database()
 
     def _load_from_database(self):
@@ -217,6 +226,11 @@ class Watchlist:
             'date_added': current_date,
             'entry_price_at_signal': signal_data.get('limit_price', 0)
         }
+
+        # Track addition
+        if signal_type not in self.stats['signals_added']:
+            self.stats['signals_added'][signal_type] = 0
+        self.stats['signals_added'][signal_type] += 1
 
         print(f"📋 WATCHLIST ADD: {ticker} - {signal_type} (awaiting confirmation)")
 
@@ -305,6 +319,19 @@ class Watchlist:
                 entry['entry_price_at_signal']
             )
 
+            # Track confirmation result
+            signal_type = entry['signal_type']
+            if is_confirmed:
+                if signal_type not in self.stats['confirmations_passed']:
+                    self.stats['confirmations_passed'][signal_type] = 0
+                self.stats['confirmations_passed'][signal_type] += 1
+            else:
+                if signal_type not in self.stats['confirmations_failed']:
+                    self.stats['confirmations_failed'][signal_type] = {}
+                if reason not in self.stats['confirmations_failed'][signal_type]:
+                    self.stats['confirmations_failed'][signal_type][reason] = 0
+                self.stats['confirmations_failed'][signal_type][reason] += 1
+
             results.append({
                 'ticker': ticker,
                 'signal_type': entry['signal_type'],
@@ -348,31 +375,27 @@ class Watchlist:
         macd_hist = data.get('macd_histogram', 0)
         macd_hist_prev = data.get('macd_hist_prev', 0)
         volume_ratio = data.get('volume_ratio', 0)
+        ema20 = data.get('ema20', 0)
 
-        # 1. Age check - remove if too old
-        if age_days > 3:
-            self.remove(ticker, removal_reason='expired', current_price=data.get('close', 0))
-            return False, "Setup expired (>3 days)"
+        # 1. Age check - RELAXED to 5 days
+        if age_days > 5:
+            self.remove(ticker, removal_reason='expired', current_price=close)
+            return False, "Setup expired (>5 days)"
 
-        # 2. Price must not be falling hard
-        if daily_change < -1.5:
-            return False, f"Still dropping ({daily_change:.1f}%)"
+        # 2. Price stabilization - RELAXED threshold
+        if daily_change < -3.0:
+            return False, f"Still dropping hard ({daily_change:.1f}%)"
 
-        # 3. Stochastic checks
-        if stoch_k < 25:
-            return False, f"Not oversold enough yet (K={stoch_k:.0f})"
+        # 3. Basic volume check - VERY RELAXED
+        if volume_ratio < 0.7:
+            return False, f"Very low volume ({volume_ratio:.2f}x)"
 
-        if stoch_k > 75:
-            self.remove(ticker, removal_reason='invalidated', current_price=data.get('close', 0))
-            return False, f"Already ran - missed entry (K={stoch_k:.0f})"
-
-        # 4. MACD momentum must be improving
-        if macd_hist <= macd_hist_prev:
-            return False, "MACD momentum not improving"
-
-        # 5. Volume confirmation
-        if volume_ratio < 1.1:
-            return False, f"Low volume ({volume_ratio:.2f}x)"
+        # 4. Still in reasonable distance from EMA20
+        if ema20 > 0:
+            distance = abs((close - ema20) / ema20 * 100)
+            if distance > 15.0:
+                self.remove(ticker, removal_reason='invalidated', current_price=close)
+                return False, f"Too far from EMA20 ({distance:.1f}%)"
 
         # All checks passed
         return True, f"✅ Pullback reversing (K={stoch_k:.0f}, Vol={volume_ratio:.2f}x)"
@@ -394,33 +417,30 @@ class Watchlist:
         volume_ratio = data.get('volume_ratio', 0)
         daily_change = data.get('daily_change_pct', 0)
 
-        # 1. Age check - remove if too old
-        if age_days > 2:
+        # 1. Age check - RELAXED to 3 days
+        if age_days > 3:
             self.remove(ticker, removal_reason='expired', current_price=close)
-            return False, "Bounce window expired (>2 days)"
+            return False, "Bounce window expired (>3 days)"
 
-        # 2. Price must be green (bouncing)
-        if daily_change < 0:
-            return False, f"Not bouncing yet ({daily_change:.1f}%)"
+        # 2. Price stabilization (RELAXED - just not crashing)
+        if daily_change < -2.0:
+            return False, f"Still dropping ({daily_change:.1f}%)"
 
-        # 3. Must still be near lower band
+        # 3. Bollinger distance check - RELAXED
         if bollinger_lower > 0:
             distance_from_lower = ((close - bollinger_lower) / bollinger_lower * 100)
-            if distance_from_lower > 3.0:
+            if distance_from_lower > 8.0:  # RELAXED from 3.0
                 self.remove(ticker, removal_reason='invalidated', current_price=close)
-                return False, f"Already bounced away ({distance_from_lower:.1f}% from band)"
+                return False, f"Too far from band ({distance_from_lower:.1f}%)"
 
-        # 4. RSI recovering check
-        if rsi < 30:
-            return False, f"Still too oversold (RSI={rsi:.0f})"
-
-        if rsi > 50:
+        # 4. RSI range - VERY RELAXED
+        if rsi > 65:  # RELAXED from 50
             self.remove(ticker, removal_reason='invalidated', current_price=close)
             return False, f"Already recovered (RSI={rsi:.0f})"
 
-        # 5. Strong volume required
-        if volume_ratio < 1.5:
-            return False, f"Insufficient volume ({volume_ratio:.2f}x)"
+        # 5. Volume - RELAXED
+        if volume_ratio < 0.8:  # RELAXED from 1.5
+            return False, f"Very low volume ({volume_ratio:.2f}x)"
 
         # All checks passed
         return True, f"✅ Oversold reversal (RSI={rsi:.0f}, Vol={volume_ratio:.2f}x)"
@@ -444,6 +464,11 @@ class Watchlist:
             entry = self.entries[ticker]
             signal_type = entry['signal_type']
             age = (current_date - entry['date_added']).days
+
+            # Track expiration
+            if signal_type not in self.stats['expired_entries']:
+                self.stats['expired_entries'][signal_type] = 0
+            self.stats['expired_entries'][signal_type] += 1
 
             print(f"🗑️  WATCHLIST EXPIRED: {ticker} - {signal_type} (>{max_age_days} days old)")
 
@@ -474,6 +499,35 @@ class Watchlist:
         return {
             'total_entries': len(self.entries),
             'by_signal': by_signal
+        }
+
+    def get_detailed_statistics(self) -> Dict:
+        """
+        Get comprehensive watchlist statistics including confirmation tracking
+
+        Returns:
+            dict: Detailed stats about watchlist performance
+        """
+        total_added = sum(self.stats['signals_added'].values())
+        total_passed = sum(self.stats['confirmations_passed'].values())
+        total_failed = sum(
+            sum(reasons.values()) for reasons in self.stats['confirmations_failed'].values()
+        )
+        total_expired = sum(self.stats['expired_entries'].values())
+
+        return {
+            'total_entries': len(self.entries),
+            'signals_added': dict(self.stats['signals_added']),
+            'confirmations_passed': dict(self.stats['confirmations_passed']),
+            'confirmations_failed': dict(self.stats['confirmations_failed']),
+            'expired_entries': dict(self.stats['expired_entries']),
+            'totals': {
+                'added': total_added,
+                'passed': total_passed,
+                'failed': total_failed,
+                'expired': total_expired,
+                'pass_rate': (total_passed / total_added * 100) if total_added > 0 else 0
+            }
         }
 
     def _save_to_database(self, ticker: str):
@@ -691,9 +745,9 @@ def swing_trade_2(data: IndicatorData) -> SignalResult:
         return _no_signal(f'Price dropping too fast ({daily_change_pct:.1f}%)')
 
     # 10. Stochastic confirmation - must not be in extreme oversold
-    stoch_k = data.get('stoch_k', 50)
-    if stoch_k < 20:
-        return _no_signal(f'Stochastic too oversold ({stoch_k:.0f})')
+    # stoch_k = data.get('stoch_k', 50)
+    # if stoch_k < 20:
+    #     return _no_signal(f'Stochastic too oversold ({stoch_k:.0f})')
 
     return {
         'side': 'buy',
@@ -904,16 +958,16 @@ def bollinger_buy(data: IndicatorData) -> SignalResult:
         return _no_signal(f'Volume {volume_ratio:.1f}x below {SignalConfig.BB_VOLUME_RATIO_MIN}x')
 
     # MACD momentum confirmation
-    if macd <= macd_signal:
-        return _no_signal('MACD not bullish')
+     #if macd <= macd_signal:
+     #    return _no_signal('MACD not bullish')
 
     # OBV confirmation
-    if not obv_trending_up:
-        return _no_signal('OBV not confirming')
+    # if not obv_trending_up:
+    #     return _no_signal('OBV not confirming')
 
     # Starting to bounce
-    if daily_change_pct <= 0:
-        return _no_signal('Not bouncing yet')
+    #  if daily_change_pct <= 0:
+    #     return _no_signal('Not bouncing yet')
 
     return {
         'side': 'buy',

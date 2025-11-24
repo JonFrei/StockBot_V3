@@ -727,6 +727,10 @@ class SwingTradeStrategy(Strategy):
 
         self.profit_tracker.display_final_summary()
 
+        # Display watchlist statistics
+        if hasattr(self, 'watchlist'):
+            self._display_watchlist_statistics()
+
         cooldown_stats = self.ticker_cooldown.get_statistics()
         print(f"\n{'=' * 80}")
         print(f"⏰ TICKER COOLDOWN STATISTICS")
@@ -762,3 +766,60 @@ class SwingTradeStrategy(Strategy):
         account_drawdown_protection.print_protection_summary(self.drawdown_protection)
 
         return 0
+
+    def _display_watchlist_statistics(self):
+        """Display comprehensive watchlist and confirmation statistics"""
+
+        stats = self.watchlist.get_detailed_statistics()
+
+        print(f"\n{'=' * 80}")
+        print(f"📋 WATCHLIST & CONFIRMATION TRACKING")
+        print(f"{'=' * 80}\n")
+
+        # Overall summary
+        totals = stats['totals']
+        print(f"📊 OVERALL SUMMARY:")
+        print(f"   Total Signals Added to Watchlist: {totals['added']}")
+        print(f"   Confirmations Passed: {totals['passed']} ({totals['pass_rate']:.1f}%)")
+        print(f"   Confirmations Failed: {totals['failed']}")
+        print(f"   Entries Expired: {totals['expired']}")
+        print(f"   Currently on Watchlist: {stats['total_entries']}")
+
+        # By signal type
+        if stats['signals_added']:
+            print(f"\n📊 BY SIGNAL TYPE:")
+            print(f"{'─' * 80}")
+
+            for signal_type in sorted(stats['signals_added'].keys()):
+                added = stats['signals_added'].get(signal_type, 0)
+                passed = stats['confirmations_passed'].get(signal_type, 0)
+                expired = stats['expired_entries'].get(signal_type, 0)
+
+                failed_reasons = stats['confirmations_failed'].get(signal_type, {})
+                total_failed = sum(failed_reasons.values())
+
+                pass_rate = (passed / added * 100) if added > 0 else 0
+
+                print(f"\n   🎯 {signal_type}")
+                print(f"      Added to Watchlist: {added}")
+                print(f"      Confirmations Passed: {passed} ({pass_rate:.1f}%)")
+                print(f"      Confirmations Failed: {total_failed}")
+                print(f"      Expired: {expired}")
+
+                # Show failure reasons
+                if failed_reasons:
+                    print(f"      \n      Failure Breakdown:")
+                    sorted_reasons = sorted(failed_reasons.items(), key=lambda x: x[1], reverse=True)
+                    for reason, count in sorted_reasons[:5]:  # Top 5 reasons
+                        pct = (count / total_failed * 100) if total_failed > 0 else 0
+                        print(f"         • {reason}: {count} ({pct:.0f}%)")
+
+                    if len(failed_reasons) > 5:
+                        remaining = len(failed_reasons) - 5
+                        print(f"         • ... and {remaining} other reasons")
+
+        else:
+            print(f"\n   ℹ️  No signals were added to watchlist during this backtest")
+            print(f"   This means confirmation-required signals never triggered")
+
+        print(f"\n{'=' * 80}\n")
