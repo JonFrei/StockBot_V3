@@ -187,6 +187,7 @@ class Watchlist:
 
     def _load_from_database(self):
         """Load watchlist from database on initialization"""
+        from config import Config
         if not self.strategy or Config.BACKTESTING:
             return
 
