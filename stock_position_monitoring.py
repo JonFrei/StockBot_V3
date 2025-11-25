@@ -445,7 +445,11 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
 
 
 def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, profit_tracker):
-    """Execute exit orders using BROKER data for P&L calculation"""
+    """
+    Execute exit orders using BROKER data for P&L calculation
+
+    UPDATED: Now records stop losses to regime detector
+    """
 
     for order in exit_orders:
         ticker = order['ticker']
@@ -545,6 +549,24 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
 
             # Clean metadata
             position_monitor.clean_position_metadata(ticker)
+
+            # ===================================================================
+            # NEW: RECORD STOP LOSS TO REGIME DETECTOR
+            # ===================================================================
+            # Check if this is a stop loss (not profit taking)
+            is_stop_loss = any(keyword in reason for keyword in [
+                'stop', 'emergency', 'intraday', 'trailing', 'initial'
+            ])
+
+            if is_stop_loss and hasattr(strategy, 'regime_detector'):
+                # Record stop loss for sequential tracking
+                strategy.regime_detector.record_stop_loss(
+                    current_date,
+                    ticker,
+                    pnl_pct
+                )
+                print(f"   📊 Stop loss recorded: {ticker} ({pnl_pct:.1f}%)")
+            # ===================================================================
 
             # Execute sell
             sell_order = strategy.create_order(ticker, sell_quantity, 'sell')

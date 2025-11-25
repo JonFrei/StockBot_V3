@@ -1,463 +1,620 @@
-from datetime import timedelta, datetime
+"""
+PROFESSIONAL MARKET SAFEGUARD SYSTEM
+Based on William O'Neil, Paul Tudor Jones, Turtle Traders methodology
+
+PHILOSOPHY: "Sell before you have to" - Mark Minervini
+
+THREE-TECHNIQUE APPROACH:
+1. Distribution Days (William O'Neil/IBD)
+2. Sequential Stop Tracking (Turtle Traders)
+3. SPY Extension Detection (Paul Tudor Jones)
+
+Technique #2 is FILTERED by #1 and #3 to reduce false positives
+"""
+
+from datetime import datetime, timedelta
+from collections import deque
 
 
 # =============================================================================
-# MARKET REGIME DETECTION
+# SAFEGUARD CONFIGURATION
+# =============================================================================
+
+class SafeguardConfig:
+    """Centralized configuration for all market safeguard parameters"""
+
+    # =========================================================================
+    # TECHNIQUE #1: DISTRIBUTION DAYS (William O'Neil)
+    # =========================================================================
+    DISTRIBUTION_DAY_PRICE_THRESHOLD = -0.2  # SPY down >0.2%
+    DISTRIBUTION_DAY_VOLUME_THRESHOLD = 20.0  # Volume 20%+ higher
+    DISTRIBUTION_LOOKBACK_DAYS = 25  # Count in last 25 days
+    DISTRIBUTION_CAUTION = 3  # 3 days = caution
+    DISTRIBUTION_WARNING = 4  # 4 days = warning
+    DISTRIBUTION_DANGER = 5  # 5 days = danger
+    DISTRIBUTION_EXIT = 6  # 6 days = exit all
+
+    # =========================================================================
+    # TECHNIQUE #2: SEQUENTIAL STOP TRACKING (Turtle Traders)
+    # =========================================================================
+    STOPS_PER_POSITION_MULTIPLIER = 0.15  # 15% of positions = 1 "unit"
+    STOPS_CAUTION_UNITS = 1.5  # 1.5 units in 5 days = caution
+    STOPS_WARNING_UNITS = 2.0  # 2.0 units in 5 days = warning
+    STOPS_DANGER_UNITS = 2.5  # 2.5 units in 7 days = danger
+    STOPS_EXIT_UNITS = 3.5  # 3.5 units in 10 days = exit
+
+    STOPS_LOOKBACK_SHORT = 5  # Short term: 5 days
+    STOPS_LOOKBACK_MEDIUM = 7  # Medium term: 7 days
+    STOPS_LOOKBACK_LONG = 10  # Long term: 10 days
+
+    # =========================================================================
+    # TECHNIQUE #3: SPY EXTENSION (Paul Tudor Jones)
+    # =========================================================================
+    SPY_CAUTION_EXTENSION = 6.0  # 6% above 200 SMA
+    SPY_WARNING_EXTENSION = 7.0  # 7% above 200 SMA
+    SPY_DANGER_EXTENSION = 8.0  # 8% above 200 SMA
+    SPY_REVERSAL_DROP = 2.0  # 2% drop from peak = reversal
+
+    SPY_BELOW_50_SMA_EXIT = True  # Exit if SPY < 50 SMA
+    SPY_BELOW_200_SMA_EXIT = True  # Exit if SPY < 200 SMA
+
+    # =========================================================================
+    # SAFEGUARD LEVELS
+    # =========================================================================
+    # Level 1: CAUTION - Reduce position sizes
+    # Level 2: WARNING - Stop new buys
+    # Level 3: DANGER - Exit all positions
+
+    # Position size multipliers per level
+    CAUTION_SIZE_MULTIPLIER = 0.75  # 75% of normal size
+    WARNING_SIZE_MULTIPLIER = 0.50  # 50% of normal size
+    DANGER_SIZE_MULTIPLIER = 0.0  # No trading
+
+    # =========================================================================
+    # RECOVERY SETTINGS
+    # =========================================================================
+    RECOVERY_WAIT_DAYS = 5  # Wait 5 days after exit
+    RECOVERY_REQUIRE_SPY_ABOVE_50 = True  # SPY must be above 50 SMA
+
+
+# =============================================================================
+# DISTRIBUTION DAY TRACKER
+# =============================================================================
+
+class DistributionDayTracker:
+    """
+    Track distribution days using William O'Neil's IBD methodology
+
+    Distribution Day = Down day on high volume (institutions selling)
+    """
+
+    def __init__(self):
+        self.distribution_days = deque(maxlen=SafeguardConfig.DISTRIBUTION_LOOKBACK_DAYS)
+
+    def check_distribution_day(self, date, spy_close, spy_prev_close,
+                               spy_volume, spy_prev_volume):
+        """
+        Check if today is a distribution day
+
+        Returns: (is_distribution_day, price_change_pct, volume_change_pct)
+        """
+        if spy_prev_close == 0 or spy_prev_volume == 0:
+            return False, 0, 0
+
+        # Calculate price change
+        price_change_pct = ((spy_close - spy_prev_close) / spy_prev_close) * 100
+
+        # Calculate volume change
+        volume_change_pct = ((spy_volume - spy_prev_volume) / spy_prev_volume) * 100
+
+        # Check criteria
+        is_distribution = (
+                price_change_pct <= SafeguardConfig.DISTRIBUTION_DAY_PRICE_THRESHOLD and
+                volume_change_pct >= SafeguardConfig.DISTRIBUTION_DAY_VOLUME_THRESHOLD
+        )
+
+        if is_distribution:
+            self.distribution_days.append({
+                'date': date,
+                'price_change': price_change_pct,
+                'volume_change': volume_change_pct
+            })
+
+        return is_distribution, price_change_pct, volume_change_pct
+
+    def get_count(self):
+        """Get current distribution day count"""
+        return len(self.distribution_days)
+
+    def get_level(self):
+        """
+        Get danger level based on distribution days
+
+        Returns: ('normal', 'caution', 'warning', 'danger', 'exit')
+        """
+        count = self.get_count()
+
+        if count >= SafeguardConfig.DISTRIBUTION_EXIT:
+            return 'exit'
+        elif count >= SafeguardConfig.DISTRIBUTION_DANGER:
+            return 'danger'
+        elif count >= SafeguardConfig.DISTRIBUTION_WARNING:
+            return 'warning'
+        elif count >= SafeguardConfig.DISTRIBUTION_CAUTION:
+            return 'caution'
+        else:
+            return 'normal'
+
+
+# =============================================================================
+# SEQUENTIAL STOP LOSS TRACKER
+# =============================================================================
+
+class SequentialStopTracker:
+    """
+    Track recent stop losses with position-count scaling
+
+    Based on Turtle Traders and Paul Tudor Jones methodology
+    """
+
+    def __init__(self):
+        self.stops = deque(maxlen=100)  # Keep last 100 stops
+
+    def add_stop(self, date, ticker, loss_pct):
+        """Record a stop loss"""
+        self.stops.append({
+            'date': date,
+            'ticker': ticker,
+            'loss_pct': loss_pct
+        })
+
+    def get_stops_in_period(self, days, as_of_date=None):
+        """
+        Count stops in last N days
+
+        Returns: (count, list_of_stops)
+        """
+        if as_of_date is None:
+            as_of_date = datetime.now()
+
+        cutoff = as_of_date - timedelta(days=days)
+
+        recent_stops = [
+            stop for stop in self.stops
+            if stop['date'] > cutoff
+        ]
+
+        return len(recent_stops), recent_stops
+
+    def calculate_stop_units(self, num_positions):
+        """
+        Calculate "stop units" based on portfolio size
+
+        Logic: Each position represents X% of portfolio
+        If trading 10 positions, 1 stop = 0.15 units (15% of 10)
+        If trading 20 positions, 1 stop = 0.15 units (15% of 20)
+
+        This scales the threshold based on portfolio breadth
+        """
+        if num_positions == 0:
+            return 1.0  # Default multiplier
+
+        return SafeguardConfig.STOPS_PER_POSITION_MULTIPLIER * num_positions
+
+    def get_level(self, num_positions, as_of_date=None):
+        """
+        Get danger level based on recent stops (scaled by position count)
+
+        Returns: ('normal', 'caution', 'warning', 'danger', 'exit')
+        """
+        # Get stops in different timeframes
+        stops_5d, _ = self.get_stops_in_period(SafeguardConfig.STOPS_LOOKBACK_SHORT, as_of_date)
+        stops_7d, _ = self.get_stops_in_period(SafeguardConfig.STOPS_LOOKBACK_MEDIUM, as_of_date)
+        stops_10d, _ = self.get_stops_in_period(SafeguardConfig.STOPS_LOOKBACK_LONG, as_of_date)
+
+        # Calculate unit thresholds based on position count
+        unit_multiplier = self.calculate_stop_units(num_positions)
+
+        # Normalized stop counts (stops per unit)
+        stops_5d_normalized = stops_5d / unit_multiplier if unit_multiplier > 0 else stops_5d
+        stops_7d_normalized = stops_7d / unit_multiplier if unit_multiplier > 0 else stops_7d
+        stops_10d_normalized = stops_10d / unit_multiplier if unit_multiplier > 0 else stops_10d
+
+        # Check thresholds (most severe wins)
+        if stops_10d_normalized >= SafeguardConfig.STOPS_EXIT_UNITS:
+            return 'exit'
+        elif stops_7d_normalized >= SafeguardConfig.STOPS_DANGER_UNITS:
+            return 'danger'
+        elif stops_5d_normalized >= SafeguardConfig.STOPS_WARNING_UNITS:
+            return 'warning'
+        elif stops_5d_normalized >= SafeguardConfig.STOPS_CAUTION_UNITS:
+            return 'caution'
+        else:
+            return 'normal'
+
+
+# =============================================================================
+# SPY EXTENSION TRACKER
+# =============================================================================
+
+class SPYExtensionTracker:
+    """
+    Track SPY's distance from 200 SMA and detect reversals
+
+    Based on Paul Tudor Jones methodology
+    """
+
+    def __init__(self):
+        self.peak_extension = 0
+        self.peak_date = None
+        self.last_close = 0
+        self.last_50_sma = 0
+        self.last_200_sma = 0
+
+    def update(self, date, spy_close, spy_50_sma, spy_200_sma):
+        """Update SPY tracking"""
+        self.last_close = spy_close
+        self.last_50_sma = spy_50_sma
+        self.last_200_sma = spy_200_sma
+
+        # Track peak extension
+        current_extension = self.get_extension_from_200()
+
+        if current_extension > self.peak_extension:
+            self.peak_extension = current_extension
+            self.peak_date = date
+
+    def get_extension_from_200(self):
+        """Get current distance from 200 SMA"""
+        if self.last_200_sma == 0:
+            return 0
+
+        return ((self.last_close - self.last_200_sma) / self.last_200_sma) * 100
+
+    def is_below_50_sma(self):
+        """Check if SPY is below 50 SMA"""
+        return self.last_close < self.last_50_sma
+
+    def is_below_200_sma(self):
+        """Check if SPY is below 200 SMA"""
+        return self.last_close < self.last_200_sma
+
+    def detect_reversal(self):
+        """
+        Detect reversal from extended levels
+
+        Logic: If SPY was >8% extended, then drops to <6%, reversal confirmed
+        """
+        current_extension = self.get_extension_from_200()
+
+        if self.peak_extension >= SafeguardConfig.SPY_DANGER_EXTENSION:
+            drop_from_peak = self.peak_extension - current_extension
+
+            if drop_from_peak >= SafeguardConfig.SPY_REVERSAL_DROP:
+                return True
+
+        return False
+
+    def get_level(self):
+        """
+        Get danger level based on SPY extension
+
+        Returns: ('normal', 'caution', 'warning', 'danger', 'reversal')
+        """
+        extension = self.get_extension_from_200()
+
+        # Check for reversal first
+        if self.detect_reversal():
+            return 'reversal'
+
+        # Check for MA breaks
+        if SafeguardConfig.SPY_BELOW_200_SMA_EXIT and self.is_below_200_sma():
+            return 'reversal'  # Treat as reversal
+
+        if SafeguardConfig.SPY_BELOW_50_SMA_EXIT and self.is_below_50_sma():
+            return 'danger'
+
+        # Check extension levels
+        if extension >= SafeguardConfig.SPY_DANGER_EXTENSION:
+            return 'danger'
+        elif extension >= SafeguardConfig.SPY_WARNING_EXTENSION:
+            return 'warning'
+        elif extension >= SafeguardConfig.SPY_CAUTION_EXTENSION:
+            return 'caution'
+        else:
+            return 'normal'
+
+
+# =============================================================================
+# MARKET REGIME DETECTOR (MAIN CLASS)
 # =============================================================================
 
 class MarketRegimeDetector:
     """
-    Detects market tops, corrections, and bear markets.
+    Professional 3-technique market safeguard system
 
-    Priority order (first failure blocks trading):
-    1. VIX Spike (immediate danger)
-    2. Market Overextension (prevents buying tops)
-    3. Bear Market (SPY below 200 SMA)
-    4. Death Cross (EMA50 declining)
-    5. Stock Weakness (individual stock health)
+    OPTION A: Boolean Filter
+    - Technique #2 (Sequential Stops) triggers are FILTERED by #1 and #3
+    - Stop losses only trigger exit if market is ALSO in danger zone
     """
 
     def __init__(self):
-        self.VIX_SPIKE_THRESHOLD = 30.0
-        self.VIX_LOOKBACK_DAYS = 5
-        self.SPY_OVEREXTENSION_THRESHOLD = 5.0
-        self.BEAR_MARKET_THRESHOLD = 0.0
-        self.DEATH_CROSS_SLOPE = -0.15
-        self.STOCK_WEAKNESS_THRESHOLD = -5.0
+        self.distribution_tracker = DistributionDayTracker()
+        self.stop_tracker = SequentialStopTracker()
+        self.spy_tracker = SPYExtensionTracker()
 
-        # EVENT TRACKING
-        self.regime_events = []  # List of all regime change events
-        self.current_regime = 'bull'  # Track current state
-        self.last_check_date = None
-        self.blocks_by_type = {
-            'VIX_SPIKE': 0,
-            'OVEREXTENSION': 0,
-            'BEAR_MARKET': 0,
-            'DEATH_CROSS': 0
-        }
+        self.exit_triggered = False
+        self.exit_date = None
 
-    def detect_regime(self, spy_data, vix_data, stock_data=None):
-        """Detect market regime using VIX, SPY, and optional stock data"""
+    def update_spy(self, date, spy_close, spy_50_sma, spy_200_sma,
+                   spy_prev_close=None, spy_volume=None, spy_prev_volume=None):
+        """
+        Update all trackers with SPY data
 
-        if not spy_data or not vix_data:
-            return {
-                'allow_trading': True,
-                'regime': 'unknown',
-                'description': '⚪ Missing data - allowing trading',
-                'warnings': []
+        Args:
+            date: Current date
+            spy_close: SPY closing price
+            spy_50_sma: SPY 50-day SMA
+            spy_200_sma: SPY 200-day SMA
+            spy_prev_close: Previous day's close (for distribution days)
+            spy_volume: Today's volume (for distribution days)
+            spy_prev_volume: Previous day's volume (for distribution days)
+        """
+        # Update SPY extension tracker
+        self.spy_tracker.update(date, spy_close, spy_50_sma, spy_200_sma)
+
+        # Update distribution day tracker
+        if spy_prev_close and spy_volume and spy_prev_volume:
+            is_dist, price_chg, vol_chg = self.distribution_tracker.check_distribution_day(
+                date, spy_close, spy_prev_close, spy_volume, spy_prev_volume
+            )
+
+            if is_dist:
+                print(f"   📉 Distribution Day: SPY {price_chg:.1f}% on volume +{vol_chg:.0f}%")
+
+    def record_stop_loss(self, date, ticker, loss_pct):
+        """Record a stop loss for sequential tracking"""
+        self.stop_tracker.add_stop(date, ticker, loss_pct)
+
+    def detect_regime(self, num_positions, current_date=None):
+        """
+        Main detection logic using OPTION A (Boolean Filter)
+
+        LOGIC:
+        1. Get individual technique levels
+        2. Check if Technique #1 or #3 are in danger zones
+        3. If yes, make Technique #2 more sensitive (filter active)
+        4. Determine final action
+
+        Args:
+            num_positions: Current number of open positions
+            current_date: Current date (for recovery check)
+
+        Returns:
+            dict: {
+                'action': 'normal', 'caution', 'stop_buying', 'exit_all',
+                'position_size_multiplier': float,
+                'allow_new_entries': bool,
+                'reason': str,
+                'details': {...}
             }
+        """
+        # Check if in recovery period
+        if self.exit_triggered:
+            if self._should_exit_recovery(current_date):
+                self.exit_triggered = False
+                self.exit_date = None
+            else:
+                return self._recovery_response(current_date)
 
-        warnings = []
+        # Get individual technique levels
+        dist_level = self.distribution_tracker.get_level()
+        stop_level = self.stop_tracker.get_level(num_positions, current_date)
+        spy_level = self.spy_tracker.get_level()
 
-        # PRIORITY 1: VIX SPIKE
-        vix_result = self._check_vix_spike(vix_data)
-        if not vix_result['allow_trading']:
-            return {
-                'allow_trading': False,
-                'regime': 'correction',
-                'description': vix_result['description'],
-                'warnings': vix_result['warnings']
-            }
-        warnings.extend(vix_result['warnings'])
+        # Check if market is in danger zone (Technique #1 or #3)
+        market_danger = (
+                dist_level in ['danger', 'exit'] or
+                spy_level in ['danger', 'reversal']
+        )
 
-        # PRIORITY 2: MARKET OVEREXTENSION
-        overextension_result = self._check_overextension(spy_data)
-        if not overextension_result['allow_trading']:
-            return {
-                'allow_trading': False,
-                'regime': 'caution',
-                'description': overextension_result['description'],
-                'warnings': warnings + overextension_result['warnings']
-            }
-        warnings.extend(overextension_result['warnings'])
+        market_warning = (
+                dist_level == 'warning' or
+                spy_level == 'warning'
+        )
 
-        # PRIORITY 3: BEAR MARKET
-        bear_result = self._check_bear_market(spy_data)
-        if not bear_result['allow_trading']:
-            return {
-                'allow_trading': False,
-                'regime': 'bear',
-                'description': bear_result['description'],
-                'warnings': warnings + bear_result['warnings']
-            }
-        warnings.extend(bear_result['warnings'])
+        # OPTION A: FILTERED LOGIC
 
-        # PRIORITY 4: DEATH CROSS
-        death_cross_result = self._check_death_cross(spy_data)
-        if not death_cross_result['allow_trading']:
-            return {
-                'allow_trading': False,
-                'regime': 'bear',
-                'description': death_cross_result['description'],
-                'warnings': warnings + death_cross_result['warnings']
-            }
-        warnings.extend(death_cross_result['warnings'])
+        # LEVEL 4: EXIT ALL (Highest priority)
+        if dist_level == 'exit':
+            return self._trigger_exit('exit_all',
+                                      f"Distribution Days: {self.distribution_tracker.get_count()} (EXIT threshold)",
+                                      dist_level, stop_level, spy_level, current_date)
 
-        # PRIORITY 5: STOCK WEAKNESS (if provided)
-        if stock_data:
-            stock_result = self._check_stock_weakness(stock_data)
-            if not stock_result['allow_trading']:
-                return {
-                    'allow_trading': False,
-                    'regime': 'caution',
-                    'description': stock_result['description'],
-                    'warnings': warnings + stock_result['warnings']
-                }
-            warnings.extend(stock_result['warnings'])
+        if spy_level == 'reversal':
+            return self._trigger_exit('exit_all',
+                                      f"SPY Reversal Detected (dropped from {self.spy_tracker.peak_extension:.1f}%)",
+                                      dist_level, stop_level, spy_level, current_date)
 
-        # ALL CHECKS PASSED
+        # FILTERED STOP LOGIC: Stops trigger exit only if market is dangerous
+        if stop_level == 'exit':
+            return self._trigger_exit('exit_all',
+                                      f"Too many stop losses ({self.stop_tracker.get_stops_in_period(10)[0]} in 10 days)",
+                                      dist_level, stop_level, spy_level, current_date)
+
+        if stop_level == 'danger' and market_danger:
+            return self._trigger_exit('exit_all',
+                                      f"Stop losses + Market danger (Stops: {stop_level}, Dist: {dist_level}, SPY: {spy_level})",
+                                      dist_level, stop_level, spy_level, current_date)
+
+        # LEVEL 3: DANGER - Stop buying
+        if spy_level == 'danger':
+            return self._build_response('stop_buying', SafeguardConfig.DANGER_SIZE_MULTIPLIER,
+                                        f"SPY Extended: {self.spy_tracker.get_extension_from_200():.1f}% above 200 SMA",
+                                        dist_level, stop_level, spy_level)
+
+        if dist_level == 'danger':
+            return self._build_response('stop_buying', SafeguardConfig.DANGER_SIZE_MULTIPLIER,
+                                        f"Distribution Days: {self.distribution_tracker.get_count()}",
+                                        dist_level, stop_level, spy_level)
+
+        if stop_level == 'danger':
+            return self._build_response('stop_buying', SafeguardConfig.DANGER_SIZE_MULTIPLIER,
+                                        f"Multiple stop losses in short period",
+                                        dist_level, stop_level, spy_level)
+
+        # LEVEL 2: WARNING - Reduce sizes
+        if stop_level == 'warning' and market_warning:
+            return self._build_response('caution', SafeguardConfig.WARNING_SIZE_MULTIPLIER,
+                                        f"Stop losses + Market warning (Stops: {stop_level}, Dist: {dist_level}, SPY: {spy_level})",
+                                        dist_level, stop_level, spy_level)
+
+        if spy_level == 'warning' or dist_level == 'warning':
+            return self._build_response('caution', SafeguardConfig.WARNING_SIZE_MULTIPLIER,
+                                        f"Market showing weakness (Dist: {dist_level}, SPY: {spy_level})",
+                                        dist_level, stop_level, spy_level)
+
+        # LEVEL 1: CAUTION - Slight reduction
+        if spy_level == 'caution' or dist_level == 'caution' or stop_level == 'caution':
+            return self._build_response('caution', SafeguardConfig.CAUTION_SIZE_MULTIPLIER,
+                                        f"Early warning signs (Dist: {dist_level}, Stops: {stop_level}, SPY: {spy_level})",
+                                        dist_level, stop_level, spy_level)
+
+        # LEVEL 0: NORMAL - All clear
+        return self._build_response('normal', 1.0,
+                                    "All systems normal",
+                                    dist_level, stop_level, spy_level)
+
+    def _build_response(self, action, size_multiplier, reason, dist_level, stop_level, spy_level):
+        """Build regime detection response"""
         return {
-            'allow_trading': True,
-            'regime': 'bull',
-            'description': '✅ BULL MARKET - All systems green',
-            'warnings': warnings
+            'action': action,
+            'position_size_multiplier': size_multiplier,
+            'allow_new_entries': action not in ['stop_buying', 'exit_all'],
+            'reason': reason,
+            'details': {
+                'distribution_level': dist_level,
+                'distribution_count': self.distribution_tracker.get_count(),
+                'stop_level': stop_level,
+                'stops_recent': self.stop_tracker.get_stops_in_period(5)[0],
+                'spy_level': spy_level,
+                'spy_extension': self.spy_tracker.get_extension_from_200(),
+                'spy_below_50': self.spy_tracker.is_below_50_sma(),
+                'spy_below_200': self.spy_tracker.is_below_200_sma()
+            }
         }
 
-    def _check_vix_spike(self, vix_data):
-        """Detect VIX spikes - 30% increase in 5 days blocks trading"""
-
-        current_vix = vix_data.get('close', 0)
-        vix_raw = vix_data.get('raw', None)
-
-        if vix_raw is None or len(vix_raw) < self.VIX_LOOKBACK_DAYS + 1:
-            return {'allow_trading': True, 'warnings': []}
-
-        vix_lookback = vix_raw['close'].iloc[-(self.VIX_LOOKBACK_DAYS + 1)]
-        vix_change_pct = ((current_vix - vix_lookback) / vix_lookback * 100)
-
-        if vix_change_pct >= self.VIX_SPIKE_THRESHOLD:
-            return {
-                'allow_trading': False,
-                'description': f'🚨 VIX SPIKE: +{vix_change_pct:.1f}% in {self.VIX_LOOKBACK_DAYS} days (VIX: {current_vix:.1f})',
-                'warnings': [f'VIX spiked {vix_change_pct:.1f}%']
-            }
-
-        if vix_change_pct >= 20.0:
-            return {
-                'allow_trading': True,
-                'warnings': [f'VIX rising: +{vix_change_pct:.1f}% (VIX: {current_vix:.1f})']
-            }
-
-        return {'allow_trading': True, 'warnings': []}
-
-    def _check_overextension(self, spy_data):
-        """SPY >5% above EMA50 = overextended"""
-
-        spy_close = spy_data.get('close', 0)
-        spy_ema50 = spy_data.get('ema50', 0)
-
-        if spy_ema50 == 0:
-            return {'allow_trading': True, 'warnings': []}
-
-        distance = ((spy_close - spy_ema50) / spy_ema50 * 100)
-
-        if distance > self.SPY_OVEREXTENSION_THRESHOLD:
-            return {
-                'allow_trading': False,
-                'description': f'⚠️ OVEREXTENDED: SPY {distance:.1f}% above EMA50',
-                'warnings': [f'SPY {distance:.1f}% above EMA50']
-            }
-
-        if distance > 3.0:
-            return {
-                'allow_trading': True,
-                'warnings': [f'SPY extended: {distance:.1f}% above EMA50']
-            }
-
-        return {'allow_trading': True, 'warnings': []}
-
-    def _check_bear_market(self, spy_data):
-        """SPY below 200 SMA = bear market"""
-
-        spy_close = spy_data.get('close', 0)
-        spy_sma200 = spy_data.get('sma200', 0)
-
-        if spy_sma200 == 0:
-            return {'allow_trading': True, 'warnings': []}
-
-        distance = ((spy_close - spy_sma200) / spy_sma200 * 100)
-
-        if distance < self.BEAR_MARKET_THRESHOLD:
-            return {
-                'allow_trading': False,
-                'description': f'🔴 BEAR MARKET: SPY {distance:.1f}% below 200 SMA',
-                'warnings': [f'SPY {distance:.1f}% below 200 SMA']
-            }
-
-        if distance < 2.0:
-            return {
-                'allow_trading': True,
-                'warnings': [f'SPY near 200 SMA: {distance:+.1f}%']
-            }
-
-        return {'allow_trading': True, 'warnings': []}
-
-    def _check_death_cross(self, spy_data):
-        """EMA50 declining = death cross forming"""
-
-        spy_raw = spy_data.get('raw', None)
-
-        if spy_raw is None or len(spy_raw) < 60:
-            return {'allow_trading': True, 'warnings': []}
-
-        ema50_series = spy_raw['close'].ewm(span=50, adjust=False).mean()
-
-        if len(ema50_series) < 11:
-            return {'allow_trading': True, 'warnings': []}
-
-        ema50_current = ema50_series.iloc[-1]
-        ema50_10d_ago = ema50_series.iloc[-11]
-        slope = ((ema50_current - ema50_10d_ago) / ema50_10d_ago * 100) / 10
-
-        if slope < self.DEATH_CROSS_SLOPE:
-            return {
-                'allow_trading': False,
-                'description': f'🔴 DEATH CROSS: EMA50 declining {slope:.2f}%/day',
-                'warnings': [f'EMA50 declining {slope:.2f}%/day']
-            }
-
-        if slope < -0.05:
-            return {
-                'allow_trading': True,
-                'warnings': [f'EMA50 weakening: {slope:.2f}%/day']
-            }
-
-        return {'allow_trading': True, 'warnings': []}
-
-    def _check_stock_weakness(self, stock_data):
-        """Stock <5% below 200 SMA = weak"""
-
-        close = stock_data.get('close', 0)
-        sma200 = stock_data.get('sma200', 0)
-
-        if sma200 == 0:
-            return {'allow_trading': True, 'warnings': []}
-
-        distance = ((close - sma200) / sma200 * 100)
-
-        if distance < self.STOCK_WEAKNESS_THRESHOLD:
-            return {
-                'allow_trading': False,
-                'description': f'🔴 WEAK STOCK: {distance:.1f}% below 200 SMA',
-                'warnings': [f'Stock {distance:.1f}% below 200 SMA']
-            }
-
-        return {'allow_trading': True, 'warnings': []}
-
-    def _log_regime_event(self, event_type, description, current_date=None):
-        """Log a regime transition event"""
-        event_date = current_date or datetime.now()
-
-        # Update block counter
-        if event_type in self.blocks_by_type:
-            self.blocks_by_type[event_type] += 1
-
-        # Map event types to regime states
-        regime_map = {
-            'VIX_SPIKE': 'correction',
-            'OVEREXTENSION': 'caution',
-            'BEAR_MARKET': 'bear',
-            'DEATH_CROSS': 'bear',
-            'RECOVERY': 'bull'
-        }
-
-        new_regime = regime_map.get(event_type, self.current_regime)
-
-        # Only log if regime actually changed
-        if new_regime != self.current_regime or event_type == 'RECOVERY':
-            event = {
-                'date': event_date,
-                'event_type': event_type,
-                'old_regime': self.current_regime,
-                'new_regime': new_regime,
-                'description': description
-            }
-
-            self.regime_events.append(event)
-            self.current_regime = new_regime
-
-            # Print to console for immediate feedback
-            emoji = '🚨' if event_type != 'RECOVERY' else '✅'
-            print(f"\n{emoji} REGIME EVENT: {event_type}")
-            print(f"   Date: {event_date.strftime('%Y-%m-%d')}")
-            print(f"   Transition: {event['old_regime']} → {new_regime}")
-            print(f"   {description}\n")
-
-    def get_regime_statistics(self):
-        """Get regime event statistics for reporting"""
-        return {
-            'total_events': len(self.regime_events),
-            'blocks_by_type': self.blocks_by_type.copy(),
-            'current_regime': self.current_regime,
-            'last_check_date': self.last_check_date,
-            'events': self.regime_events.copy()
-        }
-
-
-# =============================================================================
-# GLOBAL INSTANCE
-# =============================================================================
-
-detector = MarketRegimeDetector()
-
-
-def detect_market_regime(spy_data, vix_data, stock_data=None):
-    """Detect market regime"""
-    return detector.detect_regime(spy_data, vix_data, stock_data)
-
-
-def format_regime_display(regime_info):
-    """Format regime info for console"""
-    output = f"\n{'=' * 80}\n📊 MARKET REGIME\n{'=' * 80}\n"
-    output += f"{regime_info['description']}\n"
-
-    if regime_info.get('warnings'):
-        output += "\n⚠️  Warnings:\n"
-        for warning in regime_info['warnings']:
-            output += f"   - {warning}\n"
-
-    output += f"\n{'✅ Trading allowed' if regime_info['allow_trading'] else '🚫 Trading BLOCKED'}\n"
-    output += f"{'=' * 80}\n"
-    return output
-
-
-# =============================================================================
-# STOCK HEALTH CHECK
-# =============================================================================
-
-def check_stock_regime(ticker, stock_data):
-    """Pre-entry health check for individual stock"""
-
-    close = stock_data.get('close', 0)
-    sma200 = stock_data.get('sma200', 0)
-    ema20 = stock_data.get('ema20', 0)
-    ema50 = stock_data.get('ema50', 0)
-    rsi = stock_data.get('rsi', 50)
-
-    if sma200 > 0:
-        distance = ((close - sma200) / sma200 * 100)
-        if distance <= 5:
-            return (False, 0.0, f"⚠️ {ticker}: {distance:.1f}% from 200 SMA")
-
-    if ema20 > 0 and ema50 > 0 and ema20 < ema50:
-        return (False, 0.0, f"❌ {ticker}: EMA20 < EMA50")
-
-    if rsi > 80:
-        return (False, 0.0, f"⚠️ {ticker}: RSI {rsi:.0f} overbought")
-
-    distance = ((close - sma200) / sma200 * 100) if sma200 > 0 else 0
-    return (True, 1.0, f"✅ {ticker}: Healthy (SMA200: {distance:+.1f}%, RSI {rsi:.0f})")
-
-
-# =============================================================================
-# DRAWDOWN PROTECTION
-# =============================================================================
-
-class DrawdownProtection:
-    """Portfolio drawdown protection - triggers at -8%, waits 5 days"""
-
-    def __init__(self, threshold_pct=-8.0, recovery_days=5):
-        self.threshold_pct = threshold_pct
-        self.recovery_days = recovery_days
-        self.portfolio_peak = None
-        self.protection_active = False
-        self.protection_end_date = None
-        self.trigger_count = 0
-        self.max_drawdown_seen = 0.0
-
-    def update_peak(self, current_portfolio_value):
-        """Update portfolio peak"""
-        if self.portfolio_peak is None:
-            self.portfolio_peak = current_portfolio_value
-            return
-
-        if current_portfolio_value > self.portfolio_peak:
-            self.portfolio_peak = current_portfolio_value
-            if self.protection_active:
-                self.protection_active = False
-                self.protection_end_date = None
-
-    def calculate_drawdown(self, current_portfolio_value):
-        """Calculate drawdown % from peak"""
-        if self.portfolio_peak is None or self.portfolio_peak == 0:
-            return 0.0
-
-        drawdown_pct = ((current_portfolio_value - self.portfolio_peak) / self.portfolio_peak * 100)
-        if drawdown_pct < self.max_drawdown_seen:
-            self.max_drawdown_seen = drawdown_pct
-
-        return drawdown_pct
-
-    def should_trigger(self, current_portfolio_value):
-        """Check if should trigger"""
-        self.update_peak(current_portfolio_value)
-        drawdown_pct = self.calculate_drawdown(current_portfolio_value)
-        return drawdown_pct <= self.threshold_pct and not self.protection_active
-
-    def activate(self, strategy, current_date, position_monitor=None):
-        """Activate protection - close all positions"""
-        drawdown_pct = self.calculate_drawdown(strategy.portfolio_value)
+    def _trigger_exit(self, action, reason, dist_level, stop_level, spy_level, current_date):
+        """Trigger exit and enter recovery period"""
+        self.exit_triggered = True
+        self.exit_date = current_date
 
         print(f"\n{'=' * 80}")
-        print(f"🚨 DRAWDOWN PROTECTION TRIGGERED")
-        print(f"Peak: ${self.portfolio_peak:,.2f} → Current: ${strategy.portfolio_value:,.2f}")
-        print(f"Drawdown: {drawdown_pct:.1f}%")
+        print(f"🚨 MARKET SAFEGUARD: EXIT ALL POSITIONS")
+        print(f"{'=' * 80}")
+        print(f"Reason: {reason}")
+        print(f"Distribution Level: {dist_level} ({self.distribution_tracker.get_count()} days)")
+        print(f"Stop Loss Level: {stop_level}")
+        print(f"SPY Level: {spy_level} ({self.spy_tracker.get_extension_from_200():.1f}% from 200 SMA)")
         print(f"{'=' * 80}\n")
 
-        closed_count = 0
-        for position in strategy.get_positions():
-            qty = int(position.quantity)
-            if qty > 0:
-                print(f"   🚪 {position.symbol} x{qty}")
-                strategy.submit_order(strategy.create_order(position.symbol, qty, 'sell'))
-                if position_monitor:
-                    position_monitor.clean_position_metadata(position.symbol)
-                closed_count += 1
+        return self._build_response(action, 0.0, reason, dist_level, stop_level, spy_level)
 
-        self.protection_active = True
-        self.protection_end_date = current_date + timedelta(days=self.recovery_days)
-        self.trigger_count += 1
-
-        print(f"\n   ✅ Closed {closed_count} position(s)")
-        print(f"   📅 Recovery until {self.protection_end_date.strftime('%Y-%m-%d')}\n")
-
-    def is_in_recovery(self, current_date):
-        """Check if in recovery"""
-        if self.protection_end_date is None:
+    def _should_exit_recovery(self, current_date):
+        """Check if should exit recovery period"""
+        if not self.exit_date or not current_date:
             return False
-        return current_date < self.protection_end_date
 
-    def get_recovery_days_remaining(self, current_date):
-        """Get days remaining"""
-        if not self.is_in_recovery(current_date):
-            return 0
-        return (self.protection_end_date - current_date).days
+        # Check days elapsed
+        days_elapsed = (current_date - self.exit_date).days
 
-    def print_status(self, current_portfolio_value, current_date):
-        """Print status"""
-        self.update_peak(current_portfolio_value)
-        drawdown_pct = self.calculate_drawdown(current_portfolio_value)
+        if days_elapsed < SafeguardConfig.RECOVERY_WAIT_DAYS:
+            return False
 
-        if self.is_in_recovery(current_date):
-            days = self.get_recovery_days_remaining(current_date)
-            print(f"\n🛡️ PROTECTION: Recovery period ({days} days remaining)")
-            print(f"   Drawdown: {drawdown_pct:.1f}% from ${self.portfolio_peak:,.2f}\n")
-        elif drawdown_pct < -5.0:
-            print(f"\n⚠️ Drawdown: {drawdown_pct:.1f}% from ${self.portfolio_peak:,.2f}\n")
+        # Check SPY condition if required
+        if SafeguardConfig.RECOVERY_REQUIRE_SPY_ABOVE_50:
+            if self.spy_tracker.is_below_50_sma():
+                return False
+
+        return True
+
+    def _recovery_response(self, current_date):
+        """Build response during recovery period"""
+        days_remaining = SafeguardConfig.RECOVERY_WAIT_DAYS - (current_date - self.exit_date).days
+        days_remaining = max(0, days_remaining)
+
+        recovery_msg = f"Recovery period: {days_remaining} days remaining"
+
+        if SafeguardConfig.RECOVERY_REQUIRE_SPY_ABOVE_50 and self.spy_tracker.is_below_50_sma():
+            recovery_msg += " + SPY must reclaim 50 SMA"
+
+        return {
+            'action': 'exit_all',
+            'position_size_multiplier': 0.0,
+            'allow_new_entries': False,
+            'reason': recovery_msg,
+            'details': {
+                'in_recovery': True,
+                'exit_date': self.exit_date,
+                'days_remaining': days_remaining
+            }
+        }
 
     def get_statistics(self):
-        """Get statistics"""
+        """Get statistics for reporting"""
         return {
-            'threshold_pct': self.threshold_pct,
-            'recovery_days': self.recovery_days,
-            'portfolio_peak': self.portfolio_peak,
-            'protection_active': self.protection_active,
-            'protection_end_date': self.protection_end_date,
-            'trigger_count': self.trigger_count,
-            'max_drawdown_seen': self.max_drawdown_seen
+            'distribution_days': self.distribution_tracker.get_count(),
+            'distribution_level': self.distribution_tracker.get_level(),
+            'recent_stops_5d': self.stop_tracker.get_stops_in_period(5)[0],
+            'recent_stops_10d': self.stop_tracker.get_stops_in_period(10)[0],
+            'spy_extension': self.spy_tracker.get_extension_from_200(),
+            'spy_below_50': self.spy_tracker.is_below_50_sma(),
+            'spy_below_200': self.spy_tracker.is_below_200_sma(),
+            'in_recovery': self.exit_triggered,
+            'exit_date': self.exit_date
         }
 
 
-def create_default_protection(threshold_pct=-8.0, recovery_days=5):
-    """Create default drawdown protection"""
-    return DrawdownProtection(threshold_pct, recovery_days)
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+
+def format_regime_display(regime_result):
+    """Format regime detection result for console display"""
+    action = regime_result['action']
+    reason = regime_result['reason']
+    details = regime_result['details']
+
+    # Action emoji
+    emoji_map = {
+        'normal': '✅',
+        'caution': '⚠️',
+        'stop_buying': '🚫',
+        'exit_all': '🚨'
+    }
+    emoji = emoji_map.get(action, '❓')
+
+    output = f"\n{'=' * 80}\n"
+    output += f"{emoji} MARKET SAFEGUARD: {action.upper().replace('_', ' ')}\n"
+    output += f"{'=' * 80}\n"
+    output += f"Reason: {reason}\n\n"
+
+    output += f"📊 TECHNIQUE STATUS:\n"
+    output += f"   Distribution Days: {details['distribution_level']} ({details['distribution_count']} days)\n"
+    output += f"   Stop Losses: {details['stop_level']} ({details['stops_recent']} in 5 days)\n"
+    output += f"   SPY Extension: {details['spy_level']} ({details['spy_extension']:.1f}% from 200 SMA)\n"
+
+    if details.get('spy_below_50') or details.get('spy_below_200'):
+        output += f"\n⚠️  SPY MA Status:\n"
+        if details['spy_below_50']:
+            output += f"   • Below 50 SMA\n"
+        if details['spy_below_200']:
+            output += f"   • Below 200 SMA\n"
+
+    output += f"\n🎯 TRADING PERMISSIONS:\n"
+    output += f"   New Entries: {'✅ Allowed' if regime_result['allow_new_entries'] else '🚫 Blocked'}\n"
+    output += f"   Position Size: {regime_result['position_size_multiplier'] * 100:.0f}% of normal\n"
+
+    output += f"{'=' * 80}\n"
+
+    return output

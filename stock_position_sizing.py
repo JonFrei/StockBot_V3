@@ -1,12 +1,11 @@
 """
-SIMPLIFIED Position Sizing System - FIXED VERSION
+SIMPLIFIED Position Sizing System - UPDATED WITH MIN_SHARES REQUIREMENT
 
 IMPROVEMENTS IN THIS VERSION:
-- MAX_CASH_DEPLOYMENT increased from 60% → 85% (more aggressive)
-- MIN_CASH_RESERVE now portfolio-relative (15% instead of fixed $20k)
-- Added deployed capital tracking
-- Added daily deployment limits
-- Better handling of multiple opportunities
+- MIN_SHARES = 10 (ensures proper multi-level profit taking)
+- Price-based filtering when budget is constrained
+- Drops most expensive stocks first to fit budget
+- Skips trading if can't afford 10+ shares for at least 1 stock
 
 FORMULA: base_size × signal_score_factor × regime_multiplier × volatility_multiplier
 """
@@ -23,7 +22,7 @@ class SimplifiedSizingConfig:
     BASE_POSITION_PCT = 15.0
 
     # Position bounds
-    MIN_POSITION_PCT = 8.0  # Below this = skip
+    MIN_SHARES = 10  # Minimum shares per position (for multi-level profit taking)
     MAX_POSITION_PCT = 20.0  # Single position limit
 
     # Portfolio constraints
@@ -41,20 +40,20 @@ class SimplifiedSizingConfig:
 
 def calculate_position_sizes(opportunities, portfolio_context):
     """
-    Simple position sizing: base × signal_score × regime × volatility
+    Simple position sizing with MIN_SHARES requirement
 
-    IMPROVEMENTS:
-    - Increased cash deployment from 60% → 85%
-    - Added daily deployment tracking
-    - Portfolio-relative reserve (15% instead of fixed $20k)
-    - Better multi-opportunity handling
+    NEW LOGIC:
+    1. Calculate ideal position sizes for all opportunities
+    2. If any position has < 10 shares: sort by stock price (expensive first)
+    3. Drop most expensive stocks until all remaining have 10+ shares
+    4. If only 1 stock left and still < 10 shares: skip trading
 
     Args:
         opportunities: List of dicts with opportunity data
         portfolio_context: Dict with portfolio state
 
     Returns:
-        List of position allocations with quantities
+        List of position allocations with quantities (all with 10+ shares)
     """
 
     if not opportunities:
@@ -74,7 +73,7 @@ def calculate_position_sizes(opportunities, portfolio_context):
     max_deployment = min(cash_limit, daily_limit)
 
     print(f"\n{'=' * 80}")
-    print(f"💰 POSITION SIZING")
+    print(f"💰 POSITION SIZING (MIN {SimplifiedSizingConfig.MIN_SHARES} SHARES)")
     print(f"{'=' * 80}")
     print(f"Portfolio Value: ${portfolio_value:,.0f}")
     print(f"Deployed Capital: ${deployed_capital:,.0f} ({deployed_capital / portfolio_value * 100:.1f}%)")
@@ -87,7 +86,7 @@ def calculate_position_sizes(opportunities, portfolio_context):
     print(f"Opportunities: {len(opportunities)}")
     print(f"{'=' * 80}\n")
 
-    # Calculate positions
+    # Calculate initial positions
     allocations = []
     total_requested = 0
 
@@ -97,86 +96,230 @@ def calculate_position_sizes(opportunities, portfolio_context):
         data = opp['data']
 
         # Calculate position size with all multipliers
-        # Base: 15%, Score factor: 0.8x to 1.2x (60-100), Regime: 0.5-1.0x, Vol: 0.5-1.0x, Stock: 0.6-1.0x
         regime_mult = opp['regime'].get('position_size_multiplier', 1.0)
         vol_mult = opp['vol_metrics'].get('position_multiplier', 1.0)
-        stock_mult = opp.get('stock_regime_mult', 1.0)  # Stock-specific health multiplier
+        stock_mult = opp.get('stock_regime_mult', 1.0)
 
-        score_factor = 0.8 + (signal_score - 60) / 100
-        #position_pct = SimplifiedSizingConfig.BASE_POSITION_PCT * score_factor * regime_mult * vol_mult * stock_mult
         position_pct = SimplifiedSizingConfig.BASE_POSITION_PCT * regime_mult * stock_mult
 
         # Apply bounds
-        position_pct = max(SimplifiedSizingConfig.MIN_POSITION_PCT,
-                           min(position_pct, SimplifiedSizingConfig.MAX_POSITION_PCT))
+        position_pct = max(1.0, min(position_pct, SimplifiedSizingConfig.MAX_POSITION_PCT))
 
         # Convert to dollars
         position_dollars = portfolio_value * (position_pct / 100)
 
-        # Bounds check
-        min_dollars = portfolio_value * (SimplifiedSizingConfig.MIN_POSITION_PCT / 100)
-        max_dollars = portfolio_value * (SimplifiedSizingConfig.MAX_POSITION_PCT / 100)
-
-        position_dollars = max(min_dollars, min(position_dollars, max_dollars))
-
         # Calculate quantity
         current_price = data['close']
         quantity = int(position_dollars / current_price)
-        actual_cost = quantity * current_price
 
-        if quantity > 0 and actual_cost >= min_dollars:
-            allocations.append({
-                'ticker': ticker,
-                'quantity': quantity,
-                'cost': actual_cost,
-                'price': current_price,
-                'pct_portfolio': (actual_cost / portfolio_value * 100),
-                'position_pct': position_pct,
-                'signal_score': signal_score,
-                'signal_type': opp['signal_type'],
-                'regime_mult': opp['regime'].get('position_size_multiplier', 1.0),
-                'vol_mult': opp['vol_metrics'].get('position_multiplier', 1.0),
-                'stock_mult': opp.get('stock_regime_mult', 1.0)  # Stock health multiplier
-            })
+        # Store allocation (we'll filter later)
+        allocations.append({
+            'ticker': ticker,
+            'quantity': quantity,
+            'price': current_price,
+            'cost': quantity * current_price,
+            'pct_portfolio': (quantity * current_price / portfolio_value * 100),
+            'position_pct': position_pct,
+            'signal_score': signal_score,
+            'signal_type': opp['signal_type'],
+            'regime_mult': opp['regime'].get('position_size_multiplier', 1.0),
+            'vol_mult': opp['vol_metrics'].get('position_multiplier', 1.0),
+            'stock_mult': opp.get('stock_regime_mult', 1.0)
+        })
 
-            total_requested += actual_cost
+    if not allocations:
+        print(f"\n⚠️  No valid allocations after initial sizing\n")
+        return []
 
-    # Check budget
-    if total_requested <= max_deployment:
-        print(f"✅ All positions fit within budget\n")
-        display_allocations(allocations, portfolio_value, total_requested)
+    # FILTER: Ensure all positions have MIN_SHARES
+    allocations = _enforce_min_shares(allocations, max_deployment, portfolio_value)
+
+    if not allocations:
+        print(f"\n⚠️  No positions meet minimum {SimplifiedSizingConfig.MIN_SHARES} shares requirement\n")
+        return []
+
+    # Calculate total cost
+    total_cost = sum(a['cost'] for a in allocations)
+
+    # Check if we're over budget (after filtering)
+    if total_cost > max_deployment:
+        # Scale down proportionally
+        scale_factor = max_deployment / total_cost
+
+        print(f"⚠️  Over budget by ${total_cost - max_deployment:,.0f}")
+        print(f"   Requested: ${total_cost:,.0f}")
+        print(f"   Available: ${max_deployment:,.0f}")
+        print(f"   Scaling all positions by {scale_factor:.2f}x\n")
+
+        scaled_allocations = []
+        for alloc in allocations:
+            scaled_quantity = int(alloc['quantity'] * scale_factor)
+
+            # Ensure still meets minimum after scaling
+            if scaled_quantity >= SimplifiedSizingConfig.MIN_SHARES:
+                alloc['quantity'] = scaled_quantity
+                alloc['cost'] = scaled_quantity * alloc['price']
+                alloc['pct_portfolio'] = (alloc['cost'] / portfolio_value * 100)
+                scaled_allocations.append(alloc)
+            else:
+                print(
+                    f"   ⚠️  {alloc['ticker']}: Scaled to {scaled_quantity} shares - Below minimum {SimplifiedSizingConfig.MIN_SHARES}, dropping")
+
+        allocations = scaled_allocations
+        total_cost = sum(a['cost'] for a in allocations)
+
+        if not allocations:
+            print(f"\n⚠️  No positions remain after scaling to meet minimum shares requirement\n")
+            return []
+
+    display_allocations(allocations, portfolio_value, total_cost)
+    return allocations
+
+
+def _enforce_min_shares(allocations, max_budget, portfolio_value):
+    """
+    Enforce MIN_SHARES requirement by dropping expensive stocks
+
+    Strategy:
+    1. Check if all positions have MIN_SHARES
+    2. If not: Sort by price (most expensive first)
+    3. Drop expensive stocks one-by-one until all have MIN_SHARES
+    4. If only 1 left and still < MIN_SHARES: return empty list
+
+    Args:
+        allocations: List of allocation dicts
+        max_budget: Maximum dollars available
+        portfolio_value: Total portfolio value
+
+    Returns:
+        List of allocations with MIN_SHARES requirement met
+    """
+    MIN_SHARES = SimplifiedSizingConfig.MIN_SHARES
+
+    # Check if any positions below minimum
+    below_min = [a for a in allocations if a['quantity'] < MIN_SHARES]
+
+    if not below_min:
+        print(f"✅ All {len(allocations)} positions meet minimum {MIN_SHARES} shares\n")
         return allocations
 
-    # Scale down proportionally if over budget
-    scale_factor = max_deployment / total_requested
+    print(f"\n⚠️  {len(below_min)} position(s) below minimum {MIN_SHARES} shares")
+    print(f"   Strategy: Drop most expensive stocks until all remaining have {MIN_SHARES}+ shares\n")
 
-    print(f"⚠️  Over budget by ${total_requested - max_deployment:,.0f}")
-    print(f"   Requested: ${total_requested:,.0f}")
-    print(f"   Available: ${max_deployment:,.0f}")
-    print(f"   Scaling all positions by {scale_factor:.2f}x\n")
+    # Sort by price (most expensive first)
+    sorted_allocs = sorted(allocations, key=lambda x: x['price'], reverse=True)
 
-    scaled_allocations = []
-    total_cost = 0
-    min_dollars = portfolio_value * (SimplifiedSizingConfig.MIN_POSITION_PCT / 100)
+    # Try dropping expensive stocks one by one
+    for i in range(len(sorted_allocs)):
+        remaining = sorted_allocs[i:]
 
-    for alloc in allocations:
-        scaled_cost = alloc['cost'] * scale_factor
-        scaled_quantity = int(scaled_cost / alloc['price'])
-        scaled_actual_cost = scaled_quantity * alloc['price']
+        # Recalculate quantities with available budget
+        total_cost = sum(a['cost'] for a in remaining)
 
-        # Skip if below minimum after scaling
-        if scaled_quantity > 0 and scaled_actual_cost >= min_dollars:
-            alloc['quantity'] = scaled_quantity
-            alloc['cost'] = scaled_actual_cost
-            alloc['pct_portfolio'] = (scaled_actual_cost / portfolio_value * 100)
-            scaled_allocations.append(alloc)
-            total_cost += scaled_actual_cost
-        else:
-            print(
-                f"   ⚠️  {alloc['ticker']}: Scaled to ${scaled_actual_cost:,.0f} - Below minimum ${min_dollars:,.0f}, skipping")
+        if total_cost <= max_budget:
+            # Budget fits, check if all meet minimum shares
+            below_min = [a for a in remaining if a['quantity'] < MIN_SHARES]
 
-    display_allocations(scaled_allocations, portfolio_value, total_cost)
-    return scaled_allocations
+            if not below_min:
+                # All meet minimum!
+                dropped = sorted_allocs[:i]
+                if dropped:
+                    print(f"   📉 Dropped {len(dropped)} expensive stock(s):")
+                    for d in dropped:
+                        print(f"      - {d['ticker']} @ ${d['price']:.2f} (only {d['quantity']} shares affordable)")
+                    print(f"   ✅ Remaining {len(remaining)} stock(s) all have {MIN_SHARES}+ shares\n")
+                return remaining
+
+            # Still have positions below minimum
+            # Try to boost them by redistributing budget
+            remaining = _redistribute_budget(remaining, max_budget, portfolio_value)
+
+            # Check again
+            below_min = [a for a in remaining if a['quantity'] < MIN_SHARES]
+            if not below_min:
+                dropped = sorted_allocs[:i]
+                if dropped:
+                    print(f"   📉 Dropped {len(dropped)} expensive stock(s)")
+                    print(
+                        f"   ✅ After budget redistribution: All {len(remaining)} positions have {MIN_SHARES}+ shares\n")
+                return remaining
+
+    # Could not meet minimum shares for any combination
+    print(f"   ❌ Cannot afford {MIN_SHARES}+ shares for any combination")
+    print(f"   Skipping all trades this iteration\n")
+    return []
+
+
+def _redistribute_budget(allocations, max_budget, portfolio_value):
+    """
+    Redistribute budget to boost positions below MIN_SHARES
+
+    Strategy:
+    1. Calculate how much each position needs to reach MIN_SHARES
+    2. Reallocate from positions above MIN_SHARES to those below
+    3. Ensure we stay within max_budget
+
+    Args:
+        allocations: List of allocations
+        max_budget: Maximum budget
+        portfolio_value: Portfolio value
+
+    Returns:
+        Updated allocations
+    """
+    MIN_SHARES = SimplifiedSizingConfig.MIN_SHARES
+
+    # Separate positions
+    below_min = [a for a in allocations if a['quantity'] < MIN_SHARES]
+    above_min = [a for a in allocations if a['quantity'] >= MIN_SHARES]
+
+    if not below_min:
+        return allocations  # Already all good
+
+    # Calculate how much we need to boost below-min positions
+    boost_needed = 0
+    for alloc in below_min:
+        shares_needed = MIN_SHARES - alloc['quantity']
+        boost_needed += shares_needed * alloc['price']
+
+    # Try to free up budget by reducing above-min positions
+    total_available = max_budget
+    total_above_cost = sum(a['cost'] for a in above_min)
+    total_below_cost = sum(a['cost'] for a in below_min)
+
+    # If we have room in budget, boost below-min positions
+    remaining_budget = max_budget - total_above_cost - total_below_cost
+
+    if remaining_budget >= boost_needed:
+        # Can boost without reducing others
+        for alloc in below_min:
+            if alloc['quantity'] < MIN_SHARES:
+                old_qty = alloc['quantity']
+                alloc['quantity'] = MIN_SHARES
+                alloc['cost'] = MIN_SHARES * alloc['price']
+                alloc['pct_portfolio'] = (alloc['cost'] / portfolio_value * 100)
+        return allocations
+    else:
+        # Need to reduce above-min positions proportionally
+        if above_min and boost_needed > 0:
+            # Calculate reduction factor
+            reduction_needed = boost_needed - remaining_budget
+            reduction_factor = 1.0 - (reduction_needed / total_above_cost)
+
+            # Apply reduction
+            for alloc in above_min:
+                new_qty = max(MIN_SHARES, int(alloc['quantity'] * reduction_factor))
+                alloc['quantity'] = new_qty
+                alloc['cost'] = new_qty * alloc['price']
+                alloc['pct_portfolio'] = (alloc['cost'] / portfolio_value * 100)
+
+            # Boost below-min to MIN_SHARES
+            for alloc in below_min:
+                alloc['quantity'] = MIN_SHARES
+                alloc['cost'] = MIN_SHARES * alloc['price']
+                alloc['pct_portfolio'] = (alloc['cost'] / portfolio_value * 100)
+
+    return allocations
 
 
 def display_allocations(allocations, portfolio_value, total_cost):
@@ -187,7 +330,7 @@ def display_allocations(allocations, portfolio_value, total_cost):
         return
 
     print(f"\n{'=' * 100}")
-    print(f"📊 FINAL ALLOCATIONS")
+    print(f"📊 FINAL ALLOCATIONS (All positions have {SimplifiedSizingConfig.MIN_SHARES}+ shares)")
     print(f"{'=' * 100}")
     print(f"Total Allocated: ${total_cost:,.0f} ({total_cost / portfolio_value * 100:.1f}% of portfolio)")
     print(f"Position Count: {len(allocations)}")
@@ -197,23 +340,22 @@ def display_allocations(allocations, portfolio_value, total_cost):
     # Sort by cost (largest first)
     allocations.sort(key=lambda x: x['cost'], reverse=True)
 
-    print(f"{'Ticker':<8} {'Signal':<20} {'Score':<7} {'Size%':<8} {'Qty':<7} {'Cost':<14} {'Multipliers'}")
+    print(f"{'Ticker':<8} {'Signal':<20} {'Score':<7} {'Shares':<8} {'Price':<10} {'Cost':<14} {'Multipliers'}")
     print(f"{'-' * 100}")
 
     for alloc in allocations:
         signal = alloc['signal_type'][:18]
         score = f"{alloc['signal_score']:.0f}"
-        size_pct = f"{alloc['position_pct']:.1f}%"
-        qty = f"{alloc['quantity']}"
+        shares = f"{alloc['quantity']}"
+        price = f"${alloc['price']:.2f}"
         cost = f"${alloc['cost']:,.0f}"
 
-        # Multipliers breakdown (now includes Stock health)
-        score_factor = 0.8 + (alloc['signal_score'] - 60) / 100
+        # Multipliers breakdown
         stock_mult = alloc.get('stock_mult', 1.0)
-        total_mult = score_factor * alloc['regime_mult'] * alloc['vol_mult'] * stock_mult
-        mults = f"S:{score_factor:.2f} R:{alloc['regime_mult']:.2f} V:{alloc['vol_mult']:.2f} H:{stock_mult:.2f} = {total_mult:.2f}x"
+        total_mult = alloc['regime_mult'] * alloc['vol_mult'] * stock_mult
+        mults = f"R:{alloc['regime_mult']:.2f} V:{alloc['vol_mult']:.2f} H:{stock_mult:.2f} = {total_mult:.2f}x"
 
-        print(f"{alloc['ticker']:<8} {signal:<20} {score:<7} {size_pct:<8} {qty:<7} {cost:<14} {mults}")
+        print(f"{alloc['ticker']:<8} {signal:<20} {score:<7} {shares:<8} {price:<10} {cost:<14} {mults}")
 
     print(f"{'-' * 100}\n")
 
