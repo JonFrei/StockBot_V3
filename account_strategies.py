@@ -1,3 +1,13 @@
+"""
+SwingTradeStrategy - WITH SIMPLIFIED SYSTEMS
+
+Changes from previous version:
+- Uses simplified position sizing (calculate_position_sizes instead of calculate_independent_position_sizes)
+- Uses simplified regime detection (3 checks instead of 7)
+- Removed quality scoring (uses signal_score directly)
+- Cleaner, more maintainable code
+"""
+
 from lumibot.strategies import Strategy
 from config import Config
 
@@ -6,6 +16,7 @@ import stock_signals
 import stock_position_sizing
 import account_profit_tracking
 import stock_position_monitoring
+from stock_rotation import StockRotator, should_rotate
 
 from server_recovery import save_state_safe, load_state_safe
 
@@ -44,12 +55,16 @@ class SwingTradeStrategy(Strategy):
         # Signal processor
         self.signal_processor = stock_signals.SignalProcessor()
 
+        # Stock rotation system
+        self.stock_rotator = StockRotator(profit_tracker=self.profit_tracker)
+
         print(f"✅ Signal Processor: Centralized Scoring (0-100)")
         print(f"   Minimum Score Threshold: {stock_signals.SignalConfig.MIN_SCORE_THRESHOLD}")
         print(f"   Available Signals: {', '.join(stock_signals.BUY_STRATEGIES.keys())}")
         print(f"✅ Drawdown Protection: {self.drawdown_protection.threshold_pct:.1f}% threshold")
         print(f"✅ Position Sizing: Simplified formula (base × score × regime × volatility)")
         print(f"✅ Regime Detection: Simplified (3 critical checks)")
+        print(f"✅ Stock Rotation: 3-tier system (premium 1.5x / standard 1.0x / frozen blocked)")
 
         if not Config.BACKTESTING:
             window_info = account_broker_data.get_trading_window_info()
@@ -264,6 +279,13 @@ class SwingTradeStrategy(Strategy):
                 return
 
             # =================================================================
+            # STOCK ROTATION (Weekly Evaluation)
+            # =================================================================
+
+            if should_rotate(self.stock_rotator, current_date, frequency='weekly'):
+                self.stock_rotator.evaluate_stocks(self.tickers, current_date)
+
+            # =================================================================
             # STEP 2: SCAN FOR SIGNALS
             # =================================================================
 
@@ -276,6 +298,10 @@ class SwingTradeStrategy(Strategy):
             for ticker in all_tickers:
                 try:
                     if ticker in self.positions:
+                        continue
+
+                    # Skip frozen stocks (blocked from trading)
+                    if not self.stock_rotator.is_tradeable(ticker):
                         continue
 
                     if ticker not in all_stock_data:
@@ -329,7 +355,9 @@ class SwingTradeStrategy(Strategy):
                             'data': data,
                             'regime': ticker_regime,
                             'vol_metrics': vol_metrics,
-                            'stock_regime_mult': stock_mult,  # Add stock-specific multiplier
+                            'stock_regime_mult': stock_mult,
+                            'rotation_mult': self.stock_rotator.get_multiplier(ticker),
+                            'rotation_award': self.stock_rotator.get_award(ticker),
                             'source': 'scored'
                         })
                     elif signal_result['action'] == 'skip' and signal_result.get('reason'):
