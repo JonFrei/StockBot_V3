@@ -177,12 +177,22 @@ class SequentialStopTracker:
         if as_of_date is None:
             as_of_date = datetime.now()
 
+        # Ensure as_of_date is timezone-naive for comparison
+        if hasattr(as_of_date, 'tzinfo') and as_of_date.tzinfo is not None:
+            as_of_date = as_of_date.replace(tzinfo=None)
+
         cutoff = as_of_date - timedelta(days=days)
 
-        recent_stops = [
-            stop for stop in self.stops
-            if stop['date'] > cutoff
-        ]
+        recent_stops = []
+        for stop in self.stops:
+            stop_date = stop['date']
+
+            # Ensure stop_date is timezone-naive for comparison
+            if hasattr(stop_date, 'tzinfo') and stop_date.tzinfo is not None:
+                stop_date = stop_date.replace(tzinfo=None)
+
+            if stop_date > cutoff:
+                recent_stops.append(stop)
 
         return len(recent_stops), recent_stops
 
@@ -525,8 +535,16 @@ class MarketRegimeDetector:
         if not self.exit_date or not current_date:
             return False
 
+        # Ensure both dates are timezone-naive for comparison
+        exit_date = self.exit_date
+        if hasattr(exit_date, 'tzinfo') and exit_date.tzinfo is not None:
+            exit_date = exit_date.replace(tzinfo=None)
+
+        if hasattr(current_date, 'tzinfo') and current_date.tzinfo is not None:
+            current_date = current_date.replace(tzinfo=None)
+
         # Check days elapsed
-        days_elapsed = (current_date - self.exit_date).days
+        days_elapsed = (current_date - exit_date).days
 
         if days_elapsed < SafeguardConfig.RECOVERY_WAIT_DAYS:
             return False
@@ -540,7 +558,15 @@ class MarketRegimeDetector:
 
     def _recovery_response(self, current_date):
         """Build response during recovery period"""
-        days_remaining = SafeguardConfig.RECOVERY_WAIT_DAYS - (current_date - self.exit_date).days
+        # Ensure both dates are timezone-naive for comparison
+        exit_date = self.exit_date
+        if hasattr(exit_date, 'tzinfo') and exit_date.tzinfo is not None:
+            exit_date = exit_date.replace(tzinfo=None)
+
+        if hasattr(current_date, 'tzinfo') and current_date.tzinfo is not None:
+            current_date = current_date.replace(tzinfo=None)
+
+        days_remaining = SafeguardConfig.RECOVERY_WAIT_DAYS - (current_date - exit_date).days
         days_remaining = max(0, days_remaining)
 
         recovery_msg = f"Recovery period: {days_remaining} days remaining"
