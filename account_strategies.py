@@ -286,6 +286,8 @@ class SwingTradeStrategy(Strategy):
                             'score': opp['score'],
                             'signal_type': opp['signal_type'],
                             'vol_metrics': opp['vol_metrics'],
+                            'rotation_mult': opp['rotation_mult'],
+
                         })
 
                 regime_multiplier = regime_result['position_size_multiplier']

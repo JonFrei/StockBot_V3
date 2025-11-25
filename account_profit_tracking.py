@@ -306,8 +306,8 @@ class ProfitTracker:
 
         if regime_detector:
             stats = regime_detector.get_statistics()
-            print(f"🛡️ Safeguard: Dist={stats['distribution_days']}d | SPY={stats['spy_extension']:.1f}%")
-
+            spy_vs_200 = ((stats['spy_close'] - stats['spy_200_sma']) / stats['spy_200_sma'] * 100) if stats['spy_200_sma'] > 0 else 0
+            print(f"🛡️ Safeguard: Dist={stats['distribution_days']}d | SPY vs 200: {spy_vs_200:+.1f}%")
         print(f"{'=' * 80}\n")
 
     def _display_signal_summary(self, closed_trades):

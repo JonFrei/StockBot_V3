@@ -2,6 +2,7 @@
 Position Sizing - STREAMLINED VERSION
 
 Added verbose=False option to suppress detailed output
+Now applies rotation_mult from stock rotation system
 """
 
 
@@ -43,8 +44,10 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
         ticker = opp['ticker']
         data = opp['data']
         vol_mult = opp['vol_metrics'].get('position_multiplier', 1.0)
+        rotation_mult = opp.get('rotation_mult', 1.0)
 
-        position_pct = SimplifiedSizingConfig.BASE_POSITION_PCT * regime_multiplier * vol_mult
+        # Apply all multipliers: regime, volatility, and rotation
+        position_pct = SimplifiedSizingConfig.BASE_POSITION_PCT * regime_multiplier * vol_mult * rotation_mult
         position_pct = max(1.0, min(position_pct, SimplifiedSizingConfig.MAX_POSITION_PCT))
 
         position_dollars = portfolio_value * (position_pct / 100)
@@ -61,7 +64,8 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
             'signal_score': opp['score'],
             'signal_type': opp['signal_type'],
             'regime_mult': regime_multiplier,
-            'vol_mult': vol_mult
+            'vol_mult': vol_mult,
+            'rotation_mult': rotation_mult
         })
 
     if not allocations:
