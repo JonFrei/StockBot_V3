@@ -1,11 +1,11 @@
 """
-SwingTradeStrategy - WITH CENTRALIZED SCORING SYSTEM
+SwingTradeStrategy - WITH SIMPLIFIED SYSTEMS
 
-Integrated Features:
-- Centralized 0-100 scoring for all signals
-- Best score wins (replaces priority-based)
-- Score tracking in trades and summaries
-- SIMPLIFIED: Removed stock rotation, cooldowns, and Level 3 special exits
+Changes from previous version:
+- Uses simplified position sizing (calculate_position_sizes instead of calculate_independent_position_sizes)
+- Uses simplified regime detection (3 checks instead of 7)
+- Removed quality scoring (uses signal_score directly)
+- Cleaner, more maintainable code
 """
 
 from lumibot.strategies import Strategy
@@ -31,7 +31,7 @@ broker = Alpaca(Config.get_alpaca_config())
 class SwingTradeStrategy(Strategy):
 
     def initialize(self, send_emails=True):
-        """Initialize strategy with centralized scoring system"""
+        """Initialize strategy with simplified systems"""
         if Config.BACKTESTING:
             self.sleeptime = "1D"
         else:
@@ -51,22 +51,22 @@ class SwingTradeStrategy(Strategy):
             recovery_days=5
         )
 
-        # CENTRALIZED SCORING SYSTEM
+        # Signal processor
         self.signal_processor = stock_signals.SignalProcessor()
 
         print(f"✅ Signal Processor: Centralized Scoring (0-100)")
         print(f"   Minimum Score Threshold: {stock_signals.SignalConfig.MIN_SCORE_THRESHOLD}")
         print(f"   Available Signals: {', '.join(stock_signals.BUY_STRATEGIES.keys())}")
         print(f"✅ Drawdown Protection: {self.drawdown_protection.threshold_pct:.1f}% threshold")
+        print(f"✅ Position Sizing: Simplified formula (base × score × regime × volatility)")
+        print(f"✅ Regime Detection: Simplified (3 critical checks)")
 
         if not Config.BACKTESTING:
             window_info = account_broker_data.get_trading_window_info()
             print(f"✅ Trading Window: {window_info['start_time_str']} - {window_info['end_time_str']} EST")
 
     def before_starting_trading(self):
-        """
-        Startup sequence with automatic broker reconciliation
-        """
+        """Startup sequence with automatic broker reconciliation"""
         if Config.BACKTESTING:
             return
 
@@ -172,14 +172,14 @@ class SwingTradeStrategy(Strategy):
                 return
 
             # =================================================================
-            # MARKET REGIME DETECTION
+            # SIMPLIFIED MARKET REGIME DETECTION (3 checks instead of 7)
             # =================================================================
 
             try:
                 global_regime_info = account_drawdown_protection.detect_market_regime(spy_data)
                 print(account_drawdown_protection.format_regime_display(global_regime_info))
 
-                # === FIX #2: EARLY WARNING - Portfolio Underperformance Check ===
+                # Early warning - Portfolio underperformance check
                 current_drawdown = self.drawdown_protection.calculate_drawdown(self.portfolio_value)
 
                 if current_drawdown <= -5.0 and global_regime_info.get('allow_trading', True):
@@ -216,10 +216,8 @@ class SwingTradeStrategy(Strategy):
                             print(f"   🚪 Bear Market Exit: {ticker} x{qty}")
                             sell_order = self.create_order(ticker, qty, 'sell')
                             self.submit_order(sell_order)
-
-                            # Clean tracking
                             self.position_monitor.clean_position_metadata(ticker)
-                    return  # EXIT - No new positions
+                    return
 
             except Exception as e:
                 execution_tracker.add_error("Market Regime Detection", e)
@@ -276,7 +274,7 @@ class SwingTradeStrategy(Strategy):
                 return
 
             # =================================================================
-            # STEP 2: SCAN FOR SIGNALS WITH CENTRALIZED SCORING
+            # STEP 2: SCAN FOR SIGNALS
             # =================================================================
 
             print(f"\n{'=' * 80}")
@@ -287,11 +285,9 @@ class SwingTradeStrategy(Strategy):
 
             for ticker in all_tickers:
                 try:
-                    # Skip if already have position
                     if ticker in self.positions:
                         continue
 
-                    # Get data
                     if ticker not in all_stock_data:
                         continue
 
@@ -308,14 +304,13 @@ class SwingTradeStrategy(Strategy):
                     if not ticker_regime.get('allow_trading', True):
                         continue
 
-                    # === PROCESS THROUGH CENTRALIZED SCORING SYSTEM ===
+                    # Process through centralized scoring system
                     signal_result = self.signal_processor.process_ticker(ticker, data, spy_data)
 
                     if signal_result['action'] == 'buy':
                         winning_score = signal_result['score']
                         all_scores = signal_result['all_scores']
 
-                        # Show which signal won and competition
                         competitors = sorted(
                             [(sig, score) for sig, score in all_scores.items() if score > 0],
                             key=lambda x: x[1],
@@ -339,7 +334,6 @@ class SwingTradeStrategy(Strategy):
                             'source': 'scored'
                         })
                     elif signal_result['action'] == 'skip' and signal_result.get('reason'):
-                        # Show why it was skipped if scores exist
                         if signal_result.get('all_scores'):
                             best_score = max(signal_result['all_scores'].values())
                             if best_score > 0:
@@ -353,7 +347,7 @@ class SwingTradeStrategy(Strategy):
                 print(f"   (No signals above threshold of {stock_signals.SignalConfig.MIN_SCORE_THRESHOLD})")
 
             # =================================================================
-            # STEP 3: POSITION SIZING
+            # STEP 3: SIMPLIFIED POSITION SIZING
             # =================================================================
 
             if not all_opportunities:
@@ -388,7 +382,7 @@ class SwingTradeStrategy(Strategy):
                         )
                     return
 
-                # Build opportunities for position sizing
+                # Build opportunities for simplified position sizing
                 sizing_opportunities = []
 
                 for opp in all_opportunities:
@@ -396,38 +390,22 @@ class SwingTradeStrategy(Strategy):
                     data = opp['data']
                     signal_score = opp['score']
 
-                    # Calculate quality score
-                    quality_score = stock_position_sizing.calculate_opportunity_quality(
-                        ticker, data, spy_data, signal_count=1
-                    )
-
-                    # === FIX #3: Quality floor ===
-                    if quality_score < 40:
-                        print(f"   ⚠️ {ticker}: Quality {quality_score:.0f}/100 too weak (below 40 floor) - SKIPPED")
+                    # Quality floor check (removed complex quality scoring)
+                    if signal_score < 60:  # Signal processor already enforces this
+                        print(f"   ⚠️ {ticker}: Score {signal_score:.0f}/100 below threshold - SKIPPED")
                         continue
-
-                    # Get multipliers (simplified - no awards)
-                    regime_multiplier = opp['regime'].get('position_size_multiplier', 1.0)
-                    volatility_multiplier = opp['vol_metrics'].get('position_multiplier', 1.0)
 
                     sizing_opportunities.append({
                         'ticker': ticker,
                         'data': data,
-                        'buy_signal': opp['signal_data'],
-                        'quality_score': quality_score,
-                        'signal_score': signal_score,
-                        'signal_count': 1,
-                        'award': 'none',
-                        'award_multiplier': 1.0,  # No award system
-                        'regime_multiplier': regime_multiplier,
-                        'volatility_multiplier': volatility_multiplier,
-                        'vol_metrics': opp['vol_metrics'],
-                        'ticker_regime': opp['regime'],
+                        'score': signal_score,
                         'signal_type': opp['signal_type'],
-                        'source': opp['source']
+                        'regime': opp['regime'],
+                        'vol_metrics': opp['vol_metrics']
                     })
 
-                allocations = stock_position_sizing.calculate_independent_position_sizes(
+                # SIMPLIFIED POSITION SIZING (uses new calculate_position_sizes function)
+                allocations = stock_position_sizing.calculate_position_sizes(
                     sizing_opportunities,
                     portfolio_context
                 )
@@ -465,26 +443,16 @@ class SwingTradeStrategy(Strategy):
                     quantity = alloc['quantity']
                     cost = alloc['cost']
                     price = alloc['price']
+                    signal_type = alloc['signal_type']
+                    signal_score = alloc['signal_score']
 
-                    # Find original opportunity data
-                    opp = next((o for o in sizing_opportunities if o['ticker'] == ticker), None)
-                    if not opp:
-                        continue
-
-                    signal_type = opp['signal_type']
-                    signal_score = opp.get('signal_score', 0)
-
-                    award_emoji = '⚪'
-                    vol_display = opp['vol_metrics']['risk_class'].upper()
-
-                    print(f" 🟢 BUY: {ticker} x{quantity} [{award_emoji} STANDARD]")
+                    print(f" 🟢 BUY: {ticker} x{quantity}")
                     print(f"        Signal: {signal_type} (Score: {signal_score:.0f}/100)")
-                    print(f"        Quality: {alloc['quality_score']:.0f}/100 ({alloc['quality_tier']})")
                     print(f"        Price: ${price:.2f} | Cost: ${cost:,.2f} ({alloc['pct_portfolio']:.1f}%)")
-                    print(f"        Vol: {vol_display} | Multiplier: {alloc['total_multiplier']:.2f}x")
+                    print(f"        Multipliers: Regime {alloc['regime_mult']:.2f}x × Vol {alloc['vol_mult']:.2f}x")
                     print()
 
-                    # Track position WITH SIGNAL SCORE
+                    # Track position
                     self.position_monitor.track_position(
                         ticker,
                         current_date,
@@ -496,7 +464,7 @@ class SwingTradeStrategy(Strategy):
                     order = self.create_order(ticker, quantity, 'buy')
                     self.submit_order(order)
 
-                    # Log order WITH SIGNAL SCORE
+                    # Log order
                     if hasattr(self, 'order_logger'):
                         self.order_logger.log_order(
                             ticker=ticker,
@@ -537,10 +505,7 @@ class SwingTradeStrategy(Strategy):
             raise
 
     def on_strategy_end(self):
-        """Display final statistics with signal scores"""
-
+        """Display final statistics"""
         self.profit_tracker.display_final_summary()
-
         account_drawdown_protection.print_protection_summary(self.drawdown_protection)
-
         return 0
