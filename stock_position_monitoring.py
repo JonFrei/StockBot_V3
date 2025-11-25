@@ -239,9 +239,9 @@ def check_trailing_stop(profit_level, local_max, current_price):
     """
     Progressive trailing stop based on profit level
 
-    - Level 1: 7% trailing from local max
-    - Level 2: 8.5% trailing from local max
-    - Level 3: 11% trailing from local max
+    - Level 1: 6% trailing from local max
+    - Level 2: 7.5% trailing from local max
+    - Level 3: 10% trailing from local max
 
     Trailing stop is OVERRIDDEN by emergency exits
     """
@@ -279,7 +279,7 @@ def check_intraday_trailing_breach(low_price, local_max, profit_level):
 
     Args:
         low_price: Day's low price
-        local_max: Local maximum price for trailing
+        local_max: Local maximum price for trailing (from PREVIOUS day, not today)
         profit_level: Current profit level (1, 2, or 3)
 
     Returns:
@@ -315,12 +315,19 @@ def check_intraday_trailing_breach(low_price, local_max, profit_level):
 
 def check_positions_for_exits(strategy, current_date, all_stock_data, position_monitor):
     """
-    SIMPLIFIED EXIT PRIORITY ORDER:
+    FIXED EXIT PRIORITY ORDER:
 
-    1. Initial emergency stop (-4.5% before any profit taking)
-    2. Profit taking (triggers Level 1, 2, 3)
-    3. Emergency exit per level (overrides trailing)
-    4. Trailing stop (progressive 5%/6%/8% from local max)
+    For Level 0 positions (no profit taken yet):
+        1. Intraday stop breach (-5.5% from entry)
+        2. Close-based initial stop (fallback)
+
+    For Level 1+ positions:
+        1. Profit taking FIRST (Level 2 at +20%, Level 3 at +30%)
+        2. Emergency exit per level (back to entry/lock prices)
+        3. Trailing stop (6%/7.5%/10% from local max)
+
+    KEY FIX: local_max is updated AFTER exit checks, not before.
+    This prevents comparing today's low against today's close.
     """
     import account_broker_data
 
@@ -360,8 +367,9 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
             position_monitor.track_position(ticker, current_date, 'pre_existing', entry_score=0)
             metadata = position_monitor.get_position_metadata(ticker)
 
-        # Update local maximum
-        position_monitor.update_local_max(ticker, current_price)
+        # NOTE: local_max is updated AFTER exit checks to avoid comparing
+        # today's low against today's close (which causes false trailing triggers)
+        # The local_max used for trailing calculations is from PREVIOUS days.
 
         # Calculate P&L
         pnl_pct = ((current_price - broker_entry_price) / broker_entry_price * 100)
@@ -376,34 +384,46 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         # Get today's low price for intraday breach detection
         low_price = data.get('low', current_price)
 
-        # CHECK EXIT CONDITIONS (Priority Order)
+        # =====================================================================
+        # CHECK EXIT CONDITIONS - CORRECTED PRIORITY ORDER
+        # =====================================================================
         exit_signal = None
 
-        # PRIORITY 1: Intraday stop breach (catches breaches same day)
+        # ---------------------------------------------------------------------
+        # LEVEL 0 POSITIONS: Initial stop checks only
+        # ---------------------------------------------------------------------
         if profit_level == 0:
+            # Check intraday stop breach first
             exit_signal = check_intraday_stop_breach(
                 low_price=low_price,
                 entry_price=broker_entry_price,
                 stop_threshold=ExitConfig.INITIAL_EMERGENCY_STOP
             )
 
-        # PRIORITY 2: Intraday trailing breach (for positions past Level 1)
-        if not exit_signal and profit_level > 0:
-            exit_signal = check_intraday_trailing_breach(
-                low_price=low_price,
-                local_max=local_max,
-                profit_level=profit_level
-            )
+            # Fallback: close-based initial stop
+            if not exit_signal:
+                exit_signal = check_initial_emergency_stop(
+                    pnl_pct=pnl_pct,
+                    current_price=current_price,
+                    entry_price=broker_entry_price
+                )
 
-        # PRIORITY 3: Profit taking (if no intraday breach)
+        # ---------------------------------------------------------------------
+        # ALL POSITIONS: Check for profit taking FIRST (highest priority)
+        # This ensures we capture Level 2/3 BEFORE any trailing stop triggers
+        # ---------------------------------------------------------------------
         if not exit_signal:
             exit_signal = check_profit_taking(
                 pnl_pct=pnl_pct,
                 profit_level=profit_level
             )
 
-        # PRIORITY 4: Emergency exit per level (overrides trailing)
+        # ---------------------------------------------------------------------
+        # LEVEL 1+ POSITIONS: Emergency and trailing stops
+        # Only check these AFTER profit taking has been evaluated
+        # ---------------------------------------------------------------------
         if not exit_signal and profit_level > 0:
+            # Emergency exit per level (protects principal/gains)
             exit_signal = check_emergency_exit_per_level(
                 profit_level=profit_level,
                 current_price=current_price,
@@ -412,21 +432,30 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
                 level_2_lock_price=level_2_lock_price
             )
 
-        # PRIORITY 5: Close-based initial stop (fallback if no intraday breach)
-        if not exit_signal and profit_level == 0:
-            exit_signal = check_initial_emergency_stop(
-                pnl_pct=pnl_pct,
-                current_price=current_price,
-                entry_price=broker_entry_price
+        if not exit_signal and profit_level > 0:
+            # Intraday trailing breach (uses PREVIOUS day's local_max)
+            exit_signal = check_intraday_trailing_breach(
+                low_price=low_price,
+                local_max=local_max,
+                profit_level=profit_level
             )
 
-        # PRIORITY 6: Close-based trailing stop (fallback)
         if not exit_signal and profit_level > 0:
+            # Close-based trailing stop (fallback)
             exit_signal = check_trailing_stop(
                 profit_level=profit_level,
                 local_max=local_max,
                 current_price=current_price
             )
+
+        # =====================================================================
+        # UPDATE LOCAL MAX AFTER EXIT CHECKS
+        # This ensures trailing stops use previous day's peak, not today's
+        # =====================================================================
+        if not exit_signal:
+            # Only update local_max if no exit triggered
+            # This preserves the peak for trailing calculations
+            position_monitor.update_local_max(ticker, current_price)
 
         # Add to exit orders
         if exit_signal:
@@ -496,6 +525,10 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
 
             # Advance profit level and lock price
             position_monitor.advance_profit_level(ticker, new_profit_level, current_price)
+
+            # CRITICAL: Update local_max after advancing profit level
+            # This ensures trailing stops use the new peak
+            position_monitor.update_local_max(ticker, current_price)
 
             # Record the trade
             profit_tracker.record_trade(
