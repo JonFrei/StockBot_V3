@@ -1,13 +1,3 @@
-"""
-SwingTradeStrategy - WITH SIMPLIFIED SYSTEMS
-
-Changes from previous version:
-- Uses simplified position sizing (calculate_position_sizes instead of calculate_independent_position_sizes)
-- Uses simplified regime detection (3 checks instead of 7)
-- Removed quality scoring (uses signal_score directly)
-- Cleaner, more maintainable code
-"""
-
 from lumibot.strategies import Strategy
 from config import Config
 
@@ -322,6 +312,14 @@ class SwingTradeStrategy(Strategy):
                         print(f"🟢 SIGNAL: {ticker} - {signal_result['signal_type']} (Score: {winning_score:.0f}/100)")
                         print(f"   Competition: {competition_str}")
 
+                        # Stock health check (blocks weak stocks even in strong market)
+                        allow_entry, stock_mult, stock_reason = account_drawdown_protection.check_stock_regime(ticker,
+                                                                                                               data)
+                        print(f"   {stock_reason}")
+
+                        if not allow_entry:
+                            continue  # Skip this stock
+
                         all_opportunities.append({
                             'ticker': ticker,
                             'signal_type': signal_result['signal_type'],
@@ -331,6 +329,7 @@ class SwingTradeStrategy(Strategy):
                             'data': data,
                             'regime': ticker_regime,
                             'vol_metrics': vol_metrics,
+                            'stock_regime_mult': stock_mult,  # Add stock-specific multiplier
                             'source': 'scored'
                         })
                     elif signal_result['action'] == 'skip' and signal_result.get('reason'):
@@ -401,7 +400,8 @@ class SwingTradeStrategy(Strategy):
                         'score': signal_score,
                         'signal_type': opp['signal_type'],
                         'regime': opp['regime'],
-                        'vol_metrics': opp['vol_metrics']
+                        'vol_metrics': opp['vol_metrics'],
+                        'stock_regime_mult': opp.get('stock_regime_mult', 1.0)  # Stock health multiplier
                     })
 
                 # SIMPLIFIED POSITION SIZING (uses new calculate_position_sizes function)
@@ -449,7 +449,9 @@ class SwingTradeStrategy(Strategy):
                     print(f" 🟢 BUY: {ticker} x{quantity}")
                     print(f"        Signal: {signal_type} (Score: {signal_score:.0f}/100)")
                     print(f"        Price: ${price:.2f} | Cost: ${cost:,.2f} ({alloc['pct_portfolio']:.1f}%)")
-                    print(f"        Multipliers: Regime {alloc['regime_mult']:.2f}x × Vol {alloc['vol_mult']:.2f}x")
+                    stock_mult = alloc.get('stock_mult', 1.0)
+                    print(
+                        f"        Multipliers: Regime {alloc['regime_mult']:.2f}x × Vol {alloc['vol_mult']:.2f}x × Health {stock_mult:.2f}x")
                     print()
 
                     # Track position

@@ -8,6 +8,7 @@ import pandas as pd
 
 def detect_market_regime(spy_data, stock_data=None):
 
+
     warnings = []
 
     if not spy_data:
@@ -27,10 +28,11 @@ def detect_market_regime(spy_data, stock_data=None):
     # CHECK 1: SPY BELOW 200 SMA (Classic bear market)
     # =================================================================
 
-    if spy_close < spy_sma200*1.05 and spy_sma200 > 0:
+    if spy_close < spy_sma200 and spy_sma200 > 0:
         distance_below = ((spy_close - spy_sma200) / spy_sma200 * 100)
         return {
             'allow_trading': False,
+            'position_size_multiplier': 0.0,
             'description': f'🔴 BEAR MARKET: SPY {distance_below:.1f}% below 200 SMA - BLOCKED',
             'warnings': ['SPY below 200 SMA']
         }
@@ -54,6 +56,7 @@ def detect_market_regime(spy_data, stock_data=None):
 
                     return {
                         'allow_trading': False,
+                        'position_size_multiplier': 0.0,
                         'description': f'🔴 DEATH CROSS FORMING: EMA50 declining {ema50_slope:.2f}%/day - BLOCKED',
                         'warnings': warnings
                     }
@@ -76,14 +79,16 @@ def detect_market_regime(spy_data, stock_data=None):
             if distance_from_200 < -5.0:
                 return {
                     'allow_trading': False,
+                    'position_size_multiplier': 0.0,
                     'description': f'🔴 STOCK WEAKNESS: {distance_from_200:.1f}% below 200 SMA - BLOCKED',
                     'warnings': [f'Stock {distance_from_200:.1f}% below 200 SMA']
                 }
 
     return {
         'allow_trading': True,
-        'description': "None",
-        'warnings': ["None"]
+        'position_size_multiplier': 1.0,
+        'description': "MARKET REGIME IS GOOD",
+        'warnings': warnings
     }
 
 
@@ -102,12 +107,98 @@ def format_regime_display(regime_info):
 
     if regime_info['allow_trading']:
         output += f"\n✅ Trading allowed"
+        if regime_info['position_size_multiplier'] < 1.0:
+            output += f" (size: {regime_info['position_size_multiplier'] * 100:.0f}% of normal)"
     else:
         output += f"\n🚫 Trading BLOCKED"
 
     output += f"\n{'=' * 80}\n"
 
     return output
+
+
+# =============================================================================
+# STOCK-SPECIFIC REGIME CHECK (Pre-Entry Health Filter)
+# =============================================================================
+
+def check_stock_regime(ticker, stock_data):
+    """
+    Pre-entry health check for individual stock
+
+    Prevents entering weak stocks even when market is strong.
+    This catches stock-specific weakness that market-level checks miss.
+
+    Args:
+        ticker: Stock symbol
+        stock_data: Stock indicators dict
+
+    Returns:
+        tuple: (allow_entry, size_multiplier, reason)
+
+    Examples:
+        >>> allow, mult, reason = check_stock_regime('AAPL', data)
+        >>> if not allow:
+        ...     print(f"Skipping {ticker}: {reason}")
+    """
+
+    stock_close = stock_data.get('close', 0)
+    stock_sma200 = stock_data.get('sma200', 0)
+    ema20 = stock_data.get('ema20', 0)
+    ema50 = stock_data.get('ema50', 0)
+    rsi = stock_data.get('rsi', 50)
+
+    # =================================================================
+    # CHECK 1: Stock distance from 200 SMA
+    # =================================================================
+
+    if stock_sma200 > 0:
+        distance = ((stock_close - stock_sma200) / stock_sma200 * 100)
+
+        # Stop if stock is 5% or less above 200 SMA
+        if distance <= 5:
+            return (
+                False,
+                0.0, # 0% OF NORMAL SIZE
+                f"⚠️  {ticker}: {distance:.1f}% from 200 SMA - BLOCKED"
+            )
+
+    # =================================================================
+    # CHECK 2: EMA structure (must have uptrend)
+    # =================================================================
+
+    if ema20 > 0 and ema50 > 0:
+        if ema20 < ema50:
+            # EMA20 below EMA50 = downtrend or weak trend
+            return (
+                False,
+                0.0, # 0% OF NORMAL SIZE
+                f"❌ {ticker}: EMA20 < EMA50 (weak trend) - BLOCKED"
+            )
+
+    # =================================================================
+    # CHECK 3: RSI extremes (avoid overbought on entry)
+    # =================================================================
+
+    if rsi > 80:
+        # Extremely overbought - risky entry
+        return (
+            False,
+            0.0,
+            f"⚠️  {ticker}: RSI {rsi:.0f} (overbought) - BLOCKED"
+        )
+
+    # =================================================================
+    # ALL CHECKS PASSED
+    # =================================================================
+
+    # Calculate distance for display
+    distance = ((stock_close - stock_sma200) / stock_sma200 * 100) if stock_sma200 > 0 else 0
+
+    return (
+        True,
+        1.0,
+        f"✅ {ticker}: Healthy (SMA200: {distance:+.1f}%, EMA20>EMA50, RSI {rsi:.0f})"
+    )
 
 
 # =============================================================================

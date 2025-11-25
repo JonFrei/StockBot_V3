@@ -1,32 +1,15 @@
-"""
-REDESIGNED Position Monitoring System - TRAILING STOP BASED
-
-MAJOR CHANGES:
-- Removed: Max holding period checks (60-day limits)
-- Removed: Market condition caching
-- Removed: Adaptive 3-tier system (STRONG/NEUTRAL/WEAK)
-- Removed: Momentum exception logic
-- Simplified: Universal exit parameters (no tiers)
-- NEW: Progressive trailing stop system based on profit levels
-- NEW: Emergency exits per profit level (overrides trailing)
-
-EXIT LOGIC:
-1. Initial emergency stop: -4.5%
-2. Profit Level 1 (10%): Sell 33%, emergency at entry, trail 5% from local max
-3. Profit Level 2 (20%): Sell 33%, emergency at L1 lock, trail 6% from local max
-4. Profit Level 3 (30%): Sell 50%, emergency at L2 lock, trail 8% from local max
-"""
-
-
 # =============================================================================
 # SIMPLIFIED CONFIGURATION - UNIVERSAL PARAMETERS
 # =============================================================================
 
 class ExitConfig:
-    """Universal exit parameters - no adaptive tiers"""
+    """Universal exit parameters - adjusted for daily bar slippage"""
 
-    # Initial emergency stop (before any profit taking)
-    INITIAL_EMERGENCY_STOP = -4.5  # -4.5% from entry
+    # Initial emergency stop (accounting for daily bar slippage)
+    # NOTE: With daily bars, expect 1.5-2% additional slippage
+    # A -5.5% stop will typically exit at -7% to -7.5% actual
+    # Extreme gaps can cause up to -9% exits (vs -12% with -4.5%)
+    INITIAL_EMERGENCY_STOP = -5.5  # Targets ~-7% actual with daily bars
 
     # Profit targets and sell percentages
     PROFIT_TARGET_1 = 10.0  # First target: +10%
@@ -38,10 +21,11 @@ class ExitConfig:
     PROFIT_TARGET_3 = 30.0  # Third target: +30%
     PROFIT_TARGET_3_SELL = 50.0  # Sell 50% of remaining
 
-    # Trailing stops from local maximum (progressive tightening)
-    TRAILING_STOP_LEVEL_1 = 5.0  # After Level 1: 5% from local max
-    TRAILING_STOP_LEVEL_2 = 6.0  # After Level 2: 6% from local max
-    TRAILING_STOP_LEVEL_3 = 8.0  # After Level 3: 8% from local max
+    # Trailing stops from local maximum (tighter with intraday detection)
+    # With intraday breach detection, we can use tighter stops
+    TRAILING_STOP_LEVEL_1 = 6.0  # After Level 1: 6% from local max (was 7%)
+    TRAILING_STOP_LEVEL_2 = 7.5  # After Level 2: 7.5% from local max (was 8.5%)
+    TRAILING_STOP_LEVEL_3 = 10.0  # After Level 3: 10% from local max (was 11%)
 
 
 # =============================================================================
@@ -117,11 +101,40 @@ class PositionMonitor:
 # EXIT STRATEGY FUNCTIONS - SIMPLIFIED
 # =============================================================================
 
+def check_intraday_stop_breach(low_price, entry_price, stop_threshold):
+    """
+    Check if intraday low breached stop threshold
+
+    Even if close price recovered, exit if low touched stop.
+    This catches gaps and intraday spikes on the SAME DAY instead
+    of waiting until next day's gap down.
+
+    Args:
+        low_price: Day's low price
+        entry_price: Entry price
+        stop_threshold: Stop threshold percentage (e.g., -5.5)
+
+    Returns:
+        dict with exit signal or None
+    """
+    stop_price = entry_price * (1 + stop_threshold / 100)
+
+    if low_price <= stop_price:
+        return {
+            'type': 'full_exit',
+            'reason': 'intraday_stop_breach',
+            'sell_pct': 100.0,
+            'message': f'🚨 Intraday Breach: Low ${low_price:.2f} hit stop ${stop_price:.2f} (entry: ${entry_price:.2f})'
+        }
+
+    return None
+
+
 def check_initial_emergency_stop(pnl_pct, current_price, entry_price):
     """
     Initial emergency stop (before any profit taking)
 
-    Triggers at -4.5% from entry
+    Triggers at -5.5% from entry (targets ~-7% actual with daily bar slippage)
     """
     if pnl_pct <= ExitConfig.INITIAL_EMERGENCY_STOP:
         return {
@@ -226,9 +239,9 @@ def check_trailing_stop(profit_level, local_max, current_price):
     """
     Progressive trailing stop based on profit level
 
-    - Level 1: 5% trailing from local max
-    - Level 2: 6% trailing from local max
-    - Level 3: 8% trailing from local max
+    - Level 1: 7% trailing from local max
+    - Level 2: 8.5% trailing from local max
+    - Level 3: 11% trailing from local max
 
     Trailing stop is OVERRIDDEN by emergency exits
     """
@@ -253,6 +266,44 @@ def check_trailing_stop(profit_level, local_max, current_price):
             'reason': f'trailing_stop_level_{profit_level}',
             'sell_pct': 100.0,
             'message': f'📉 Level {profit_level} Trail Stop ({trail_pct:.0f}% from ${local_max:.2f}): Exiting remaining position'
+        }
+
+    return None
+
+
+def check_intraday_trailing_breach(low_price, local_max, profit_level):
+    """
+    Check if intraday low breached trailing stop
+
+    Same concept as initial stop - catches breaches same day even if close recovered
+
+    Args:
+        low_price: Day's low price
+        local_max: Local maximum price for trailing
+        profit_level: Current profit level (1, 2, or 3)
+
+    Returns:
+        dict with exit signal or None
+    """
+    if profit_level == 0:
+        return None  # No trailing before Level 1
+
+    # Determine trailing stop percentage
+    if profit_level == 1:
+        trail_pct = ExitConfig.TRAILING_STOP_LEVEL_1
+    elif profit_level == 2:
+        trail_pct = ExitConfig.TRAILING_STOP_LEVEL_2
+    else:  # Level 3
+        trail_pct = ExitConfig.TRAILING_STOP_LEVEL_3
+
+    trail_stop_price = local_max * (1 - trail_pct / 100)
+
+    if low_price <= trail_stop_price:
+        return {
+            'type': 'full_exit',
+            'reason': f'intraday_trailing_breach_level_{profit_level}',
+            'sell_pct': 100.0,
+            'message': f'🚨 Intraday Trail Breach L{profit_level}: Low ${low_price:.2f} hit trail ${trail_stop_price:.2f} ({trail_pct:.0f}% from peak ${local_max:.2f})'
         }
 
     return None
@@ -322,25 +373,36 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         level_1_lock_price = metadata.get('level_1_lock_price', None)
         level_2_lock_price = metadata.get('level_2_lock_price', None)
 
-        # CHECK EXIT CONDITIONS
+        # Get today's low price for intraday breach detection
+        low_price = data.get('low', current_price)
+
+        # CHECK EXIT CONDITIONS (Priority Order)
         exit_signal = None
 
-        # 1. Initial emergency stop (only before Level 1)
+        # PRIORITY 1: Intraday stop breach (catches breaches same day)
         if profit_level == 0:
-            exit_signal = check_initial_emergency_stop(
-                pnl_pct=pnl_pct,
-                current_price=current_price,
-                entry_price=broker_entry_price
+            exit_signal = check_intraday_stop_breach(
+                low_price=low_price,
+                entry_price=broker_entry_price,
+                stop_threshold=ExitConfig.INITIAL_EMERGENCY_STOP
             )
 
-        # 2. Profit taking
+        # PRIORITY 2: Intraday trailing breach (for positions past Level 1)
+        if not exit_signal and profit_level > 0:
+            exit_signal = check_intraday_trailing_breach(
+                low_price=low_price,
+                local_max=local_max,
+                profit_level=profit_level
+            )
+
+        # PRIORITY 3: Profit taking (if no intraday breach)
         if not exit_signal:
             exit_signal = check_profit_taking(
                 pnl_pct=pnl_pct,
                 profit_level=profit_level
             )
 
-        # 3. Emergency exit per level (overrides trailing)
+        # PRIORITY 4: Emergency exit per level (overrides trailing)
         if not exit_signal and profit_level > 0:
             exit_signal = check_emergency_exit_per_level(
                 profit_level=profit_level,
@@ -350,7 +412,15 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
                 level_2_lock_price=level_2_lock_price
             )
 
-        # 4. Trailing stop (only if no emergency)
+        # PRIORITY 5: Close-based initial stop (fallback if no intraday breach)
+        if not exit_signal and profit_level == 0:
+            exit_signal = check_initial_emergency_stop(
+                pnl_pct=pnl_pct,
+                current_price=current_price,
+                entry_price=broker_entry_price
+            )
+
+        # PRIORITY 6: Close-based trailing stop (fallback)
         if not exit_signal and profit_level > 0:
             exit_signal = check_trailing_stop(
                 profit_level=profit_level,
