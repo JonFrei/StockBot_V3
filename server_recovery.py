@@ -2,7 +2,7 @@
 State Persistence - Dual Mode (PostgreSQL for live, in-memory for backtesting)
 WITH INTEGRATED POSITION RECONCILIATION
 
-SIMPLIFIED: Removed stock rotation system
+UPDATED: Removed DrawdownProtection, kept only essential state
 """
 
 from datetime import datetime
@@ -32,20 +32,8 @@ class StatePersistence:
         try:
             cursor = conn.cursor()
 
-            # Save bot state (simplified - no rotation)
-            cursor.execute("""
-                UPDATE bot_state SET
-                    portfolio_peak = %s,
-                    drawdown_protection_active = %s,
-                    drawdown_protection_end_date = %s,
-                    updated_at = %s
-                WHERE id = 1
-            """, (
-                strategy.drawdown_protection.portfolio_peak,
-                strategy.drawdown_protection.protection_active,
-                strategy.drawdown_protection.protection_end_date,
-                datetime.now()
-            ))
+            # Note: We no longer save drawdown_protection state
+            # The new regime detector is stateless - it rebuilds from recent data
 
             # Clear and save position metadata
             cursor.execute("DELETE FROM position_metadata")
@@ -80,16 +68,7 @@ class StatePersistence:
     def _save_state_memory(self, strategy):
         """Save to in-memory database"""
 
-        # Save bot state (simplified)
-        self.db.update_bot_state(
-            portfolio_peak=strategy.drawdown_protection.portfolio_peak,
-            drawdown_protection_active=strategy.drawdown_protection.protection_active,
-            drawdown_protection_end_date=strategy.drawdown_protection.protection_end_date,
-            last_rotation_date=None,
-            last_rotation_week=None,
-            rotation_count=0,
-            ticker_awards={}
-        )
+        # Note: Regime detector state not saved - it rebuilds naturally
 
         # Save position metadata
         self.db.clear_all_position_metadata()
@@ -123,17 +102,11 @@ class StatePersistence:
             print(f"🔄 RESTORING STATE FROM DATABASE")
             print(f"{'=' * 80}")
 
-            # Load bot state
-            cursor.execute("SELECT * FROM bot_state WHERE id = 1")
-            state = cursor.fetchone()
-
-            if state:
-                # Restore drawdown protection
-                if state[1]:  # portfolio_peak
-                    strategy.drawdown_protection.portfolio_peak = float(state[1])
-                    strategy.drawdown_protection.protection_active = state[2]
-                    strategy.drawdown_protection.protection_end_date = state[3]
-                    print(f"✅ Drawdown Protection: Peak ${state[1]:,.2f}")
+            # Note: Regime detector state is NOT loaded
+            # It rebuilds naturally from:
+            # - Recent stop losses (tracked in closed_trades table)
+            # - SPY data (fetched fresh each iteration)
+            # - Distribution days (recalculated from SPY history)
 
             # Load position metadata
             cursor.execute("SELECT * FROM position_metadata")
@@ -170,15 +143,6 @@ class StatePersistence:
         print(f"\n{'=' * 80}")
         print(f"🔄 RESTORING STATE FROM MEMORY (Backtest)")
         print(f"{'=' * 80}")
-
-        # Load bot state
-        state = self.db.get_bot_state()
-
-        if state['portfolio_peak']:
-            strategy.drawdown_protection.portfolio_peak = state['portfolio_peak']
-            strategy.drawdown_protection.protection_active = state['drawdown_protection_active']
-            strategy.drawdown_protection.protection_end_date = state['drawdown_protection_end_date']
-            print(f"✅ Drawdown Protection: Peak ${state['portfolio_peak']:,.2f}")
 
         # Load position metadata
         positions = self.db.get_all_position_metadata()

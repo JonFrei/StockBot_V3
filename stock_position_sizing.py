@@ -38,19 +38,16 @@ class SimplifiedSizingConfig:
 # SIMPLE POSITION SIZING - MAIN FUNCTION
 # =============================================================================
 
-def calculate_position_sizes(opportunities, portfolio_context):
+def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier=1.0):
     """
-    Simple position sizing with MIN_SHARES requirement
+    Simple position sizing with MIN_SHARES requirement and regime multiplier
 
-    NEW LOGIC:
-    1. Calculate ideal position sizes for all opportunities
-    2. If any position has < 10 shares: sort by stock price (expensive first)
-    3. Drop most expensive stocks until all remaining have 10+ shares
-    4. If only 1 stock left and still < 10 shares: skip trading
+    NEW: Accepts regime_multiplier from safeguard system (0.0 to 1.0)
 
     Args:
         opportunities: List of dicts with opportunity data
         portfolio_context: Dict with portfolio state
+        regime_multiplier: Multiplier from regime detector (default 1.0)
 
     Returns:
         List of position allocations with quantities (all with 10+ shares)
@@ -83,6 +80,7 @@ def calculate_position_sizes(opportunities, portfolio_context):
     print(f"Max Deployment (85%): ${cash_limit:,.0f}")
     print(f"Daily Limit (50%): ${daily_limit:,.0f}")
     print(f"Using: ${max_deployment:,.0f}")
+    print(f"Regime Multiplier: {regime_multiplier:.2f}x")  # NEW
     print(f"Opportunities: {len(opportunities)}")
     print(f"{'=' * 80}\n")
 
@@ -95,12 +93,11 @@ def calculate_position_sizes(opportunities, portfolio_context):
         signal_score = opp['score']
         data = opp['data']
 
-        # Calculate position size with all multipliers
-        regime_mult = opp['regime'].get('position_size_multiplier', 1.0)
+        # Calculate position size with all multipliers INCLUDING regime
         vol_mult = opp['vol_metrics'].get('position_multiplier', 1.0)
-        stock_mult = opp.get('stock_regime_mult', 1.0)
 
-        position_pct = SimplifiedSizingConfig.BASE_POSITION_PCT * regime_mult * stock_mult
+        # NEW: Apply regime multiplier to base position size
+        position_pct = SimplifiedSizingConfig.BASE_POSITION_PCT * regime_multiplier * vol_mult
 
         # Apply bounds
         position_pct = max(1.0, min(position_pct, SimplifiedSizingConfig.MAX_POSITION_PCT))
@@ -122,9 +119,8 @@ def calculate_position_sizes(opportunities, portfolio_context):
             'position_pct': position_pct,
             'signal_score': signal_score,
             'signal_type': opp['signal_type'],
-            'regime_mult': opp['regime'].get('position_size_multiplier', 1.0),
-            'vol_mult': opp['vol_metrics'].get('position_multiplier', 1.0),
-            'stock_mult': opp.get('stock_regime_mult', 1.0)
+            'regime_mult': regime_multiplier,  # NEW: Track for display
+            'vol_mult': opp['vol_metrics'].get('position_multiplier', 1.0)
         })
 
     if not allocations:
@@ -350,10 +346,11 @@ def display_allocations(allocations, portfolio_value, total_cost):
         price = f"${alloc['price']:.2f}"
         cost = f"${alloc['cost']:,.0f}"
 
-        # Multipliers breakdown
-        stock_mult = alloc.get('stock_mult', 1.0)
-        total_mult = alloc['regime_mult'] * alloc['vol_mult'] * stock_mult
-        mults = f"R:{alloc['regime_mult']:.2f} V:{alloc['vol_mult']:.2f} H:{stock_mult:.2f} = {total_mult:.2f}x"
+        # Multipliers breakdown (regime × volatility)
+        regime_mult = alloc.get('regime_mult', 1.0)
+        vol_mult = alloc.get('vol_mult', 1.0)
+        total_mult = regime_mult * vol_mult
+        mults = f"R:{regime_mult:.2f} × V:{vol_mult:.2f} = {total_mult:.2f}x"
 
         print(f"{alloc['ticker']:<8} {signal:<20} {score:<7} {shares:<8} {price:<10} {cost:<14} {mults}")
 

@@ -1,10 +1,11 @@
 """
-SwingTradeStrategy - WITH VIX DETECTION AND REGIME EVENT TRACKING
+SwingTradeStrategy - WITH NEW PROFESSIONAL SAFEGUARD SYSTEM
 
 UPDATED:
-- VIX data fetched and passed to regime detection
-- current_date passed for event tracking
-- regime_detector passed to final summary
+- Replaced DrawdownProtection with MarketRegimeDetector
+- Integrated Distribution Days, Sequential Stops, SPY Extension tracking
+- Added stop loss recording to regime detector
+- Applied regime position size multipliers
 """
 
 from lumibot.strategies import Strategy
@@ -19,8 +20,8 @@ from stock_rotation import StockRotator, should_rotate
 
 from server_recovery import save_state_safe, load_state_safe
 
-# INTEGRATED IMPORTS
-import account_drawdown_protection
+# UPDATED IMPORTS
+from account_drawdown_protection import MarketRegimeDetector, SafeguardConfig, format_regime_display
 import account_broker_data
 
 from lumibot.brokers import Alpaca
@@ -31,7 +32,7 @@ broker = Alpaca(Config.get_alpaca_config())
 class SwingTradeStrategy(Strategy):
 
     def initialize(self, send_emails=True):
-        """Initialize strategy with simplified systems"""
+        """Initialize strategy with new safeguard system"""
         if Config.BACKTESTING:
             self.sleeptime = "1D"
         else:
@@ -45,8 +46,8 @@ class SwingTradeStrategy(Strategy):
         self.order_logger = account_profit_tracking.OrderLogger(self)
         self.position_monitor = stock_position_monitoring.PositionMonitor(self)
 
-        # Drawdown protection
-        self.regime_detector = account_drawdown_protection.MarketRegimeDetector()
+        # NEW: Market safeguard system (replaces DrawdownProtection)
+        self.regime_detector = MarketRegimeDetector()
 
         # Signal processor
         self.signal_processor = stock_signals.SignalProcessor()
@@ -59,7 +60,6 @@ class SwingTradeStrategy(Strategy):
         print(f"   Available Signals: {', '.join(stock_signals.BUY_STRATEGIES.keys())}")
         print(f"✅ Market Safeguard: 3-technique system (Distribution Days, Sequential Stops, SPY Extension)")
         print(f"✅ Position Sizing: Simplified formula (base × score × regime × volatility)")
-        print(f"✅ Regime Detection: VIX Spike + Overextension + Bear Market + Death Cross")
         print(f"✅ Stock Rotation: 3-tier system (premium 1.5x / standard 1.0x / frozen blocked)")
 
         if not Config.BACKTESTING:
@@ -130,43 +130,46 @@ class SwingTradeStrategy(Strategy):
             print('Cash Balance:', self.get_cash())
 
             # =================================================================
-            # DRAWDOWN PROTECTION
-            # =================================================================
-
-            if self.drawdown_protection.should_trigger(self.portfolio_value):
-                try:
-                    self.drawdown_protection.activate(
-                        strategy=self,
-                        current_date=current_date,
-                        position_monitor=self.position_monitor
-                    )
-                    execution_tracker.record_action('drawdown_protection')
-                except Exception as e:
-                    execution_tracker.add_error("Drawdown Protection Activation", e)
-
-                execution_tracker.complete('SUCCESS')
-                if not Config.BACKTESTING:
-                    account_email_notifications.send_daily_summary_email(
-                        self, current_date, execution_tracker
-                    )
-                return
-
-            if self.drawdown_protection.is_in_recovery(current_date):
-                self.drawdown_protection.print_status(self.portfolio_value, current_date)
-                execution_tracker.add_warning("In drawdown recovery period - no new positions")
-
-            # =================================================================
-            # FETCH DATA (INCLUDING VIX)
+            # FETCH DATA (INCLUDING SPY FOR SAFEGUARD SYSTEM)
             # =================================================================
 
             try:
-                # UPDATED: Add VIX to ticker list
-                all_tickers = list(set(self.tickers + ['SPY', 'VIX'] + [p.symbol for p in self.get_positions()]))
+                # Fetch all data including SPY
+                all_tickers = list(set(self.tickers + ['SPY'] + [p.symbol for p in self.get_positions()]))
                 all_stock_data = stock_data.process_data(all_tickers, current_date)
 
-                # UPDATED: Extract VIX data
-                spy_data = all_stock_data.get('SPY', {}).get('indicators', None) if 'SPY' in all_stock_data else None
-                vix_data = all_stock_data.get('VIX', {}).get('indicators', None) if 'VIX' in all_stock_data else None
+                # Extract SPY data for regime detection
+                if 'SPY' in all_stock_data:
+                    spy_indicators = all_stock_data['SPY']['indicators']
+                    spy_raw = all_stock_data['SPY'].get('raw')
+
+                    # Get current values
+                    spy_close = spy_indicators['close']
+                    spy_50_sma = spy_indicators['ema50']  # Use EMA50 as proxy
+                    spy_200_sma = spy_indicators['sma200']
+
+                    # Get previous day data for distribution day tracking
+                    if spy_raw is not None and len(spy_raw) >= 2:
+                        spy_prev_close = spy_raw['close'].iloc[-2]
+                        spy_volume = spy_raw['volume'].iloc[-1]
+                        spy_prev_volume = spy_raw['volume'].iloc[-2]
+                    else:
+                        spy_prev_close = None
+                        spy_volume = None
+                        spy_prev_volume = None
+
+                    # Update regime detector
+                    self.regime_detector.update_spy(
+                        current_date,
+                        spy_close,
+                        spy_50_sma,
+                        spy_200_sma,
+                        spy_prev_close,
+                        spy_volume,
+                        spy_prev_volume
+                    )
+                else:
+                    print(f"[WARN] No SPY data - safeguard system operating in degraded mode")
 
             except Exception as e:
                 execution_tracker.add_error("Data Fetch", e)
@@ -178,62 +181,60 @@ class SwingTradeStrategy(Strategy):
                 return
 
             # =================================================================
-            # MARKET REGIME DETECTION (WITH VIX AND EVENT TRACKING)
+            # NEW MARKET SAFEGUARD SYSTEM (REPLACES DRAWDOWN PROTECTION)
             # =================================================================
 
             try:
-                # UPDATED: Pass VIX data and current_date for event tracking
-                global_regime_info = account_drawdown_protection.detect_market_regime(
-                    spy_data,
-                    vix_data=vix_data,
-                    stock_data=None,
-                    current_date=current_date
-                )
-                print(account_drawdown_protection.format_regime_display(global_regime_info))
+                # Get current regime status
+                num_positions = len(self.get_positions())
+                regime_result = self.regime_detector.detect_regime(num_positions, current_date)
 
-                # Early warning - Portfolio underperformance check
-                current_drawdown = self.drawdown_protection.calculate_drawdown(self.portfolio_value)
+                # Display regime status
+                print(format_regime_display(regime_result))
 
-                if current_drawdown <= -5.0 and global_regime_info.get('allow_trading', True):
-                    if spy_data:
-                        spy_close = spy_data.get('close', 0)
-                        spy_sma200 = spy_data.get('sma200', 0)
-                        spy_from_200 = ((spy_close - spy_sma200) / spy_sma200 * 100) if spy_sma200 > 0 else -100
+                # Handle exit signal
+                if regime_result['action'] == 'exit_all':
+                    print(f"\n🚨 SAFEGUARD EXIT: Closing all positions")
 
-                        if abs(spy_from_200) < 3.0:
-                            print(
-                                f"\n🔴 EARLY WARNING: Portfolio {current_drawdown:.1f}% drawdown while SPY only {spy_from_200:+.1f}% from 200 SMA")
-                            print(f"⚠️ Blocking new positions - portfolio underperforming market")
-                            print(f"No new positions will be opened.\n")
-
-                            execution_tracker.add_warning(
-                                f"Portfolio underperformance: {current_drawdown:.1f}% vs market")
-                            execution_tracker.complete('SUCCESS')
-                            if not Config.BACKTESTING:
-                                account_email_notifications.send_daily_summary_email(
-                                    self, current_date, execution_tracker
-                                )
-                            return
-
-                if not global_regime_info.get('allow_trading', True):
-                    print(f"\n⚠️ {global_regime_info['description']}")
-                    print(f"🚫 REGIME BLOCKED - FORCE CLOSING ALL POSITIONS")
-
-                    # Force exit ALL positions immediately
+                    # Force close all positions
                     positions = self.get_positions()
                     for position in positions:
                         ticker = position.symbol
                         qty = int(position.quantity)
                         if qty > 0:
-                            print(f"   🚪 Regime Exit: {ticker} x{qty}")
+                            print(f"   🚪 Safeguard Exit: {ticker} x{qty}")
                             sell_order = self.create_order(ticker, qty, 'sell')
                             self.submit_order(sell_order)
                             self.position_monitor.clean_position_metadata(ticker)
+
+                    execution_tracker.record_action('exits', count=num_positions)
+                    execution_tracker.record_action('drawdown_protection')
+                    execution_tracker.complete('SUCCESS')
+
+                    if not Config.BACKTESTING:
+                        account_email_notifications.send_daily_summary_email(
+                            self, current_date, execution_tracker
+                        )
+
+                    save_state_safe(self)
                     return
 
+                # Block new entries if not allowed
+                if not regime_result['allow_new_entries']:
+                    print(f"\n⚠️ New entries blocked by safeguard system")
+                    print(f"Reason: {regime_result['reason']}\n")
+
+                    execution_tracker.add_warning(f"Trading blocked: {regime_result['reason']}")
+
             except Exception as e:
-                execution_tracker.add_error("Market Regime Detection", e)
-                global_regime_info = {'allow_trading': True, 'position_size_multiplier': 1.0}
+                execution_tracker.add_error("Market Safeguard Detection", e)
+                # Default to safe mode on error
+                regime_result = {
+                    'action': 'caution',
+                    'position_size_multiplier': 0.75,
+                    'allow_new_entries': True,
+                    'reason': 'Safeguard error - operating in caution mode'
+                }
 
             # =================================================================
             # STEP 1: CHECK POSITIONS FOR EXITS
@@ -262,27 +263,16 @@ class SwingTradeStrategy(Strategy):
                 execution_tracker.add_error("Position Exit Processing", e)
 
             # =================================================================
-            # SKIP NEW POSITIONS IF IN RECOVERY OR REGIME BLOCKED
+            # SKIP NEW POSITIONS IF BLOCKED BY SAFEGUARD
             # =================================================================
 
-            if self.drawdown_protection.is_in_recovery(current_date):
-                print(f"⚠️ In drawdown recovery - no new positions")
+            if not regime_result['allow_new_entries']:
                 execution_tracker.complete('SUCCESS')
                 if not Config.BACKTESTING:
                     account_email_notifications.send_daily_summary_email(
                         self, current_date, execution_tracker
                     )
-                return
-
-            if not global_regime_info.get('allow_trading', True):
-                print(f"\n⚠️ {global_regime_info['description']}")
-                print(f"No new positions will be opened.\n")
-                execution_tracker.add_warning(f"Trading blocked: {global_regime_info['description']}")
-                execution_tracker.complete('SUCCESS')
-                if not Config.BACKTESTING:
-                    account_email_notifications.send_daily_summary_email(
-                        self, current_date, execution_tracker
-                    )
+                save_state_safe(self)
                 return
 
             # =================================================================
@@ -322,14 +312,8 @@ class SwingTradeStrategy(Strategy):
                         print(f"   ⚠️ {ticker} BLOCKED: {vol_metrics['risk_class'].upper()} volatility")
                         continue
 
-                    # Check regime for this ticker
-                    ticker_regime = account_drawdown_protection.detect_market_regime(spy_data, vix_data,
-                                                                                     stock_data=data)
-                    if not ticker_regime.get('allow_trading', True):
-                        continue
-
                     # Process through centralized scoring system
-                    signal_result = self.signal_processor.process_ticker(ticker, data, spy_data)
+                    signal_result = self.signal_processor.process_ticker(ticker, data, None)
 
                     if signal_result['action'] == 'buy':
                         winning_score = signal_result['score']
@@ -346,14 +330,6 @@ class SwingTradeStrategy(Strategy):
                         print(f"🟢 SIGNAL: {ticker} - {signal_result['signal_type']} (Score: {winning_score:.0f}/100)")
                         print(f"   Competition: {competition_str}")
 
-                        # Stock health check (blocks weak stocks even in strong market)
-                        allow_entry, stock_mult, stock_reason = account_drawdown_protection.check_stock_regime(ticker,
-                                                                                                               data)
-                        print(f"   {stock_reason}")
-
-                        if not allow_entry:
-                            continue  # Skip this stock
-
                         all_opportunities.append({
                             'ticker': ticker,
                             'signal_type': signal_result['signal_type'],
@@ -361,9 +337,7 @@ class SwingTradeStrategy(Strategy):
                             'score': winning_score,
                             'all_scores': all_scores,
                             'data': data,
-                            'regime': ticker_regime,
                             'vol_metrics': vol_metrics,
-                            'stock_regime_mult': stock_mult,
                             'rotation_mult': self.stock_rotator.get_multiplier(ticker),
                             'rotation_award': self.stock_rotator.get_award(ticker),
                             'source': 'scored'
@@ -382,7 +356,7 @@ class SwingTradeStrategy(Strategy):
                 print(f"   (No signals above threshold of {stock_signals.SignalConfig.MIN_SCORE_THRESHOLD})")
 
             # =================================================================
-            # STEP 3: SIMPLIFIED POSITION SIZING
+            # STEP 3: POSITION SIZING WITH REGIME MULTIPLIER
             # =================================================================
 
             if not all_opportunities:
@@ -392,6 +366,7 @@ class SwingTradeStrategy(Strategy):
                     account_email_notifications.send_daily_summary_email(
                         self, current_date, execution_tracker
                     )
+                save_state_safe(self)
                 return
 
             try:
@@ -405,6 +380,7 @@ class SwingTradeStrategy(Strategy):
                         account_email_notifications.send_daily_summary_email(
                             self, current_date, execution_tracker
                         )
+                    save_state_safe(self)
                     return
 
                 if portfolio_context['available_slots'] <= 0:
@@ -415,9 +391,10 @@ class SwingTradeStrategy(Strategy):
                         account_email_notifications.send_daily_summary_email(
                             self, current_date, execution_tracker
                         )
+                    save_state_safe(self)
                     return
 
-                # Build opportunities for simplified position sizing
+                # Build opportunities for position sizing
                 sizing_opportunities = []
 
                 for opp in all_opportunities:
@@ -425,8 +402,8 @@ class SwingTradeStrategy(Strategy):
                     data = opp['data']
                     signal_score = opp['score']
 
-                    # Quality floor check (removed complex quality scoring)
-                    if signal_score < 60:  # Signal processor already enforces this
+                    # Quality floor check
+                    if signal_score < 60:
                         print(f"   ⚠️ {ticker}: Score {signal_score:.0f}/100 below threshold - SKIPPED")
                         continue
 
@@ -435,15 +412,17 @@ class SwingTradeStrategy(Strategy):
                         'data': data,
                         'score': signal_score,
                         'signal_type': opp['signal_type'],
-                        'regime': opp['regime'],
                         'vol_metrics': opp['vol_metrics'],
-                        'stock_regime_mult': opp.get('stock_regime_mult', 1.0)  # Stock health multiplier
                     })
 
-                # SIMPLIFIED POSITION SIZING (uses new calculate_position_sizes function)
+                # Get regime multiplier
+                regime_multiplier = regime_result['position_size_multiplier']
+
+                # POSITION SIZING with regime multiplier
                 allocations = stock_position_sizing.calculate_position_sizes(
                     sizing_opportunities,
-                    portfolio_context
+                    portfolio_context,
+                    regime_multiplier  # NEW: Pass regime multiplier
                 )
 
                 if not allocations:
@@ -454,6 +433,7 @@ class SwingTradeStrategy(Strategy):
                         account_email_notifications.send_daily_summary_email(
                             self, current_date, execution_tracker
                         )
+                    save_state_safe(self)
                     return
 
             except Exception as e:
@@ -485,9 +465,7 @@ class SwingTradeStrategy(Strategy):
                     print(f" 🟢 BUY: {ticker} x{quantity}")
                     print(f"        Signal: {signal_type} (Score: {signal_score:.0f}/100)")
                     print(f"        Price: ${price:.2f} | Cost: ${cost:,.2f} ({alloc['pct_portfolio']:.1f}%)")
-                    stock_mult = alloc.get('stock_mult', 1.0)
-                    print(
-                        f"        Multipliers: Regime {alloc['regime_mult']:.2f}x × Vol {alloc['vol_mult']:.2f}x × Health {stock_mult:.2f}x")
+                    print(f"        Multipliers: Regime {alloc['regime_mult']:.2f}x × Vol {alloc['vol_mult']:.2f}x")
                     print()
 
                     # Track position
@@ -543,10 +521,9 @@ class SwingTradeStrategy(Strategy):
             raise
 
     def on_strategy_end(self):
-        """Display final statistics with all components INCLUDING REGIME DETECTOR"""
+        """Display final statistics with safeguard system"""
         self.profit_tracker.display_final_summary(
             stock_rotator=self.stock_rotator,
-            drawdown_protection=self.drawdown_protection,
-            regime_detector=account_drawdown_protection.detector  # UPDATED: Pass detector
+            regime_detector=self.regime_detector  # NEW: Pass regime detector
         )
         return 0

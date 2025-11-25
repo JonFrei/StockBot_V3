@@ -217,7 +217,7 @@ class ProfitTracker:
             cursor.close()
             self.db.return_connection(conn)
 
-    def display_final_summary(self, stock_rotator=None, drawdown_protection=None, regime_detector=None):
+    def display_final_summary(self, stock_rotator=None, regime_detector=None):
         """
         Display comprehensive P&L summary with rotation, protection, and regime stats
 
@@ -270,13 +270,9 @@ class ProfitTracker:
         # Open positions
         self._display_open_positions(stock_rotator)
 
-        # Drawdown protection summary
-        if drawdown_protection:
-            self._display_drawdown_summary(drawdown_protection)
-
-        # Regime event summary (NEW)
+        # Safeguard system summary
         if regime_detector:
-            self._display_regime_summary(regime_detector)
+            self._display_safeguard_summary(regime_detector)
 
         # Rotation summary
         if stock_rotator:
@@ -284,49 +280,32 @@ class ProfitTracker:
 
         print(f"\n{'=' * 100}\n")
 
-    def _display_regime_summary(self, regime_detector):
-        """Display market regime event summary (NEW METHOD)"""
+    def _display_safeguard_summary(self, regime_detector):
+        """Display market safeguard system summary (NEW METHOD)"""
 
-        stats = regime_detector.get_regime_statistics()
+        stats = regime_detector.get_statistics()
 
         print(f"\n{'=' * 100}")
-        print(f"📊 MARKET REGIME EVENT SUMMARY")
+        print(f"🛡️ MARKET SAFEGUARD SUMMARY")
         print(f"{'=' * 100}")
-        print(f"   Total Regime Events: {stats['total_events']}")
-        print(f"   Current Regime: {stats['current_regime'].upper()}")
+        print(f"   Distribution Days: {stats['distribution_days']} (Level: {stats['distribution_level']})")
+        print(f"   Recent Stops (5d): {stats['recent_stops_5d']}")
+        print(f"   Recent Stops (10d): {stats['recent_stops_10d']}")
+        print(f"   SPY Extension: {stats['spy_extension']:.1f}% from 200 SMA")
 
-        if stats['last_check_date']:
-            print(f"   Last Check: {stats['last_check_date'].strftime('%Y-%m-%d')}")
+        if stats.get('spy_below_50') or stats.get('spy_below_200'):
+            print(f"\n   ⚠️  SPY MA Status:")
+            if stats['spy_below_50']:
+                print(f"      • Below 50 SMA")
+            if stats['spy_below_200']:
+                print(f"      • Below 200 SMA")
 
-        print(f"\n   🚨 Trading Blocks by Type:")
-        total_blocks = sum(stats['blocks_by_type'].values())
-
-        if total_blocks > 0:
-            for event_type, count in stats['blocks_by_type'].items():
-                if count > 0:
-                    print(f"      {event_type}: {count} time(s)")
-            print(f"      TOTAL BLOCKS: {total_blocks}")
+        if stats['in_recovery']:
+            print(f"\n   ⚠️  Currently in recovery period")
+            if stats['exit_date']:
+                print(f"   Exit Date: {stats['exit_date'].strftime('%Y-%m-%d')}")
         else:
-            print(f"      No trading blocks (stable bull market)")
-
-        if stats['events']:
-            print(f"\n   📋 EVENT HISTORY:")
-            print(f"   {'─' * 96}")
-            print(f"   {'Date':<12} {'Event Type':<20} {'Transition':<25} {'Description'}")
-            print(f"   {'─' * 96}")
-
-            for event in stats['events']:
-                transition = f"{event['old_regime']} → {event['new_regime']}"
-                description = event['description'][:45]  # Truncate long descriptions
-
-                print(f"   {event['date'].strftime('%Y-%m-%d'):<12} "
-                      f"{event['event_type']:<20} "
-                      f"{transition:<25} "
-                      f"{description}")
-
-            print(f"   {'─' * 96}")
-        else:
-            print(f"\n   ✅ No regime transitions (stable bull market)")
+            print(f"\n   ✅ Safeguard system armed and monitoring")
 
         print(f"{'=' * 100}")
 
