@@ -3,6 +3,8 @@ PostgreSQL Database Connection and Schema
 Railway-optimized with connection pooling
 
 DUAL MODE: PostgreSQL for live, in-memory for backtesting
+
+UPDATED: Fixed position_metadata to use profit_level integer instead of boolean flags
 """
 
 import os
@@ -92,7 +94,7 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_closed_trades_signal_confirmation ON closed_trades(entry_signal, was_watchlisted);
             """)
 
-            # Position metadata table
+            # Position metadata table - UPDATED SCHEMA
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS position_metadata (
                     ticker VARCHAR(10) PRIMARY KEY,
@@ -100,9 +102,9 @@ class Database:
                     entry_signal VARCHAR(50) NOT NULL,
                     entry_score INTEGER DEFAULT 0,
                     highest_price DECIMAL(10, 2) NOT NULL,
-                    profit_level_1_locked BOOLEAN DEFAULT FALSE,
-                    profit_level_2_locked BOOLEAN DEFAULT FALSE,
-                    profit_level_3_locked BOOLEAN DEFAULT FALSE,
+                    profit_level INTEGER DEFAULT 0,
+                    level_1_lock_price DECIMAL(10, 2),
+                    level_2_lock_price DECIMAL(10, 2),
                     was_watchlisted BOOLEAN DEFAULT FALSE,
                     confirmation_date TIMESTAMP,
                     days_to_confirmation INTEGER DEFAULT 0,
@@ -577,19 +579,22 @@ class InMemoryDatabase:
                                 'is_blacklisted': row['is_blacklisted']}
                 for _, row in self.tickers_df.iterrows()}
 
-    # Position metadata operations
+    # Position metadata operations - UPDATED SIGNATURE
     def upsert_position_metadata(self, ticker, entry_date, entry_signal, entry_score,
-                                 highest_price, profit_level_1_locked, profit_level_2_locked,
-                                 profit_level_3_locked, was_watchlisted=False,
-                                 confirmation_date=None, days_to_confirmation=0):
+                                 highest_price, profit_level=0,
+                                 level_1_lock_price=None, level_2_lock_price=None,
+                                 was_watchlisted=False, confirmation_date=None,
+                                 days_to_confirmation=0):
+        """Save position metadata with profit_level as integer"""
         self.position_metadata[ticker] = {
             'entry_date': entry_date,
             'entry_signal': entry_signal,
             'entry_score': entry_score,
-            'highest_price': float(highest_price),
-            'profit_level_1_locked': profit_level_1_locked,
-            'profit_level_2_locked': profit_level_2_locked,
-            'profit_level_3_locked': profit_level_3_locked,
+            'highest_price': float(highest_price) if highest_price else 0,
+            'local_max': float(highest_price) if highest_price else 0,  # Alias
+            'profit_level': profit_level,  # INTEGER: 0, 1, 2, 3
+            'level_1_lock_price': float(level_1_lock_price) if level_1_lock_price else None,
+            'level_2_lock_price': float(level_2_lock_price) if level_2_lock_price else None,
             'was_watchlisted': was_watchlisted,
             'confirmation_date': confirmation_date,
             'days_to_confirmation': days_to_confirmation

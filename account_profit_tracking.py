@@ -1,7 +1,7 @@
 """
 Profit Tracking System - DUAL MODE (PostgreSQL for live, in-memory for backtesting)
 
-UPDATED: Final summary includes regime event tracking
+UPDATED: Final summary includes safeguard system statistics
 """
 
 from datetime import datetime
@@ -139,89 +139,11 @@ class ProfitTracker:
             cursor.close()
             self.db.return_connection(conn)
 
-    def get_signal_stats(self, signal_name, lookback=None):
-        """Get win/loss stats for a signal (PostgreSQL or in-memory)"""
-
-        if Config.BACKTESTING:
-            # In-memory calculation
-            trades = self.db.get_trades_by_signal(signal_name, lookback)
-
-            trade_count = len(trades)
-            if trade_count == 0:
-                return {
-                    'signal': signal_name,
-                    'trade_count': 0,
-                    'win_rate': 0.0,
-                    'total_pnl': 0.0,
-                    'avg_pnl': 0.0
-                }
-
-            wins = sum(1 for t in trades if t['pnl_dollars'] > 0)
-            total_pnl = sum(t['pnl_dollars'] for t in trades)
-            avg_pnl = total_pnl / trade_count
-            win_rate = (wins / trade_count * 100)
-
-            return {
-                'signal': signal_name,
-                'trade_count': trade_count,
-                'win_rate': round(win_rate, 2),
-                'total_pnl': round(total_pnl, 2),
-                'avg_pnl': round(avg_pnl, 2)
-            }
-
-        # PostgreSQL query
-        conn = self.db.get_connection()
-        try:
-            cursor = conn.cursor()
-
-            if lookback:
-                cursor.execute("""
-                    SELECT COUNT(*) as trade_count,
-                           SUM(CASE WHEN pnl_dollars > 0 THEN 1 ELSE 0 END) as wins,
-                           SUM(pnl_dollars) as total_pnl,
-                           AVG(pnl_dollars) as avg_pnl
-                    FROM (
-                        SELECT * FROM closed_trades
-                        WHERE entry_signal = %s
-                        ORDER BY exit_date DESC
-                        LIMIT %s
-                    ) recent
-                """, (signal_name, lookback))
-            else:
-                cursor.execute("""
-                    SELECT COUNT(*) as trade_count,
-                           SUM(CASE WHEN pnl_dollars > 0 THEN 1 ELSE 0 END) as wins,
-                           SUM(pnl_dollars) as total_pnl,
-                           AVG(pnl_dollars) as avg_pnl
-                    FROM closed_trades
-                    WHERE entry_signal = %s
-                """, (signal_name,))
-
-            row = cursor.fetchone()
-
-            trade_count = row[0] or 0
-            wins = row[1] or 0
-            total_pnl = float(row[2]) if row[2] else 0.0
-            avg_pnl = float(row[3]) if row[3] else 0.0
-            win_rate = (wins / trade_count * 100) if trade_count > 0 else 0.0
-
-            return {
-                'signal': signal_name,
-                'trade_count': trade_count,
-                'win_rate': round(win_rate, 2),
-                'total_pnl': round(total_pnl, 2),
-                'avg_pnl': round(avg_pnl, 2)
-            }
-
-        finally:
-            cursor.close()
-            self.db.return_connection(conn)
-
     def display_final_summary(self, stock_rotator=None, regime_detector=None):
         """
-        Display comprehensive P&L summary with rotation, protection, and regime stats
+        Display comprehensive P&L summary with rotation and safeguard stats
 
-        UPDATED: Now includes regime event tracking
+        UPDATED: Includes safeguard system statistics
         """
 
         closed_trades = self.get_closed_trades()
@@ -281,7 +203,7 @@ class ProfitTracker:
         print(f"\n{'=' * 100}\n")
 
     def _display_safeguard_summary(self, regime_detector):
-        """Display market safeguard system summary (NEW METHOD)"""
+        """Display market safeguard system summary"""
 
         stats = regime_detector.get_statistics()
 
@@ -513,31 +435,6 @@ class ProfitTracker:
 
         except Exception as e:
             print(f"\n⚠️ Could not retrieve open positions: {e}")
-
-    def _display_drawdown_summary(self, drawdown_protection):
-        """Display drawdown protection summary"""
-
-        stats = drawdown_protection.get_statistics()
-
-        print(f"\n{'=' * 100}")
-        print(f"🛡️ DRAWDOWN PROTECTION SUMMARY")
-        print(f"{'=' * 100}")
-        print(f"   Threshold: {stats['threshold_pct']:.1f}%")
-        print(f"   Recovery Period: {stats['recovery_days']} days")
-        print(f"   Times Triggered: {stats['trigger_count']}")
-        print(f"   Max Drawdown Seen: {stats['max_drawdown_seen']:.1f}%")
-
-        if stats['portfolio_peak']:
-            print(f"   Portfolio Peak: ${stats['portfolio_peak']:,.2f}")
-
-        if stats['protection_active']:
-            print(f"\n   ⚠️  Currently in protection mode")
-            if stats['protection_end_date']:
-                print(f"   Recovery ends: {stats['protection_end_date'].strftime('%Y-%m-%d')}")
-        else:
-            print(f"\n   ✅ Protection armed and monitoring")
-
-        print(f"{'=' * 100}")
 
     def _display_rotation_summary(self, stock_rotator):
         """Display stock rotation summary"""

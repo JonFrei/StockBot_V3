@@ -41,17 +41,17 @@ class StatePersistence:
                 cursor.execute("""
                     INSERT INTO position_metadata 
                     (ticker, entry_date, entry_signal, entry_score, highest_price, 
-                     profit_level_1_locked, profit_level_2_locked, profit_level_3_locked)
+                     profit_level, level_1_lock_price, level_2_lock_price)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     ticker,
                     meta['entry_date'],
                     meta['entry_signal'],
                     meta.get('entry_score', 0),
-                    meta['highest_price'],
-                    meta.get('profit_level_1_locked', False),
-                    meta.get('profit_level_2_locked', False),
-                    meta.get('profit_level_3_locked', False)
+                    meta.get('highest_price', meta.get('local_max', 0)),
+                    meta.get('profit_level', 0),  # INTEGER: 0, 1, 2, 3
+                    meta.get('level_1_lock_price'),
+                    meta.get('level_2_lock_price')
                 ))
 
             conn.commit()
@@ -78,10 +78,10 @@ class StatePersistence:
                 entry_date=meta['entry_date'],
                 entry_signal=meta['entry_signal'],
                 entry_score=meta.get('entry_score', 0),
-                highest_price=meta['highest_price'],
-                profit_level_1_locked=meta.get('profit_level_1_locked', False),
-                profit_level_2_locked=meta.get('profit_level_2_locked', False),
-                profit_level_3_locked=meta.get('profit_level_3_locked', False)
+                highest_price=meta.get('highest_price', meta.get('local_max', 0)),
+                profit_level=meta.get('profit_level', 0),  # INTEGER: 0, 1, 2, 3
+                level_1_lock_price=meta.get('level_1_lock_price'),
+                level_2_lock_price=meta.get('level_2_lock_price')
             )
 
     def load_state(self, strategy):
@@ -109,17 +109,19 @@ class StatePersistence:
             # - Distribution days (recalculated from SPY history)
 
             # Load position metadata
-            cursor.execute("SELECT * FROM position_metadata")
+            cursor.execute(
+                "SELECT ticker, entry_date, entry_signal, entry_score, highest_price, profit_level, level_1_lock_price, level_2_lock_price FROM position_metadata")
             positions = cursor.fetchall()
             for pos in positions:
                 strategy.position_monitor.positions_metadata[pos[0]] = {
                     'entry_date': pos[1],
                     'entry_signal': pos[2],
                     'entry_score': pos[3],
-                    'highest_price': float(pos[4]),
-                    'profit_level_1_locked': pos[5],
-                    'profit_level_2_locked': pos[6],
-                    'profit_level_3_locked': pos[7]
+                    'highest_price': float(pos[4]) if pos[4] else 0,
+                    'local_max': float(pos[4]) if pos[4] else 0,  # Alias for highest_price
+                    'profit_level': pos[5] if pos[5] else 0,  # INTEGER: 0, 1, 2, 3
+                    'level_1_lock_price': float(pos[6]) if pos[6] else None,
+                    'level_2_lock_price': float(pos[7]) if pos[7] else None
                 }
             print(f"✅ Position Metadata: {len(positions)} position(s)")
 
