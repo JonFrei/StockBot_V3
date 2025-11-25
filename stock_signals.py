@@ -2,6 +2,7 @@
 Stock Signal Generation with 0-100 Point Scoring System
 
 DEBUGGED VERSION - All signals tested for logic errors
+UPDATED: Tightened bollinger_buy parameters (Fix #5)
 """
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
@@ -59,7 +60,7 @@ class SignalConfig:
     GC_MIN_EMA50_SLOPE = 0.05
 
     # ===================================================================
-    # BOLLINGER_BUY: Loosened for more volume
+    # BOLLINGER_BUY: TIGHTENED (Fix #5)
     # ===================================================================
     BB_DISTANCE_FROM_LOWER_MAX = 2.5  # CHANGED from 4.0
     BB_RSI_MIN = 25
@@ -114,7 +115,7 @@ class SignalProcessor:
                 'action': 'buy',
                 'signal_type': best_signal,
                 'signal_data': best_result,
-                'score': best_score,  # ← ADD THIS LINE
+                'score': best_score,
                 'all_scores': all_scores
             }
 
@@ -122,8 +123,9 @@ class SignalProcessor:
             'action': 'skip',
             'signal_type': None,
             'signal_data': None,
-            'score': 0,  # ← ADD THIS LINE TOO
-            'all_scores': all_scores
+            'score': 0,
+            'all_scores': all_scores,
+            'reason': f'Best score {best_score:.0f} below threshold {SignalConfig.MIN_SCORE_THRESHOLD}'
         }
 
 
@@ -590,9 +592,9 @@ def golden_cross(data: IndicatorData) -> SignalResult:
 
 def bollinger_buy(data: IndicatorData) -> SignalResult:
     """
-    Bollinger Band Bounce - LOOSENED (Was 6 trades, 50% WR)
+    Bollinger Band Bounce - TIGHTENED (Fix #5)
 
-    Goal: Generate more volume (15-20 trades) while maintaining quality
+    Goal: Reduce losses by being more selective
 
     Scoring (0-100):
     - Band position (0-25)
@@ -639,16 +641,20 @@ def bollinger_buy(data: IndicatorData) -> SignalResult:
     if distance_from_lower > SignalConfig.BB_DISTANCE_FROM_LOWER_MAX:
         return _no_signal(f'Not close to band: {distance_from_lower:.1f}%')
 
+    # === NEW: REQUIRE DAILY BOUNCE (Fix #5) ===
+    if SignalConfig.BB_REQUIRE_DAILY_BOUNCE and daily_change_pct < 0:
+        return _no_signal('Not bouncing (daily change negative)')
+
     # === SCORING ===
 
     # 1. Band Position (0-25 points)
     if distance_from_lower <= 0.5:
         band_score = 25
-    elif distance_from_lower <= 1.5:
+    elif distance_from_lower <= 1.0:
         band_score = 22
-    elif distance_from_lower <= 2.5:
+    elif distance_from_lower <= 1.5:
         band_score = 18
-    elif distance_from_lower <= 3.5:
+    elif distance_from_lower <= 2.0:
         band_score = 14
     else:
         band_score = 10
@@ -732,18 +738,13 @@ def bollinger_buy(data: IndicatorData) -> SignalResult:
         score += bonus
         breakdown['momentum_bonus'] = bonus
 
-    # Small penalty if not bouncing (don't block)
-    if not SignalConfig.BB_REQUIRE_DAILY_BOUNCE and daily_change_pct < 0:
-        score -= 3
-        breakdown['not_bouncing_penalty'] = -3
-
     msg = f'🎪 Bollinger Bounce ({score:.0f}/100): {distance_from_lower:.1f}% from band, RSI {rsi:.0f}, Stoch {stoch_k:.0f}'
 
     return _create_signal_result(score, 'buy', msg, 'bollinger_buy', close, breakdown)
 
 
 # ===================================================================================
-# STRATEGY REGISTRY - REMOVED swing_trade_2
+# STRATEGY REGISTRY
 # ===================================================================================
 
 BUY_STRATEGIES: Dict[str, Any] = {

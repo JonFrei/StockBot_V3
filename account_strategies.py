@@ -5,6 +5,7 @@ Integrated Features:
 - Centralized 0-100 scoring for all signals
 - Best score wins (replaces priority-based)
 - Score tracking in trades and summaries
+- SIMPLIFIED: Removed stock rotation, cooldowns, and Level 3 special exits
 """
 
 from lumibot.strategies import Strategy
@@ -15,11 +16,10 @@ import stock_signals
 import stock_position_sizing
 import account_profit_tracking
 import stock_position_monitoring
-from stock_cooldown import TickerCooldown
+
 from server_recovery import save_state_safe, load_state_safe
 
 # INTEGRATED IMPORTS
-from stock_rotation import StockRotator
 import account_drawdown_protection
 import account_broker_data
 
@@ -43,24 +43,11 @@ class SwingTradeStrategy(Strategy):
         # Tracking systems
         self.profit_tracker = account_profit_tracking.ProfitTracker(self)
         self.order_logger = account_profit_tracking.OrderLogger(self)
-        self.metrics_recorder = account_profit_tracking.DailyMetricsRecorder(self)
         self.position_monitor = stock_position_monitoring.PositionMonitor(self)
-        self.ticker_cooldown = TickerCooldown(cooldown_days=1)
-
-        # Stock rotation
-        self.stock_rotator = StockRotator(
-            rotation_frequency='weekly',
-            profit_tracker=self.profit_tracker
-        )
-
-        # Rotation controls
-        self.idle_iterations_without_buys = 0
-        self.force_rotation_next_cycle = False
-        self.last_rotation_week = None
 
         # Drawdown protection
         self.drawdown_protection = account_drawdown_protection.create_default_protection(
-            threshold_pct=-8.0,  # CHANGED from -10.0
+            threshold_pct=-8.0,
             recovery_days=5
         )
 
@@ -71,8 +58,6 @@ class SwingTradeStrategy(Strategy):
         print(f"   Minimum Score Threshold: {stock_signals.SignalConfig.MIN_SCORE_THRESHOLD}")
         print(f"   Available Signals: {', '.join(stock_signals.BUY_STRATEGIES.keys())}")
         print(f"✅ Drawdown Protection: {self.drawdown_protection.threshold_pct:.1f}% threshold")
-        print(f"✅ Ticker Cooldown: {self.ticker_cooldown.cooldown_days} days")
-        print(f"✅ Stock Rotation: Weekly award-based system")
 
         if not Config.BACKTESTING:
             window_info = account_broker_data.get_trading_window_info()
@@ -143,13 +128,6 @@ class SwingTradeStrategy(Strategy):
             print('Portfolio Value:', self.portfolio_value)
             print('Cash Balance:', self.get_cash())
 
-            # Display active cooldowns
-            active_cooldowns = self.ticker_cooldown.get_all_cooldowns(current_date)
-            if active_cooldowns:
-                print(f"\n⏰ Active Cooldowns:")
-                for ticker, days_left in active_cooldowns:
-                    print(f"   {ticker}: {days_left} day(s) remaining")
-
             # =================================================================
             # DRAWDOWN PROTECTION
             # =================================================================
@@ -159,8 +137,7 @@ class SwingTradeStrategy(Strategy):
                     self.drawdown_protection.activate(
                         strategy=self,
                         current_date=current_date,
-                        position_monitor=self.position_monitor,
-                        ticker_cooldown=self.ticker_cooldown
+                        position_monitor=self.position_monitor
                     )
                     execution_tracker.record_action('drawdown_protection')
                 except Exception as e:
@@ -202,16 +179,15 @@ class SwingTradeStrategy(Strategy):
                 global_regime_info = account_drawdown_protection.detect_market_regime(spy_data)
                 print(account_drawdown_protection.format_regime_display(global_regime_info))
 
+                # === FIX #2: EARLY WARNING - Portfolio Underperformance Check ===
                 current_drawdown = self.drawdown_protection.calculate_drawdown(self.portfolio_value)
 
                 if current_drawdown <= -5.0 and global_regime_info.get('allow_trading', True):
-                    # Check if SPY is still near 200 SMA (market not officially bear yet)
                     if spy_data:
                         spy_close = spy_data.get('close', 0)
                         spy_sma200 = spy_data.get('sma200', 0)
                         spy_from_200 = ((spy_close - spy_sma200) / spy_sma200 * 100) if spy_sma200 > 0 else -100
 
-                        # If SPY within 3% of 200 SMA but we're down 5%+ = early warning
                         if abs(spy_from_200) < 3.0:
                             print(
                                 f"\n🔴 EARLY WARNING: Portfolio {current_drawdown:.1f}% drawdown while SPY only {spy_from_200:+.1f}% from 200 SMA")
@@ -243,7 +219,6 @@ class SwingTradeStrategy(Strategy):
 
                             # Clean tracking
                             self.position_monitor.clean_position_metadata(ticker)
-                            self.ticker_cooldown.clear(ticker)
                     return  # EXIT - No new positions
 
             except Exception as e:
@@ -267,8 +242,7 @@ class SwingTradeStrategy(Strategy):
                     exit_orders=exit_orders,
                     current_date=current_date,
                     position_monitor=self.position_monitor,
-                    profit_tracker=self.profit_tracker,
-                    ticker_cooldown=self.ticker_cooldown
+                    profit_tracker=self.profit_tracker
                 )
 
                 if exit_orders:
@@ -310,16 +284,11 @@ class SwingTradeStrategy(Strategy):
             print(f"{'=' * 80}")
 
             all_opportunities = []
-            signal_competition_log = []  # Track all scores for transparency
 
             for ticker in all_tickers:
                 try:
                     # Skip if already have position
                     if ticker in self.positions:
-                        continue
-
-                    # Skip if on cooldown
-                    if not self.ticker_cooldown.can_buy(ticker, current_date):
                         continue
 
                     # Get data
@@ -342,15 +311,6 @@ class SwingTradeStrategy(Strategy):
                     # === PROCESS THROUGH CENTRALIZED SCORING SYSTEM ===
                     signal_result = self.signal_processor.process_ticker(ticker, data, spy_data)
 
-                    # Log all scores for transparency
-                    if signal_result.get('all_scores'):
-                        signal_competition_log.append({
-                            'ticker': ticker,
-                            'scores': signal_result['all_scores'],
-                            'winner': signal_result.get('signal_type'),
-                            'action': signal_result['action']
-                        })
-
                     if signal_result['action'] == 'buy':
                         winning_score = signal_result['score']
                         all_scores = signal_result['all_scores']
@@ -371,7 +331,7 @@ class SwingTradeStrategy(Strategy):
                             'ticker': ticker,
                             'signal_type': signal_result['signal_type'],
                             'signal_data': signal_result['signal_data'],
-                            'score': winning_score,  # Store for position sizing
+                            'score': winning_score,
                             'all_scores': all_scores,
                             'data': data,
                             'regime': ticker_regime,
@@ -434,20 +394,19 @@ class SwingTradeStrategy(Strategy):
                 for opp in all_opportunities:
                     ticker = opp['ticker']
                     data = opp['data']
-                    signal_score = opp['score']  # Use centralized score
+                    signal_score = opp['score']
 
-                    # Calculate quality score (using signal score as base)
+                    # Calculate quality score
                     quality_score = stock_position_sizing.calculate_opportunity_quality(
                         ticker, data, spy_data, signal_count=1
                     )
 
+                    # === FIX #3: Quality floor ===
                     if quality_score < 40:
                         print(f"   ⚠️ {ticker}: Quality {quality_score:.0f}/100 too weak (below 40 floor) - SKIPPED")
                         continue
 
-                    # Get multipliers
-                    award = self.stock_rotator.get_award(ticker)
-                    award_multiplier = self.stock_rotator.get_award_multiplier(ticker)
+                    # Get multipliers (simplified - no awards)
                     regime_multiplier = opp['regime'].get('position_size_multiplier', 1.0)
                     volatility_multiplier = opp['vol_metrics'].get('position_multiplier', 1.0)
 
@@ -456,10 +415,10 @@ class SwingTradeStrategy(Strategy):
                         'data': data,
                         'buy_signal': opp['signal_data'],
                         'quality_score': quality_score,
-                        'signal_score': signal_score,  # NEW: Store signal score
+                        'signal_score': signal_score,
                         'signal_count': 1,
-                        'award': award,
-                        'award_multiplier': award_multiplier,
+                        'award': 'none',
+                        'award_multiplier': 1.0,  # No award system
                         'regime_multiplier': regime_multiplier,
                         'volatility_multiplier': volatility_multiplier,
                         'vol_metrics': opp['vol_metrics'],
@@ -513,16 +472,12 @@ class SwingTradeStrategy(Strategy):
                         continue
 
                     signal_type = opp['signal_type']
-                    signal_score = opp.get('signal_score', 0)  # Get signal score
+                    signal_score = opp.get('signal_score', 0)
 
-                    award_emoji = {
-                        'premium': '🥇', 'standard': '🥈', 'trial': '🔬',
-                        'none': '⚪', 'frozen': '❄️'
-                    }.get(alloc['award'], '❓')
-
+                    award_emoji = '⚪'
                     vol_display = opp['vol_metrics']['risk_class'].upper()
 
-                    print(f" 🟢 BUY: {ticker} x{quantity} [{award_emoji} {alloc['award'].upper()}]")
+                    print(f" 🟢 BUY: {ticker} x{quantity} [{award_emoji} STANDARD]")
                     print(f"        Signal: {signal_type} (Score: {signal_score:.0f}/100)")
                     print(f"        Quality: {alloc['quality_score']:.0f}/100 ({alloc['quality_tier']})")
                     print(f"        Price: ${price:.2f} | Cost: ${cost:,.2f} ({alloc['pct_portfolio']:.1f}%)")
@@ -534,15 +489,12 @@ class SwingTradeStrategy(Strategy):
                         ticker,
                         current_date,
                         signal_type,
-                        entry_score=signal_score  # Store signal score (0-100)
+                        entry_score=signal_score
                     )
 
                     # Submit order
                     order = self.create_order(ticker, quantity, 'buy')
                     self.submit_order(order)
-
-                    # Record in cooldown
-                    self.ticker_cooldown.record_buy(ticker, current_date)
 
                     # Log order WITH SIGNAL SCORE
                     if hasattr(self, 'order_logger'):
@@ -551,8 +503,8 @@ class SwingTradeStrategy(Strategy):
                             side='buy',
                             quantity=quantity,
                             signal_type=signal_type,
-                            award=alloc['award'],
-                            quality_score=signal_score  # Use signal score (0-100)
+                            award='standard',
+                            quality_score=signal_score
                         )
 
                     execution_tracker.record_action('entries', count=1)
@@ -587,41 +539,8 @@ class SwingTradeStrategy(Strategy):
     def on_strategy_end(self):
         """Display final statistics with signal scores"""
 
-        # self.profit_tracker.display_final_summary()
-
-        cooldown_stats = self.ticker_cooldown.get_statistics()
-        print(f"\n{'=' * 80}")
-        print(f"⏰ TICKER COOLDOWN STATISTICS")
-        print(f"{'=' * 80}")
-        print(f"Cooldown Period: {cooldown_stats['cooldown_days']} days")
-        print(f"Total Buys: {cooldown_stats['total_buys_recorded']}")
-        print(f"{'=' * 80}\n")
-
-        # Force final rotation to ensure awards are current
-        if self.stock_rotator.rotation_count > 0 or Config.BACKTESTING:
-            print(f"\n🔄 FINAL AWARD EVALUATION...")
-            try:
-                current_date = self.get_datetime()
-
-                # Fetch final data for SPY and all tickers
-                import stock_data
-                all_tickers = list(set(self.tickers + ['SPY']))
-                all_stock_data = stock_data.process_data(all_tickers, current_date)
-
-                # Run final rotation to update awards
-                self.stock_rotator.rotate_stocks(
-                    strategy=self,
-                    all_candidates=self.tickers,
-                    current_date=current_date,
-                    all_stock_data=all_stock_data
-                )
-            except Exception as e:
-                print(f"[WARN] Could not run final rotation: {e}")
-
-        from stock_rotation import print_rotation_report
-        print_rotation_report(self.stock_rotator)
-
         self.profit_tracker.display_final_summary()
+
         account_drawdown_protection.print_protection_summary(self.drawdown_protection)
 
         return 0
