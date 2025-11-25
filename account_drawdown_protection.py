@@ -83,7 +83,7 @@ def detect_market_regime(spy_data, stock_data=None):
     return {
         'allow_trading': True,
         'description': "None",
-        'warnings': "None"
+        'warnings': ["None"]
     }
 
 

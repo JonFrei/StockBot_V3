@@ -41,19 +41,6 @@ class SimplifiedSizingConfig:
 # =============================================================================
 
 def calculate_position_sizes(opportunities, portfolio_context):
-    """
-    Simple position sizing: base × signal_score × regime × volatility
-
-    No tiered scaling, no quality scoring, no complex allocation
-    Just straightforward: stronger signals = bigger positions
-
-    Args:
-        opportunities: List of dicts with opportunity data
-        portfolio_context: Dict with portfolio state
-
-    Returns:
-        List of position allocations with quantities
-    """
 
     if not opportunities:
         return []
@@ -151,35 +138,12 @@ def calculate_position_sizes(opportunities, portfolio_context):
 
 
 def calculate_simple_position_pct(signal_score, regime_multiplier, volatility_multiplier):
-    """
-    Simple position sizing formula
-
-    Base: 15%
-    Signal Score Factor: 0.8x to 1.2x (based on 60-100 score)
-    Regime Multiplier: 0.5x to 1.0x (from regime detection)
-    Volatility Multiplier: 0.5x to 1.0x (from volatility check)
-
-    Args:
-        signal_score: Signal score 60-100
-        regime_multiplier: Regime adjustment 0.5-1.0
-        volatility_multiplier: Volatility adjustment 0.5-1.0
-
-    Returns:
-        float: Position size as % of portfolio (5-20%)
-    """
 
     base_pct = SimplifiedSizingConfig.BASE_POSITION_PCT
 
-    # Score factor: 60 score = 0.8x, 100 score = 1.2x
-    # Linear scaling: (score - 60) / 100 gives 0 to 0.4, add 0.8 = 0.8 to 1.2
-    score_factor = 0.8 + (signal_score - 60) / 100
-
-    # Calculate final size
-    final_pct = base_pct * score_factor * regime_multiplier * volatility_multiplier
-
     # Apply bounds
     final_pct = max(SimplifiedSizingConfig.MIN_POSITION_PCT,
-                    min(final_pct, SimplifiedSizingConfig.MAX_POSITION_PCT))
+                    min(base_pct, SimplifiedSizingConfig.MAX_POSITION_PCT))
 
     return final_pct
 
