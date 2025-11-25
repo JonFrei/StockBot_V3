@@ -23,7 +23,7 @@ class SimplifiedSizingConfig:
     BASE_POSITION_PCT = 15.0
 
     # Position bounds
-    MIN_POSITION_PCT = 5.0  # Below this = skip
+    MIN_POSITION_PCT = 8.0  # Below this = skip
     MAX_POSITION_PCT = 20.0  # Single position limit
 
     # Portfolio constraints

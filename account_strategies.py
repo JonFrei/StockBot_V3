@@ -1,11 +1,10 @@
 """
-SwingTradeStrategy - WITH SIMPLIFIED SYSTEMS
+SwingTradeStrategy - WITH VIX DETECTION AND REGIME EVENT TRACKING
 
-Changes from previous version:
-- Uses simplified position sizing (calculate_position_sizes instead of calculate_independent_position_sizes)
-- Uses simplified regime detection (3 checks instead of 7)
-- Removed quality scoring (uses signal_score directly)
-- Cleaner, more maintainable code
+UPDATED:
+- VIX data fetched and passed to regime detection
+- current_date passed for event tracking
+- regime_detector passed to final summary
 """
 
 from lumibot.strategies import Strategy
@@ -63,7 +62,7 @@ class SwingTradeStrategy(Strategy):
         print(f"   Available Signals: {', '.join(stock_signals.BUY_STRATEGIES.keys())}")
         print(f"✅ Drawdown Protection: {self.drawdown_protection.threshold_pct:.1f}% threshold")
         print(f"✅ Position Sizing: Simplified formula (base × score × regime × volatility)")
-        print(f"✅ Regime Detection: Simplified (3 critical checks)")
+        print(f"✅ Regime Detection: VIX Spike + Overextension + Bear Market + Death Cross")
         print(f"✅ Stock Rotation: 3-tier system (premium 1.5x / standard 1.0x / frozen blocked)")
 
         if not Config.BACKTESTING:
@@ -160,13 +159,18 @@ class SwingTradeStrategy(Strategy):
                 execution_tracker.add_warning("In drawdown recovery period - no new positions")
 
             # =================================================================
-            # FETCH DATA
+            # FETCH DATA (INCLUDING VIX)
             # =================================================================
 
             try:
-                all_tickers = list(set(self.tickers + ['SPY'] + [p.symbol for p in self.get_positions()]))
+                # UPDATED: Add VIX to ticker list
+                all_tickers = list(set(self.tickers + ['SPY', 'VIX'] + [p.symbol for p in self.get_positions()]))
                 all_stock_data = stock_data.process_data(all_tickers, current_date)
+
+                # UPDATED: Extract VIX data
                 spy_data = all_stock_data.get('SPY', {}).get('indicators', None) if 'SPY' in all_stock_data else None
+                vix_data = all_stock_data.get('VIX', {}).get('indicators', None) if 'VIX' in all_stock_data else None
+
             except Exception as e:
                 execution_tracker.add_error("Data Fetch", e)
                 execution_tracker.complete('FAILED')
@@ -177,11 +181,17 @@ class SwingTradeStrategy(Strategy):
                 return
 
             # =================================================================
-            # SIMPLIFIED MARKET REGIME DETECTION (3 checks instead of 7)
+            # MARKET REGIME DETECTION (WITH VIX AND EVENT TRACKING)
             # =================================================================
 
             try:
-                global_regime_info = account_drawdown_protection.detect_market_regime(spy_data)
+                # UPDATED: Pass VIX data and current_date for event tracking
+                global_regime_info = account_drawdown_protection.detect_market_regime(
+                    spy_data,
+                    vix_data=vix_data,
+                    stock_data=None,
+                    current_date=current_date
+                )
                 print(account_drawdown_protection.format_regime_display(global_regime_info))
 
                 # Early warning - Portfolio underperformance check
@@ -210,7 +220,7 @@ class SwingTradeStrategy(Strategy):
 
                 if not global_regime_info.get('allow_trading', True):
                     print(f"\n⚠️ {global_regime_info['description']}")
-                    print(f"🚫 BEAR MARKET DETECTED - FORCE CLOSING ALL POSITIONS")
+                    print(f"🚫 REGIME BLOCKED - FORCE CLOSING ALL POSITIONS")
 
                     # Force exit ALL positions immediately
                     positions = self.get_positions()
@@ -218,7 +228,7 @@ class SwingTradeStrategy(Strategy):
                         ticker = position.symbol
                         qty = int(position.quantity)
                         if qty > 0:
-                            print(f"   🚪 Bear Market Exit: {ticker} x{qty}")
+                            print(f"   🚪 Regime Exit: {ticker} x{qty}")
                             sell_order = self.create_order(ticker, qty, 'sell')
                             self.submit_order(sell_order)
                             self.position_monitor.clean_position_metadata(ticker)
@@ -255,7 +265,7 @@ class SwingTradeStrategy(Strategy):
                 execution_tracker.add_error("Position Exit Processing", e)
 
             # =================================================================
-            # SKIP NEW POSITIONS IF IN RECOVERY OR BEAR MARKET
+            # SKIP NEW POSITIONS IF IN RECOVERY OR REGIME BLOCKED
             # =================================================================
 
             if self.drawdown_protection.is_in_recovery(current_date):
@@ -316,7 +326,8 @@ class SwingTradeStrategy(Strategy):
                         continue
 
                     # Check regime for this ticker
-                    ticker_regime = account_drawdown_protection.detect_market_regime(spy_data, stock_data=data)
+                    ticker_regime = account_drawdown_protection.detect_market_regime(spy_data, vix_data,
+                                                                                     stock_data=data)
                     if not ticker_regime.get('allow_trading', True):
                         continue
 
@@ -535,9 +546,10 @@ class SwingTradeStrategy(Strategy):
             raise
 
     def on_strategy_end(self):
-        """Display final statistics with all components"""
+        """Display final statistics with all components INCLUDING REGIME DETECTOR"""
         self.profit_tracker.display_final_summary(
             stock_rotator=self.stock_rotator,
-            drawdown_protection=self.drawdown_protection
+            drawdown_protection=self.drawdown_protection,
+            regime_detector=account_drawdown_protection.detector  # UPDATED: Pass detector
         )
         return 0

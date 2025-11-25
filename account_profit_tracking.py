@@ -1,12 +1,7 @@
 """
 Profit Tracking System - DUAL MODE (PostgreSQL for live, in-memory for backtesting)
 
-UPDATED: Final summary aligned with current architecture:
-- Stock rotation tiers (frozen/standard/premium)
-- Entry scores displayed
-- Removed watchlist references
-- Integrated drawdown protection summary
-- Better error handling for entry prices
+UPDATED: Final summary includes regime event tracking
 """
 
 from datetime import datetime
@@ -222,13 +217,11 @@ class ProfitTracker:
             cursor.close()
             self.db.return_connection(conn)
 
-    def display_final_summary(self, stock_rotator=None, drawdown_protection=None):
+    def display_final_summary(self, stock_rotator=None, drawdown_protection=None, regime_detector=None):
         """
-        Display comprehensive P&L summary with rotation and protection stats
+        Display comprehensive P&L summary with rotation, protection, and regime stats
 
-        Args:
-            stock_rotator: StockRotator instance (optional)
-            drawdown_protection: DrawdownProtection instance (optional)
+        UPDATED: Now includes regime event tracking
         """
 
         closed_trades = self.get_closed_trades()
@@ -281,11 +274,61 @@ class ProfitTracker:
         if drawdown_protection:
             self._display_drawdown_summary(drawdown_protection)
 
+        # Regime event summary (NEW)
+        if regime_detector:
+            self._display_regime_summary(regime_detector)
+
         # Rotation summary
         if stock_rotator:
             self._display_rotation_summary(stock_rotator)
 
         print(f"\n{'=' * 100}\n")
+
+    def _display_regime_summary(self, regime_detector):
+        """Display market regime event summary (NEW METHOD)"""
+
+        stats = regime_detector.get_regime_statistics()
+
+        print(f"\n{'=' * 100}")
+        print(f"📊 MARKET REGIME EVENT SUMMARY")
+        print(f"{'=' * 100}")
+        print(f"   Total Regime Events: {stats['total_events']}")
+        print(f"   Current Regime: {stats['current_regime'].upper()}")
+
+        if stats['last_check_date']:
+            print(f"   Last Check: {stats['last_check_date'].strftime('%Y-%m-%d')}")
+
+        print(f"\n   🚨 Trading Blocks by Type:")
+        total_blocks = sum(stats['blocks_by_type'].values())
+
+        if total_blocks > 0:
+            for event_type, count in stats['blocks_by_type'].items():
+                if count > 0:
+                    print(f"      {event_type}: {count} time(s)")
+            print(f"      TOTAL BLOCKS: {total_blocks}")
+        else:
+            print(f"      No trading blocks (stable bull market)")
+
+        if stats['events']:
+            print(f"\n   📋 EVENT HISTORY:")
+            print(f"   {'─' * 96}")
+            print(f"   {'Date':<12} {'Event Type':<20} {'Transition':<25} {'Description'}")
+            print(f"   {'─' * 96}")
+
+            for event in stats['events']:
+                transition = f"{event['old_regime']} → {event['new_regime']}"
+                description = event['description'][:45]  # Truncate long descriptions
+
+                print(f"   {event['date'].strftime('%Y-%m-%d'):<12} "
+                      f"{event['event_type']:<20} "
+                      f"{transition:<25} "
+                      f"{description}")
+
+            print(f"   {'─' * 96}")
+        else:
+            print(f"\n   ✅ No regime transitions (stable bull market)")
+
+        print(f"{'=' * 100}")
 
     def _display_signal_performance(self, closed_trades):
         """Display performance by signal WITH AVERAGE SCORES"""
