@@ -46,10 +46,7 @@ class SwingTradeStrategy(Strategy):
         self.position_monitor = stock_position_monitoring.PositionMonitor(self)
 
         # Drawdown protection
-        self.drawdown_protection = account_drawdown_protection.create_default_protection(
-            threshold_pct=-8.0,
-            recovery_days=5
-        )
+        self.regime_detector = account_drawdown_protection.MarketRegimeDetector()
 
         # Signal processor
         self.signal_processor = stock_signals.SignalProcessor()
@@ -60,7 +57,7 @@ class SwingTradeStrategy(Strategy):
         print(f"✅ Signal Processor: Centralized Scoring (0-100)")
         print(f"   Minimum Score Threshold: {stock_signals.SignalConfig.MIN_SCORE_THRESHOLD}")
         print(f"   Available Signals: {', '.join(stock_signals.BUY_STRATEGIES.keys())}")
-        print(f"✅ Drawdown Protection: {self.drawdown_protection.threshold_pct:.1f}% threshold")
+        print(f"✅ Market Safeguard: 3-technique system (Distribution Days, Sequential Stops, SPY Extension)")
         print(f"✅ Position Sizing: Simplified formula (base × score × regime × volatility)")
         print(f"✅ Regime Detection: VIX Spike + Overextension + Bear Market + Death Cross")
         print(f"✅ Stock Rotation: 3-tier system (premium 1.5x / standard 1.0x / frozen blocked)")
