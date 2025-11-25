@@ -1,10 +1,12 @@
 """
 Profit Tracking System - DUAL MODE (PostgreSQL for live, in-memory for backtesting)
 
-UPDATED: Fixed blacklist bug (Fix #1) - use get_closed_trades() method instead of .closed_trades attribute
-
-Records trades to database and queries for all summaries
-No in-memory accumulation in live mode
+UPDATED: Final summary aligned with current architecture:
+- Stock rotation tiers (frozen/standard/premium)
+- Entry scores displayed
+- Removed watchlist references
+- Integrated drawdown protection summary
+- Better error handling for entry prices
 """
 
 from datetime import datetime
@@ -220,10 +222,15 @@ class ProfitTracker:
             cursor.close()
             self.db.return_connection(conn)
 
-    def display_final_summary(self):
-        """Display P&L summary from database (works in both modes)"""
+    def display_final_summary(self, stock_rotator=None, drawdown_protection=None):
+        """
+        Display comprehensive P&L summary with rotation and protection stats
 
-        # === FIX #1: Use method instead of attribute ===
+        Args:
+            stock_rotator: StockRotator instance (optional)
+            drawdown_protection: DrawdownProtection instance (optional)
+        """
+
         closed_trades = self.get_closed_trades()
 
         if not closed_trades:
@@ -240,42 +247,45 @@ class ProfitTracker:
         avg_win = sum(t['pnl_dollars'] for t in winners) / len(winners) if winners else 0
         avg_loss = sum(t['pnl_dollars'] for t in losers) / len(losers) if losers else 0
 
-        # Display summary
-        mode = "From Memory (Backtest)" if Config.BACKTESTING else "From Database"
-        print(f"\n{'=' * 80}")
-        print(f"📊 FINAL P&L SUMMARY ({mode})")
-        print(f"{'=' * 80}\n")
+        # Display header
+        mode = "Memory (Backtest)" if Config.BACKTESTING else "Database"
+        print(f"\n{'=' * 100}")
+        print(f"📊 FINAL PERFORMANCE SUMMARY (Source: {mode})")
+        print(f"{'=' * 100}\n")
 
-        print(f"📈 CLOSED TRADES: {len(closed_trades)} trades")
-        print(f"   Winners: {len(winners)} trades")
-        print(f"   Losers:  {len(losers)} trades")
-        print(f"   Win Rate: {win_rate:.1f}%")
+        # Overall stats
+        print(f"📈 OVERALL STATISTICS:")
+        print(f"   Total Trades: {len(closed_trades)}")
+        print(f"   Winners: {len(winners)} ({win_rate:.1f}%)")
+        print(f"   Losers: {len(losers)}")
         print(f"   Total Realized P&L: ${total_realized:+,.2f}")
-        print(f"   Avg Win: ${avg_win:,.2f}")
-        print(f"   Avg Loss: ${avg_loss:,.2f}")
+        print(f"   Average Win: ${avg_win:,.2f}")
+        print(f"   Average Loss: ${avg_loss:,.2f}")
+        if winners and losers and avg_loss != 0:
+            profit_factor = abs(avg_win * len(winners) / (avg_loss * len(losers)))
+            print(f"   Profit Factor: {profit_factor:.2f}")
 
         # Signal performance
         self._display_signal_performance(closed_trades)
 
-        # Per-ticker performance
-        self._display_ticker_performance(closed_trades)
+        # Per-ticker performance with rotation tiers
+        self._display_ticker_performance(closed_trades, stock_rotator)
 
-        # Display last 75 trades
-        print(f"\n📋 Trade Details (Last 75):")
-        print(f"{'Ticker':<8} {'P&L':<16} {'Score':<8} {'Signal':<20} {'Exit'}")
-        print(f"{'-' * 80}")
+        # Trade details (last 75)
+        self._display_trade_details(closed_trades)
 
-        for t in closed_trades[:75]:
-            entry_score = t.get('entry_score', 0)
-            score_display = f"[{entry_score:.0f}]" if entry_score > 0 else "[--]"
-            pnl_str = f"${t['pnl_dollars']:+9,.2f} ({t['pnl_pct']:+6.2f}%)"
+        # Open positions
+        self._display_open_positions(stock_rotator)
 
-            print(f"{t['ticker']:<8} {pnl_str:<16} {score_display:<8} {t['entry_signal']:<20} {t['exit_signal']}")
+        # Drawdown protection summary
+        if drawdown_protection:
+            self._display_drawdown_summary(drawdown_protection)
 
-        # Display open positions
-        self._display_open_positions()
+        # Rotation summary
+        if stock_rotator:
+            self._display_rotation_summary(stock_rotator)
 
-        print(f"\n{'=' * 80}\n")
+        print(f"\n{'=' * 100}\n")
 
     def _display_signal_performance(self, closed_trades):
         """Display performance by signal WITH AVERAGE SCORES"""
@@ -307,7 +317,7 @@ class ProfitTracker:
                 signal_stats[signal]['score_count'] += 1
 
         print(f"\n🎯 PERFORMANCE BY ENTRY SIGNAL:")
-        print(f"{'─' * 90}")
+        print(f"{'─' * 100}")
 
         sorted_signals = sorted(signal_stats.items(), key=lambda x: x[1]['total_pnl'], reverse=True)
 
@@ -334,10 +344,10 @@ class ProfitTracker:
             print(f"      Avg Win: ${avg_win:,.2f}")
             print(f"      Avg Loss: ${avg_loss:,.2f}")
 
-        print(f"\n{'─' * 90}")
+        print(f"\n{'─' * 100}")
 
-    def _display_ticker_performance(self, closed_trades):
-        """Display performance by ticker"""
+    def _display_ticker_performance(self, closed_trades, stock_rotator=None):
+        """Display performance by ticker WITH ROTATION TIER"""
         from collections import defaultdict
 
         ticker_stats = defaultdict(lambda: {
@@ -360,12 +370,12 @@ class ProfitTracker:
                 ticker_stats[ticker]['losses'] += 1
 
         print(f"\n💰 PERFORMANCE BY TICKER:")
-        print(f"{'─' * 100}")
+        print(f"{'─' * 110}")
 
         sorted_tickers = sorted(ticker_stats.items(), key=lambda x: x[1]['total_pnl'], reverse=True)
 
-        print(f"{'Ticker':<8} {'Trades':<8} {'W/L':<10} {'Win Rate':<10} {'Total P&L':<15} {'Avg P&L'}")
-        print(f"{'─' * 100}")
+        print(f"{'Ticker':<8} {'Trades':<8} {'W/L':<10} {'Win Rate':<10} {'Total P&L':<15} {'Avg P&L':<15} {'Tier'}")
+        print(f"{'─' * 110}")
 
         for ticker, stats in sorted_tickers:
             total_trades = stats['trades']
@@ -375,10 +385,22 @@ class ProfitTracker:
 
             w_l_str = f"{stats['wins']}W/{stats['losses']}L"
 
-            print(f"{ticker:<8} {total_trades:<8} {w_l_str:<10} {win_rate:>5.1f}%     "
-                  f"${stats['total_pnl']:>+10,.2f}   ${avg_pnl:>+8,.2f} ({avg_pnl_pct:>+5.1f}%)")
+            # Get rotation tier
+            if stock_rotator:
+                tier = stock_rotator.get_award(ticker)
+                tier_emoji = {
+                    'premium': '🥇',
+                    'standard': '🥈',
+                    'frozen': '❄️'
+                }.get(tier, '❓')
+                tier_display = f"{tier_emoji} {tier}"
+            else:
+                tier_display = "N/A"
 
-        print(f"{'─' * 100}")
+            print(f"{ticker:<8} {total_trades:<8} {w_l_str:<10} {win_rate:>5.1f}%     "
+                  f"${stats['total_pnl']:>+10,.2f}   ${avg_pnl:>+8,.2f} ({avg_pnl_pct:>+5.1f}%)   {tier_display}")
+
+        print(f"{'─' * 110}")
 
         if sorted_tickers:
             best = sorted_tickers[0]
@@ -387,23 +409,55 @@ class ProfitTracker:
             print(f"\n🏆 BEST PERFORMER: {best[0]} (${best[1]['total_pnl']:+,.2f} from {best[1]['trades']} trades)")
             print(f"⚠️  WORST PERFORMER: {worst[0]} (${worst[1]['total_pnl']:+,.2f} from {worst[1]['trades']} trades)")
 
-    def _display_open_positions(self):
-        """Display current open positions"""
+    def _display_trade_details(self, closed_trades):
+        """Display last 75 trades with entry scores"""
+
+        print(f"\n📋 TRADE DETAILS (Last 75):")
+        print(f"{'─' * 100}")
+        print(f"{'Ticker':<8} {'P&L':<18} {'Score':<8} {'Signal':<22} {'Exit'}")
+        print(f"{'─' * 100}")
+
+        for t in closed_trades[:75]:
+            entry_score = t.get('entry_score', 0)
+            score_display = f"[{entry_score:.0f}]" if entry_score > 0 else "[--]"
+            pnl_str = f"${t['pnl_dollars']:+9,.2f} ({t['pnl_pct']:+6.2f}%)"
+
+            # Truncate long signal names
+            signal = t['entry_signal'][:20]
+            exit_reason = t['exit_signal'][:20]
+
+            print(f"{t['ticker']:<8} {pnl_str:<18} {score_display:<8} {signal:<22} {exit_reason}")
+
+        print(f"{'─' * 100}")
+
+    def _display_open_positions(self, stock_rotator=None):
+        """Display current open positions WITH ROTATION TIER"""
         try:
+            import account_broker_data
+
             positions = self.strategy.get_positions()
 
             if not positions or len(positions) == 0:
-                print(f"\n📊 No open positions")
+                print(f"\n📊 OPEN POSITIONS: None")
                 return
 
-            print(f"\n📊 OPEN POSITIONS: {len(positions)}")
+            print(f"\n📊 OPEN POSITIONS ({len(positions)}):")
+            print(f"{'─' * 110}")
+            print(f"{'Ticker':<8} {'Qty':<8} {'Entry':<12} {'Current':<12} {'P&L':<18} {'%':<10} {'Tier'}")
+            print(f"{'─' * 110}")
+
             total_unrealized = 0
 
             for position in positions:
                 ticker = position.symbol
-                quantity = int(position.quantity)
-                entry_price = float(getattr(position, 'avg_entry_price', None) or
-                                    getattr(position, 'avg_fill_price', 0))
+                quantity = account_broker_data.get_position_quantity(position, ticker)
+
+                # Use centralized utility for entry price
+                entry_price = account_broker_data.get_broker_entry_price(position, self.strategy, ticker)
+
+                if not account_broker_data.validate_entry_price(entry_price, ticker, min_price=0.01):
+                    print(f"{ticker:<8} {quantity:>6,}   Entry price unavailable")
+                    continue
 
                 try:
                     current_price = self.strategy.get_last_price(ticker)
@@ -411,16 +465,89 @@ class ProfitTracker:
                     unrealized_pct = ((current_price - entry_price) / entry_price * 100)
                     total_unrealized += unrealized_pnl
 
-                    print(f"   {ticker:6} | {quantity:,} shares @ ${entry_price:7.2f} | "
-                          f"Current: ${current_price:7.2f} | "
-                          f"P&L: ${unrealized_pnl:+,.2f} ({unrealized_pct:+.1f}%)")
-                except:
-                    print(f"   {ticker:6} | {quantity:,} shares @ ${entry_price:7.2f} | "
-                          f"(price unavailable)")
+                    # Get rotation tier
+                    if stock_rotator:
+                        tier = stock_rotator.get_award(ticker)
+                        tier_emoji = {
+                            'premium': '🥇',
+                            'standard': '🥈',
+                            'frozen': '❄️'
+                        }.get(tier, '❓')
+                        tier_display = f"{tier_emoji} {tier}"
+                    else:
+                        tier_display = "N/A"
 
-            print(f"\n   Total Unrealized P&L: ${total_unrealized:+,.2f}")
+                    pnl_str = f"${unrealized_pnl:+,.2f}"
+                    pct_str = f"{unrealized_pct:+.1f}%"
+
+                    print(f"{ticker:<8} {quantity:>6,}   ${entry_price:>8.2f}   ${current_price:>8.2f}   "
+                          f"{pnl_str:<18} {pct_str:<10} {tier_display}")
+
+                except Exception as e:
+                    print(f"{ticker:<8} {quantity:>6,}   ${entry_price:>8.2f}   (price unavailable)")
+
+            print(f"{'─' * 110}")
+            print(f"\nTotal Unrealized P&L: ${total_unrealized:+,.2f}")
+
         except Exception as e:
             print(f"\n⚠️ Could not retrieve open positions: {e}")
+
+    def _display_drawdown_summary(self, drawdown_protection):
+        """Display drawdown protection summary"""
+
+        stats = drawdown_protection.get_statistics()
+
+        print(f"\n{'=' * 100}")
+        print(f"🛡️ DRAWDOWN PROTECTION SUMMARY")
+        print(f"{'=' * 100}")
+        print(f"   Threshold: {stats['threshold_pct']:.1f}%")
+        print(f"   Recovery Period: {stats['recovery_days']} days")
+        print(f"   Times Triggered: {stats['trigger_count']}")
+        print(f"   Max Drawdown Seen: {stats['max_drawdown_seen']:.1f}%")
+
+        if stats['portfolio_peak']:
+            print(f"   Portfolio Peak: ${stats['portfolio_peak']:,.2f}")
+
+        if stats['protection_active']:
+            print(f"\n   ⚠️  Currently in protection mode")
+            if stats['protection_end_date']:
+                print(f"   Recovery ends: {stats['protection_end_date'].strftime('%Y-%m-%d')}")
+        else:
+            print(f"\n   ✅ Protection armed and monitoring")
+
+        print(f"{'=' * 100}")
+
+    def _display_rotation_summary(self, stock_rotator):
+        """Display stock rotation summary"""
+
+        stats = stock_rotator.get_statistics()
+
+        print(f"\n{'=' * 100}")
+        print(f"🏆 STOCK ROTATION SUMMARY")
+        print(f"{'=' * 100}")
+        print(f"   Total Rotations: {stats['rotation_count']}")
+        if stats['last_rotation_date']:
+            print(f"   Last Rotation: {stats['last_rotation_date'].strftime('%Y-%m-%d')}")
+        print(f"   Stocks Tracked: {stats['total_tracked']}")
+
+        print(f"\n   📊 Award Distribution:")
+        dist = stats['award_distribution']
+        print(f"      🥇 Premium (1.5x): {dist.get('premium', 0)}")
+        print(f"      🥈 Standard (1.0x): {dist.get('standard', 0)}")
+        print(f"      ❄️  Frozen (BLOCKED): {dist.get('frozen', 0)}")
+
+        if stats['frozen_stocks']:
+            print(f"\n   ❄️  Frozen Stocks: {', '.join(stats['frozen_stocks'])}")
+
+        if stats['recovery_tracking']:
+            print(f"\n   🔄 Recovery Progress:")
+            from stock_rotation import RotationConfig
+            for ticker, passes in stats['recovery_tracking'].items():
+                remaining = RotationConfig.RECOVERY_CONSECUTIVE_PASSES - passes
+                print(
+                    f"      {ticker}: {passes}/{RotationConfig.RECOVERY_CONSECUTIVE_PASSES} evaluations ({remaining} more needed)")
+
+        print(f"{'=' * 100}")
 
 
 # =============================================================================

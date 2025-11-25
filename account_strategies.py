@@ -535,7 +535,9 @@ class SwingTradeStrategy(Strategy):
             raise
 
     def on_strategy_end(self):
-        """Display final statistics"""
-        self.profit_tracker.display_final_summary()
-        account_drawdown_protection.print_protection_summary(self.drawdown_protection)
+        """Display final statistics with all components"""
+        self.profit_tracker.display_final_summary(
+            stock_rotator=self.stock_rotator,
+            drawdown_protection=self.drawdown_protection
+        )
         return 0
