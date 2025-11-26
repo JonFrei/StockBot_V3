@@ -1,5 +1,5 @@
 """
-Market Safeguard System - ENHANCED IBD-STYLE
+Market Safeguard System - ENHANCED IBD-STYLE + PORTFOLIO SAFEGUARDS
 
 Based on Investor's Business Daily methodology with improvements:
 1. Distribution Days: Institutional selling (down ≥0.4% on volume up ≥25%)
@@ -8,14 +8,20 @@ Based on Investor's Business Daily methodology with improvements:
 4. Options Expiration Filter: Skips monthly opex from distribution count
 5. Dual SMA Check: 50 SMA early warning, 200 SMA full stop
 
+NEW PORTFOLIO-LEVEL SAFEGUARDS:
+6. Portfolio Peak Drawdown: Stop buying if portfolio drops 5% from 30-day peak
+7. Scaled Stop Loss Counter: Caution mode if stop loss rate exceeds threshold
+
 Regime Priority:
-1. SPY below 200 SMA → STOP_BUYING
-2. SPY below 50 SMA → CAUTION (early warning)
-3. Net Distribution ≥ 6 → EXIT_ALL (wait for follow-through)
-4. Net Distribution 5 → STOP_BUYING
-5. Net Distribution 4 → WARNING (50% size)
-6. Net Distribution 3 → CAUTION (75% size)
-7. Otherwise → NORMAL
+1. Portfolio Peak Drawdown triggered → STOP_BUYING (5 days)
+2. Scaled Stop Loss Rate exceeded → CAUTION (5 days)
+3. SPY below 200 SMA → STOP_BUYING
+4. SPY below 50 SMA → CAUTION (early warning)
+5. Net Distribution ≥ 6 → EXIT_ALL (wait for follow-through)
+6. Net Distribution 5 → STOP_BUYING
+7. Net Distribution 4 → WARNING (50% size)
+8. Net Distribution 3 → CAUTION (75% size)
+9. Otherwise → NORMAL
 """
 
 from datetime import datetime, timedelta
@@ -52,13 +58,32 @@ class SafeguardConfig:
     # Early warning
     EARLY_WARNING_ENABLED = True  # Use 50 SMA as early warning
 
+    # ==========================================================================
+    # PORTFOLIO-LEVEL SAFEGUARDS (NEW)
+    # ==========================================================================
+
+    # Portfolio Peak Drawdown Circuit Breaker
+    PEAK_DRAWDOWN_ENABLED = True
+    PEAK_DRAWDOWN_THRESHOLD = 5.0  # Trigger if portfolio drops 5% from 30-day peak
+    PEAK_DRAWDOWN_LOOKBACK_DAYS = 30  # Rolling window for peak calculation
+    PEAK_DRAWDOWN_LOCKOUT_DAYS = 5  # Trading days to stay in STOP_BUYING
+    PEAK_DRAWDOWN_RECOVERY_PCT = 97.0  # Must recover to 97% of peak to reset
+
+    # Scaled Stop Loss Counter
+    STOP_LOSS_COUNTER_ENABLED = True
+    STOP_LOSS_LOOKBACK_DAYS = 7  # Rolling window for counting stop losses
+    STOP_LOSS_RATE_THRESHOLD = 30.0  # Trigger if 30%+ of positions stopped out
+    STOP_LOSS_MIN_COUNT = 2  # Minimum stop losses before rate applies
+    STOP_LOSS_LOCKOUT_DAYS = 5  # Trading days to stay in CAUTION
+
 
 class MarketRegimeDetector:
     """
-    Enhanced IBD-style market regime detection
+    Enhanced IBD-style market regime detection + Portfolio Safeguards
 
     Tracks both distribution AND accumulation days.
     Uses follow-through day for re-entry confirmation.
+    NEW: Portfolio peak drawdown and stop loss rate tracking.
     """
 
     def __init__(self):
@@ -86,6 +111,22 @@ class MarketRegimeDetector:
         self.exit_triggered = False
         self.exit_date = None
 
+        # ======================================================================
+        # NEW: Portfolio-Level Safeguard State
+        # ======================================================================
+
+        # Portfolio Peak Drawdown tracking
+        self.portfolio_history = []  # [{'date': date, 'value': float}]
+        self.peak_drawdown_triggered = False
+        self.peak_drawdown_trigger_date = None
+        self.peak_drawdown_lockout_end = None
+
+        # Stop Loss Counter tracking
+        self.recent_stop_losses = []  # [{'date': date, 'ticker': str, 'loss_pct': float}]
+        self.stop_loss_caution_triggered = False
+        self.stop_loss_trigger_date = None
+        self.stop_loss_lockout_end = None
+
     # =========================================================================
     # MAIN METHOD
     # =========================================================================
@@ -100,6 +141,8 @@ class MarketRegimeDetector:
         # Expire old days
         if current_date:
             self._expire_old_days(current_date)
+            self._expire_old_stop_losses(current_date)
+            self._expire_old_portfolio_history(current_date)
 
         # Get current state
         spy_below_200 = self._is_spy_below_200()
@@ -121,7 +164,11 @@ class MarketRegimeDetector:
             'in_rally_attempt': self.in_rally_attempt,
             'rally_day_count': self.rally_day_count,
             'follow_through_confirmed': self.follow_through_confirmed,
-            'in_recovery': self.exit_triggered
+            'in_recovery': self.exit_triggered,
+            # NEW: Portfolio safeguard details
+            'peak_drawdown_triggered': self.peak_drawdown_triggered,
+            'stop_loss_caution_triggered': self.stop_loss_caution_triggered,
+            'recent_stop_loss_count': len(self.recent_stop_losses),
         }
 
         # =================================================================
@@ -138,6 +185,37 @@ class MarketRegimeDetector:
             else:
                 # Still waiting for follow-through
                 return self._recovery_response(current_date, details)
+
+        # =================================================================
+        # PRIORITY 0: PORTFOLIO PEAK DRAWDOWN (NEW - HIGHEST PRIORITY)
+        # =================================================================
+        if SafeguardConfig.PEAK_DRAWDOWN_ENABLED:
+            drawdown_result = self._check_peak_drawdown(current_date)
+            if drawdown_result:
+                details['peak_drawdown_pct'] = drawdown_result.get('drawdown_pct', 0)
+                details['portfolio_peak'] = drawdown_result.get('peak_value', 0)
+                return {
+                    'action': 'stop_buying',
+                    'position_size_multiplier': SafeguardConfig.DANGER_SIZE_MULTIPLIER,
+                    'allow_new_entries': False,
+                    'reason': drawdown_result['reason'],
+                    'details': details
+                }
+
+        # =================================================================
+        # PRIORITY 0.5: SCALED STOP LOSS COUNTER (NEW)
+        # =================================================================
+        if SafeguardConfig.STOP_LOSS_COUNTER_ENABLED:
+            stop_loss_result = self._check_stop_loss_rate(num_positions, current_date)
+            if stop_loss_result:
+                details['stop_loss_rate'] = stop_loss_result.get('rate', 0)
+                return {
+                    'action': 'caution',
+                    'position_size_multiplier': SafeguardConfig.CAUTION_SIZE_MULTIPLIER,
+                    'allow_new_entries': False,
+                    'reason': stop_loss_result['reason'],
+                    'details': details
+                }
 
         # =================================================================
         # PRIORITY 1: SPY below 200 SMA (DrawdownProtection)
@@ -242,9 +320,220 @@ class MarketRegimeDetector:
         if self.in_rally_attempt:
             self._update_rally_attempt(date, spy_close, spy_prev_close, spy_volume, spy_prev_volume)
 
+    def update_portfolio_value(self, date, portfolio_value):
+        """
+        NEW: Update portfolio value for peak drawdown tracking
+
+        Args:
+            date: Current date
+            portfolio_value: Current portfolio value
+        """
+        if not SafeguardConfig.PEAK_DRAWDOWN_ENABLED:
+            return
+
+        # Normalize date
+        if hasattr(date, 'tzinfo') and date.tzinfo is not None:
+            date = date.replace(tzinfo=None)
+
+        # Add to history (avoid duplicates for same date)
+        self.portfolio_history = [
+            p for p in self.portfolio_history
+            if self._normalize_date(p['date']).date() != date.date()
+        ]
+        self.portfolio_history.append({'date': date, 'value': portfolio_value})
+
     def record_stop_loss(self, date, ticker, loss_pct):
-        """Kept for interface compatibility"""
-        pass
+        """
+        NEW: Record a stop loss for rate calculation
+
+        Args:
+            date: Date of stop loss
+            ticker: Stock symbol
+            loss_pct: Loss percentage (negative number)
+        """
+        if not SafeguardConfig.STOP_LOSS_COUNTER_ENABLED:
+            return
+
+        # Normalize date
+        if hasattr(date, 'tzinfo') and date.tzinfo is not None:
+            date = date.replace(tzinfo=None)
+
+        self.recent_stop_losses.append({
+            'date': date,
+            'ticker': ticker,
+            'loss_pct': loss_pct
+        })
+
+    # =========================================================================
+    # PORTFOLIO PEAK DRAWDOWN (NEW)
+    # =========================================================================
+
+    def _check_peak_drawdown(self, current_date):
+        """
+        Check if portfolio has dropped 5% from 30-day rolling peak
+
+        Returns:
+            dict with reason if triggered, None otherwise
+        """
+        # Check if still in lockout period
+        if self.peak_drawdown_triggered and self.peak_drawdown_lockout_end:
+            if current_date and current_date < self.peak_drawdown_lockout_end:
+                days_remaining = (self.peak_drawdown_lockout_end - current_date).days
+                return {
+                    'reason': f"Peak Drawdown lockout ({days_remaining}d remaining)",
+                    'drawdown_pct': 0,
+                    'peak_value': 0
+                }
+            else:
+                # Lockout expired - reset
+                self.peak_drawdown_triggered = False
+                self.peak_drawdown_trigger_date = None
+                self.peak_drawdown_lockout_end = None
+
+        # Need portfolio history to calculate
+        if len(self.portfolio_history) < 2:
+            return None
+
+        # Get current value (most recent entry)
+        current_value = self.portfolio_history[-1]['value']
+
+        # Calculate 30-day peak
+        peak_value = max(p['value'] for p in self.portfolio_history)
+
+        if peak_value <= 0:
+            return None
+
+        # Calculate drawdown percentage
+        drawdown_pct = ((peak_value - current_value) / peak_value) * 100
+
+        # Check threshold
+        if drawdown_pct >= SafeguardConfig.PEAK_DRAWDOWN_THRESHOLD:
+            # Trigger drawdown protection
+            self.peak_drawdown_triggered = True
+            self.peak_drawdown_trigger_date = current_date
+
+            # Calculate lockout end (5 trading days ≈ 7 calendar days)
+            if current_date:
+                self.peak_drawdown_lockout_end = current_date + timedelta(
+                    days=SafeguardConfig.PEAK_DRAWDOWN_LOCKOUT_DAYS + 2  # +2 for weekends
+                )
+
+            return {
+                'reason': f"Portfolio -{drawdown_pct:.1f}% from peak ${peak_value:,.0f} (threshold: -{SafeguardConfig.PEAK_DRAWDOWN_THRESHOLD}%)",
+                'drawdown_pct': drawdown_pct,
+                'peak_value': peak_value
+            }
+
+        # Check recovery (if previously triggered but now recovered)
+        if self.peak_drawdown_triggered:
+            recovery_threshold = peak_value * (SafeguardConfig.PEAK_DRAWDOWN_RECOVERY_PCT / 100)
+            if current_value >= recovery_threshold:
+                self.peak_drawdown_triggered = False
+                self.peak_drawdown_trigger_date = None
+                self.peak_drawdown_lockout_end = None
+
+        return None
+
+    def _expire_old_portfolio_history(self, current_date):
+        """Remove portfolio values older than lookback period"""
+        if not self.portfolio_history:
+            return
+
+        if hasattr(current_date, 'tzinfo') and current_date.tzinfo is not None:
+            current_date = current_date.replace(tzinfo=None)
+
+        cutoff = current_date - timedelta(days=SafeguardConfig.PEAK_DRAWDOWN_LOOKBACK_DAYS)
+
+        self.portfolio_history = [
+            p for p in self.portfolio_history
+            if self._normalize_date(p['date']) > cutoff
+        ]
+
+    # =========================================================================
+    # SCALED STOP LOSS COUNTER (NEW)
+    # =========================================================================
+
+    def _check_stop_loss_rate(self, num_positions, current_date):
+        """
+        Check if stop loss rate exceeds threshold
+
+        Rate = stop_losses / (current_positions + stop_losses)
+        This answers: "What % of positions got stopped out?"
+
+        Args:
+            num_positions: Current number of open positions
+            current_date: Current date
+
+        Returns:
+            dict with reason if triggered, None otherwise
+        """
+        # Check if still in lockout period
+        if self.stop_loss_caution_triggered and self.stop_loss_lockout_end:
+            if current_date and current_date < self.stop_loss_lockout_end:
+                days_remaining = (self.stop_loss_lockout_end - current_date).days
+                return {
+                    'reason': f"Stop Loss Caution lockout ({days_remaining}d remaining)",
+                    'rate': 0
+                }
+            else:
+                # Lockout expired - reset
+                self.stop_loss_caution_triggered = False
+                self.stop_loss_trigger_date = None
+                self.stop_loss_lockout_end = None
+
+        # Count recent stop losses
+        stop_loss_count = len(self.recent_stop_losses)
+
+        # Need minimum stop losses before checking rate
+        if stop_loss_count < SafeguardConfig.STOP_LOSS_MIN_COUNT:
+            return None
+
+        # Calculate denominator: positions we had = current + those stopped out
+        total_positions_base = num_positions + stop_loss_count
+
+        if total_positions_base <= 0:
+            return None
+
+        # Calculate rate
+        stop_loss_rate = (stop_loss_count / total_positions_base) * 100
+
+        # Check threshold
+        if stop_loss_rate >= SafeguardConfig.STOP_LOSS_RATE_THRESHOLD:
+            # Trigger caution mode
+            self.stop_loss_caution_triggered = True
+            self.stop_loss_trigger_date = current_date
+
+            # Calculate lockout end
+            if current_date:
+                self.stop_loss_lockout_end = current_date + timedelta(
+                    days=SafeguardConfig.STOP_LOSS_LOCKOUT_DAYS + 2  # +2 for weekends
+                )
+
+            # Get tickers for logging
+            tickers = [sl['ticker'] for sl in self.recent_stop_losses[-5:]]  # Last 5
+            ticker_str = ', '.join(tickers)
+
+            return {
+                'reason': f"Stop Loss Rate {stop_loss_rate:.0f}% ({stop_loss_count}/{total_positions_base}) - Recent: {ticker_str}",
+                'rate': stop_loss_rate
+            }
+
+        return None
+
+    def _expire_old_stop_losses(self, current_date):
+        """Remove stop losses older than lookback period"""
+        if not self.recent_stop_losses:
+            return
+
+        if hasattr(current_date, 'tzinfo') and current_date.tzinfo is not None:
+            current_date = current_date.replace(tzinfo=None)
+
+        cutoff = current_date - timedelta(days=SafeguardConfig.STOP_LOSS_LOOKBACK_DAYS)
+
+        self.recent_stop_losses = [
+            sl for sl in self.recent_stop_losses
+            if self._normalize_date(sl['date']) > cutoff
+        ]
 
     # =========================================================================
     # DISTRIBUTION / ACCUMULATION DETECTION
@@ -475,7 +764,13 @@ class MarketRegimeDetector:
             'rally_day_count': self.rally_day_count,
             'follow_through_confirmed': self.follow_through_confirmed,
             'in_recovery': self.exit_triggered,
-            'exit_date': self.exit_date
+            'exit_date': self.exit_date,
+            # NEW: Portfolio safeguard stats
+            'peak_drawdown_triggered': self.peak_drawdown_triggered,
+            'peak_drawdown_trigger_date': self.peak_drawdown_trigger_date,
+            'stop_loss_caution_triggered': self.stop_loss_caution_triggered,
+            'recent_stop_loss_count': len(self.recent_stop_losses),
+            'portfolio_history_days': len(self.portfolio_history),
         }
 
     def get_distribution_details(self):
@@ -496,5 +791,14 @@ class MarketRegimeDetector:
                     'volume_change': f"{d['volume_change']:.1f}%"
                 }
                 for d in sorted(self.accumulation_days, key=lambda x: x['date'], reverse=True)
+            ],
+            # NEW: Stop loss details
+            'recent_stop_losses': [
+                {
+                    'date': sl['date'].strftime('%Y-%m-%d') if hasattr(sl['date'], 'strftime') else str(sl['date']),
+                    'ticker': sl['ticker'],
+                    'loss_pct': f"{sl['loss_pct']:.1f}%"
+                }
+                for sl in sorted(self.recent_stop_losses, key=lambda x: x['date'], reverse=True)
             ]
         }

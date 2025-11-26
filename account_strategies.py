@@ -1,10 +1,9 @@
 """
-SwingTradeStrategy - WITH CAUTION MINIMUM PROFIT THRESHOLD
+SwingTradeStrategy - WITH PORTFOLIO SAFEGUARDS
 
 Changes:
-- Added CAUTION_MIN_PROFIT_PCT = 3.0
-- Only sells positions during caution if profit >= 3%
-- Prevents selling winners for pocket change
+- Calls update_portfolio_value() for peak drawdown tracking
+- Stop loss recording already handled by stock_position_monitoring.py
 """
 
 from lumibot.strategies import Strategy
@@ -57,7 +56,8 @@ class SwingTradeStrategy(Strategy):
         print(f"🤖 SwingTradeStrategy Initialized")
         print(f"   Tickers: {len(self.tickers)} | Threshold: {stock_signals.SignalConfig.MIN_SCORE_THRESHOLD}")
         print(f"   Mode: {'BACKTEST' if Config.BACKTESTING else 'LIVE'}")
-        print(f"   Caution Min Profit: {CAUTION_MIN_PROFIT_PCT}%")
+        print(f"   Peak Drawdown Protection: {SafeguardConfig.PEAK_DRAWDOWN_ENABLED} ({SafeguardConfig.PEAK_DRAWDOWN_THRESHOLD}%)")
+        print(f"   Stop Loss Counter: {SafeguardConfig.STOP_LOSS_COUNTER_ENABLED} ({SafeguardConfig.STOP_LOSS_RATE_THRESHOLD}% rate)")
         print(f"{'=' * 60}\n")
 
     def before_starting_trading(self):
@@ -95,6 +95,11 @@ class SwingTradeStrategy(Strategy):
 
             # Set summary context
             summary.set_context(current_date, self.portfolio_value, self.get_cash())
+
+            # =================================================================
+            # UPDATE PORTFOLIO VALUE FOR PEAK DRAWDOWN TRACKING (NEW)
+            # =================================================================
+            self.regime_detector.update_portfolio_value(current_date, self.portfolio_value)
 
             # =================================================================
             # FETCH DATA
