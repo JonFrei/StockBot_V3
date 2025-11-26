@@ -1,11 +1,5 @@
 """
 SwingTradeStrategy - WITH RECOVERY MODE INTEGRATION
-
-Changes:
-- Integrates RecoveryModeManager for bear market rally trading
-- Calls update methods for recovery manager
-- Handles recovery mode position limits
-- Triggers re-lock on stop losses
 """
 
 from lumibot.strategies import Strategy
@@ -28,16 +22,12 @@ from lumibot.brokers import Alpaca
 
 broker = Alpaca(Config.get_alpaca_config())
 
-# =============================================================================
-# CAUTION REGIME CONFIGURATION
-# =============================================================================
-CAUTION_MIN_PROFIT_PCT = 3.0  # Only sell during caution if +3% or more
+CAUTION_MIN_PROFIT_PCT = 3.0
 
 
 class SwingTradeStrategy(Strategy):
 
     def initialize(self, send_emails=True):
-        """Initialize strategy"""
         if Config.BACKTESTING:
             self.sleeptime = "1D"
         else:
@@ -46,7 +36,6 @@ class SwingTradeStrategy(Strategy):
         self.tickers = self.parameters.get("tickers", [])
         self.last_trade_date = None
 
-        # Tracking systems
         self.profit_tracker = account_profit_tracking.ProfitTracker(self)
         self.order_logger = account_profit_tracking.OrderLogger(self)
         self.position_monitor = stock_position_monitoring.PositionMonitor(self)
@@ -55,20 +44,12 @@ class SwingTradeStrategy(Strategy):
         self.signal_processor = stock_signals.SignalProcessor()
         self.stock_rotator = StockRotator(profit_tracker=self.profit_tracker)
 
-        # Startup info (once only)
         print(f"\n{'=' * 60}")
         print(f"🤖 SwingTradeStrategy Initialized")
-        print(f"   Tickers: {len(self.tickers)} | Threshold: {stock_signals.SignalConfig.MIN_SCORE_THRESHOLD}")
-        print(f"   Mode: {'BACKTEST' if Config.BACKTESTING else 'LIVE'}")
-        print(
-            f"   Peak Drawdown Protection: {SafeguardConfig.PEAK_DRAWDOWN_ENABLED} ({SafeguardConfig.PEAK_DRAWDOWN_THRESHOLD}%)")
-        print(
-            f"   Stop Loss Counter: {SafeguardConfig.STOP_LOSS_COUNTER_ENABLED} ({SafeguardConfig.STOP_LOSS_RATE_THRESHOLD}% rate)")
-        print(f"   Recovery Mode: Enabled (35% size, 5 max positions)")
+        print(f"   Tickers: {len(self.tickers)} | Mode: {'BACKTEST' if Config.BACKTESTING else 'LIVE'}")
         print(f"{'=' * 60}\n")
 
     def before_starting_trading(self):
-        """Startup sequence"""
         if Config.BACKTESTING:
             return
         load_state_safe(self)
@@ -76,17 +57,14 @@ class SwingTradeStrategy(Strategy):
     def on_trading_iteration(self):
         import account_email_notifications
         execution_tracker = account_email_notifications.ExecutionTracker()
-
-        # Reset daily summary
         summary = reset_summary()
 
         try:
-            # Market checks (live mode)
             if not Config.BACKTESTING:
                 try:
                     if not self.broker.is_market_open():
                         return
-                except Exception as e:
+                except:
                     pass
 
                 if account_broker_data.has_traded_today(self, self.last_trade_date):
@@ -100,52 +78,29 @@ class SwingTradeStrategy(Strategy):
             if not Config.BACKTESTING:
                 self.last_trade_date = current_date.date()
 
-            # Set summary context
             summary.set_context(current_date, self.portfolio_value, self.get_cash())
-
-            # =================================================================
-            # UPDATE PORTFOLIO VALUE FOR PEAK DRAWDOWN TRACKING
-            # =================================================================
             self.regime_detector.update_portfolio_value(current_date, self.portfolio_value)
 
-            # =================================================================
-            # FETCH DATA
-            # =================================================================
+            # Fetch data
             try:
                 all_tickers = list(set(self.tickers + ['SPY'] + [p.symbol for p in self.get_positions()]))
                 all_stock_data = stock_data.process_data(all_tickers, current_date)
 
-                # Update regime detector with SPY
                 if 'SPY' in all_stock_data:
-                    spy_indicators = all_stock_data['SPY']['indicators']
+                    spy_ind = all_stock_data['SPY']['indicators']
                     spy_raw = all_stock_data['SPY'].get('raw')
 
-                    spy_close = spy_indicators['close']
-                    spy_50_sma = spy_indicators['ema50']
-                    spy_200_sma = spy_indicators['sma200']
-
+                    spy_close = spy_ind['close']
+                    spy_50_sma = spy_ind['ema50']
+                    spy_200_sma = spy_ind['sma200']
                     spy_prev_close = spy_raw['close'].iloc[-2] if spy_raw is not None and len(spy_raw) >= 2 else None
                     spy_volume = spy_raw['volume'].iloc[-1] if spy_raw is not None and len(spy_raw) >= 2 else None
                     spy_prev_volume = spy_raw['volume'].iloc[-2] if spy_raw is not None and len(spy_raw) >= 2 else None
 
-                    self.regime_detector.update_spy(
-                        current_date, spy_close, spy_50_sma, spy_200_sma,
-                        spy_prev_close, spy_volume, spy_prev_volume
-                    )
-
-                    # =================================================================
-                    # UPDATE RECOVERY MANAGER
-                    # =================================================================
-                    self.recovery_manager.update_spy_data(
-                        current_date,
-                        spy_close,
-                        spy_prev_close
-                    )
+                    self.regime_detector.update_spy(current_date, spy_close, spy_50_sma, spy_200_sma, spy_prev_close, spy_volume, spy_prev_volume)
+                    self.recovery_manager.update_spy_data(current_date, spy_close, spy_prev_close)
                     self.recovery_manager.update_breadth(all_stock_data)
-                    self.recovery_manager.update_accum_dist(
-                        len(self.regime_detector.accumulation_days),
-                        len(self.regime_detector.distribution_days)
-                    )
+                    self.recovery_manager.update_accum_dist(len(self.regime_detector.accumulation_days), len(self.regime_detector.distribution_days))
 
             except Exception as e:
                 summary.add_error(f"Data fetch failed: {e}")
@@ -154,18 +109,14 @@ class SwingTradeStrategy(Strategy):
                 summary.print_summary()
                 return
 
-            # =================================================================
-            # MARKET REGIME + RECOVERY MODE
-            # =================================================================
+            # Regime detection
             try:
                 num_positions = len(self.get_positions())
                 regime_result = self.regime_detector.detect_regime(num_positions, current_date)
 
-                # Check recovery mode if locked by 200 SMA
                 spy_below_200 = self.regime_detector._is_spy_below_200()
                 recovery_result = self.recovery_manager.evaluate(current_date, spy_below_200)
 
-                # Recovery mode overrides locked state
                 if spy_below_200 and recovery_result['recovery_mode_active']:
                     regime_result['action'] = 'recovery_mode'
                     regime_result['position_size_multiplier'] = recovery_result['position_multiplier']
@@ -174,13 +125,8 @@ class SwingTradeStrategy(Strategy):
                     regime_result['max_positions'] = recovery_result['max_positions']
                     regime_result['recovery_profit_target'] = recovery_result['profit_target']
 
-                summary.set_regime(
-                    regime_result['action'],
-                    regime_result['reason'],
-                    regime_result['position_size_multiplier']
-                )
+                summary.set_regime(regime_result['action'], regime_result['reason'], regime_result['position_size_multiplier'])
 
-                # Handle exit signal
                 if regime_result['action'] == 'exit_all':
                     positions = self.get_positions()
                     for position in positions:
@@ -201,33 +147,16 @@ class SwingTradeStrategy(Strategy):
 
             except Exception as e:
                 summary.add_error(f"Regime detection failed: {e}")
-                regime_result = {
-                    'action': 'caution',
-                    'position_size_multiplier': 0.75,
-                    'allow_new_entries': True,
-                    'reason': 'Safeguard error - caution mode'
-                }
+                regime_result = {'action': 'caution', 'position_size_multiplier': 0.75, 'allow_new_entries': True, 'reason': 'Safeguard error'}
 
-            # =================================================================
-            # CHECK EXITS (pass recovery_manager for re-lock on stop loss)
-            # =================================================================
+            # Check exits
             try:
                 exit_orders = stock_position_monitoring.check_positions_for_exits(
-                    strategy=self,
-                    current_date=current_date,
-                    all_stock_data=all_stock_data,
-                    position_monitor=self.position_monitor
-                )
+                    strategy=self, current_date=current_date, all_stock_data=all_stock_data, position_monitor=self.position_monitor)
 
                 stock_position_monitoring.execute_exit_orders(
-                    strategy=self,
-                    exit_orders=exit_orders,
-                    current_date=current_date,
-                    position_monitor=self.position_monitor,
-                    profit_tracker=self.profit_tracker,
-                    summary=summary,
-                    recovery_manager=self.recovery_manager
-                )
+                    strategy=self, exit_orders=exit_orders, current_date=current_date, position_monitor=self.position_monitor,
+                    profit_tracker=self.profit_tracker, summary=summary, recovery_manager=self.recovery_manager)
 
                 if exit_orders:
                     execution_tracker.record_action('exits', count=len(exit_orders))
@@ -235,9 +164,7 @@ class SwingTradeStrategy(Strategy):
             except Exception as e:
                 summary.add_error(f"Exit processing failed: {e}")
 
-            # =================================================================
-            # CAUTION REGIME: SELL PROFITABLE POSITIONS (WITH MINIMUM THRESHOLD)
-            # =================================================================
+            # Caution profit taking
             already_exited = {order['ticker'] for order in exit_orders} if exit_orders else set()
 
             if regime_result['action'] == 'caution':
@@ -246,10 +173,7 @@ class SwingTradeStrategy(Strategy):
                     try:
                         ticker = position.symbol
                         qty = int(position.quantity)
-                        if qty <= 0:
-                            continue
-
-                        if ticker in already_exited:
+                        if qty <= 0 or ticker in already_exited:
                             continue
 
                         entry_price = account_broker_data.get_broker_entry_price(position, self, ticker)
@@ -267,31 +191,18 @@ class SwingTradeStrategy(Strategy):
                             entry_signal = metadata.get('entry_signal', 'unknown') if metadata else 'unknown'
                             entry_score = metadata.get('entry_score', 0) if metadata else 0
 
-                            self.profit_tracker.record_trade(
-                                ticker=ticker,
-                                quantity_sold=qty,
-                                entry_price=entry_price,
-                                exit_price=current_price,
-                                exit_date=current_date,
-                                entry_signal=entry_signal,
-                                exit_signal={'reason': 'caution_profit_take'},
-                                entry_score=entry_score
-                            )
+                            self.profit_tracker.record_trade(ticker=ticker, quantity_sold=qty, entry_price=entry_price,
+                                exit_price=current_price, exit_date=current_date, entry_signal=entry_signal,
+                                exit_signal={'reason': 'caution_profit_take'}, entry_score=entry_score)
 
                             self.position_monitor.clean_position_metadata(ticker)
-
                             sell_order = self.create_order(ticker, qty, 'sell')
                             self.submit_order(sell_order)
-
                             execution_tracker.record_action('exits', count=1)
-
                     except Exception as e:
-                        summary.add_warning(f"Caution exit failed {ticker}: {e}")
                         continue
 
-            # =================================================================
-            # SKIP IF BLOCKED OR AT RECOVERY LIMIT
-            # =================================================================
+            # Skip if blocked
             if not regime_result['allow_new_entries']:
                 execution_tracker.complete('SUCCESS')
                 summary.print_summary()
@@ -300,7 +211,7 @@ class SwingTradeStrategy(Strategy):
                 save_state_safe(self)
                 return
 
-            # Check recovery mode position limit
+            # Recovery position limit
             if regime_result['action'] == 'recovery_mode':
                 max_positions = regime_result.get('max_positions', 5)
                 if num_positions >= max_positions:
@@ -312,73 +223,54 @@ class SwingTradeStrategy(Strategy):
                     save_state_safe(self)
                     return
 
-            # =================================================================
-            # ROTATION
-            # =================================================================
+            # Rotation
             if should_rotate(self.stock_rotator, current_date, frequency='weekly'):
                 self.stock_rotator.evaluate_stocks(self.tickers, current_date)
 
-            # =================================================================
-            # SCAN SIGNALS
-            # =================================================================
+            # Scan signals
             all_opportunities = []
 
             for ticker in all_tickers:
                 try:
                     if ticker in self.positions:
                         continue
-
                     if not self.stock_rotator.is_tradeable(ticker):
                         continue
-
                     if ticker not in all_stock_data:
                         continue
 
                     data = all_stock_data[ticker]['indicators']
-
                     vol_metrics = data.get('volatility_metrics', {})
                     if not vol_metrics.get('allow_trading', True):
                         continue
 
-                    # Relative strength check
                     if hasattr(self, 'regime_detector') and len(data.get('raw', [])) >= 20:
                         try:
                             raw_df = data.get('raw')
                             stock_current = data['close']
-                            stock_past = float(raw_df['close'].iloc[-21]) if len(raw_df) >= 21 else float(
-                                raw_df['close'].iloc[0])
-
+                            stock_past = float(raw_df['close'].iloc[-21]) if len(raw_df) >= 21 else float(raw_df['close'].iloc[0])
                             rs_result = self.regime_detector.check_relative_strength(stock_current, stock_past)
                             if not rs_result['passes']:
-                                summary.add_skip(ticker, f"Weak RS: {rs_result['relative_strength']:+.1f}% vs SPY")
+                                summary.add_skip(ticker, f"Weak RS: {rs_result['relative_strength']:+.1f}%")
                                 continue
-                        except Exception:
+                        except:
                             pass
 
                     signal_result = self.signal_processor.process_ticker(ticker, data, None)
 
                     if signal_result['action'] == 'buy':
                         summary.add_signal(ticker, signal_result['signal_type'], signal_result['score'])
-
                         all_opportunities.append({
-                            'ticker': ticker,
-                            'signal_type': signal_result['signal_type'],
-                            'signal_data': signal_result['signal_data'],
-                            'score': signal_result['score'],
-                            'all_scores': signal_result['all_scores'],
-                            'data': data,
-                            'vol_metrics': vol_metrics,
+                            'ticker': ticker, 'signal_type': signal_result['signal_type'],
+                            'signal_data': signal_result['signal_data'], 'score': signal_result['score'],
+                            'all_scores': signal_result['all_scores'], 'data': data, 'vol_metrics': vol_metrics,
                             'rotation_mult': self.stock_rotator.get_multiplier(ticker),
-                            'rotation_award': self.stock_rotator.get_award(ticker),
-                            'source': 'scored'
+                            'rotation_award': self.stock_rotator.get_award(ticker), 'source': 'scored'
                         })
-
-                except Exception as e:
+                except:
                     continue
 
-            # =================================================================
-            # POSITION SIZING
-            # =================================================================
+            # Position sizing
             if not all_opportunities:
                 execution_tracker.complete('SUCCESS')
                 summary.print_summary()
@@ -404,27 +296,12 @@ class SwingTradeStrategy(Strategy):
                     save_state_safe(self)
                     return
 
-                sizing_opportunities = []
-                for opp in all_opportunities:
-                    if opp['score'] >= 60:
-                        sizing_opportunities.append({
-                            'ticker': opp['ticker'],
-                            'data': opp['data'],
-                            'score': opp['score'],
-                            'signal_type': opp['signal_type'],
-                            'vol_metrics': opp['vol_metrics'],
-                            'rotation_mult': opp['rotation_mult'],
-
-                        })
+                sizing_opportunities = [{'ticker': opp['ticker'], 'data': opp['data'], 'score': opp['score'],
+                    'signal_type': opp['signal_type'], 'vol_metrics': opp['vol_metrics'], 'rotation_mult': opp['rotation_mult']}
+                    for opp in all_opportunities if opp['score'] >= 60]
 
                 regime_multiplier = regime_result['position_size_multiplier']
-
-                allocations = stock_position_sizing.calculate_position_sizes(
-                    sizing_opportunities,
-                    portfolio_context,
-                    regime_multiplier,
-                    verbose=False
-                )
+                allocations = stock_position_sizing.calculate_position_sizes(sizing_opportunities, portfolio_context, regime_multiplier, verbose=False)
 
                 if not allocations:
                     summary.add_warning("No positions met size requirements")
@@ -439,9 +316,7 @@ class SwingTradeStrategy(Strategy):
                 summary.print_summary()
                 return
 
-            # =================================================================
-            # EXECUTE BUYS
-            # =================================================================
+            # Execute buys
             for alloc in allocations:
                 try:
                     ticker = alloc['ticker']
@@ -452,29 +327,19 @@ class SwingTradeStrategy(Strategy):
                     signal_score = alloc['signal_score']
 
                     summary.add_entry(ticker, quantity, price, cost, signal_type, signal_score)
-
-                    self.position_monitor.track_position(
-                        ticker, current_date, signal_type, entry_score=signal_score
-                    )
+                    self.position_monitor.track_position(ticker, current_date, signal_type, entry_score=signal_score)
 
                     order = self.create_order(ticker, quantity, 'buy')
                     self.submit_order(order)
 
                     if hasattr(self, 'order_logger'):
-                        self.order_logger.log_order(
-                            ticker=ticker, side='buy', quantity=quantity,
-                            signal_type=signal_type, award='standard', quality_score=signal_score
-                        )
+                        self.order_logger.log_order(ticker=ticker, side='buy', quantity=quantity, signal_type=signal_type, award='standard', quality_score=signal_score)
 
                     execution_tracker.record_action('entries', count=1)
-
                 except Exception as e:
                     summary.add_error(f"Buy {ticker} failed: {e}")
                     continue
 
-            # =================================================================
-            # COMPLETE
-            # =================================================================
             execution_tracker.complete('SUCCESS')
             summary.print_summary()
 
@@ -492,9 +357,9 @@ class SwingTradeStrategy(Strategy):
             raise
 
     def on_strategy_end(self):
-        """Display final statistics"""
         self.profit_tracker.display_final_summary(
             stock_rotator=self.stock_rotator,
-            regime_detector=self.regime_detector
+            regime_detector=self.regime_detector,
+            recovery_manager=self.recovery_manager
         )
         return 0
