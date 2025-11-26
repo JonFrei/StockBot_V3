@@ -285,16 +285,19 @@ class ProfitTracker:
         # 2. Performance by Signal
         self._display_signal_summary(closed_trades)
 
-        # 3. Performance by Ticker
+        # 3. Exit Breakdown (NEW)
+        self._display_exit_breakdown(closed_trades)
+
+        # 4. Performance by Ticker
         self._display_ticker_summary(closed_trades, stock_rotator)
 
-        # 4. Last 100 Trades
+        # 5. Last 100 Trades
         self._display_last_100_trades(closed_trades)
 
-        # 5. Stock Rotation Summary
+        # 6. Stock Rotation Summary
         self._display_rotation_summary(stock_rotator)
 
-        # 6. Safeguard/Drawdown Protection Summary
+        # 7. Safeguard/Drawdown Protection Summary
         self._display_safeguard_summary(regime_detector)
 
         print(f"{'=' * 100}\n")
@@ -371,7 +374,65 @@ class ProfitTracker:
             avg_loss = (stats['loss_pnl'] / losses) if losses > 0 else 0
             total_pnl = stats['total_pnl']
 
-            print(f"{signal[:25]:<25} {trades:>7} {wr:>7.1f}% {wins:>6} {losses:>7} {f'${avg_win:,.2f}':>12} {f'${avg_loss:,.2f}':>12} {f'${total_pnl:+,.2f}':>14}")
+            print(
+                f"{signal[:25]:<25} {trades:>7} {wr:>7.1f}% {wins:>6} {losses:>7} {f'${avg_win:,.2f}':>12} {f'${avg_loss:,.2f}':>12} {f'${total_pnl:+,.2f}':>14}")
+
+    def _display_exit_breakdown(self, closed_trades):
+        """Display breakdown of exits by exit type"""
+        from collections import defaultdict
+
+        exit_stats = defaultdict(lambda: {
+            'count': 0, 'wins': 0, 'losses': 0,
+            'total_pnl': 0.0, 'win_pnl': 0.0, 'loss_pnl': 0.0
+        })
+
+        for trade in closed_trades:
+            exit_type = trade.get('exit_signal', 'unknown')
+            pnl = trade['pnl_dollars']
+            exit_stats[exit_type]['count'] += 1
+            exit_stats[exit_type]['total_pnl'] += pnl
+
+            if pnl > 0:
+                exit_stats[exit_type]['wins'] += 1
+                exit_stats[exit_type]['win_pnl'] += pnl
+            elif pnl < 0:
+                exit_stats[exit_type]['losses'] += 1
+                exit_stats[exit_type]['loss_pnl'] += pnl
+
+        print(f"\n{'─' * 100}")
+        print(f"🚪 EXIT BREAKDOWN")
+        print(f"{'─' * 100}")
+        header = f"{'Exit Type':<30} {'Count':>7} {'Freq%':>7} {'WR%':>8} {'Wins':>6} {'Losses':>7} {'Avg P&L':>12} {'Total P&L':>14}"
+        print(header)
+        print(f"{'─' * 100}")
+
+        total_trades = len(closed_trades)
+
+        # Sort by count (most frequent first)
+        sorted_exits = sorted(exit_stats.items(), key=lambda x: x[1]['count'], reverse=True)
+
+        for exit_type, stats in sorted_exits:
+            count = stats['count']
+            wins = stats['wins']
+            losses = stats['losses']
+            freq_pct = (count / total_trades * 100) if total_trades > 0 else 0
+            wr = (wins / count * 100) if count > 0 else 0
+            avg_pnl = (stats['total_pnl'] / count) if count > 0 else 0
+            total_pnl = stats['total_pnl']
+
+            # Truncate long exit names
+            exit_display = exit_type[:30] if len(exit_type) > 30 else exit_type
+
+            print(
+                f"{exit_display:<30} {count:>7} {freq_pct:>6.1f}% {wr:>7.1f}% {wins:>6} {losses:>7} {f'${avg_pnl:,.2f}':>12} {f'${total_pnl:+,.2f}':>14}")
+
+        # Summary row
+        print(f"{'─' * 100}")
+        total_pnl = sum(s['total_pnl'] for s in exit_stats.values())
+        total_wins = sum(s['wins'] for s in exit_stats.values())
+        overall_wr = (total_wins / total_trades * 100) if total_trades > 0 else 0
+        print(
+            f"{'TOTAL':<30} {total_trades:>7} {'100.0%':>7} {overall_wr:>7.1f}% {total_wins:>6} {total_trades - total_wins:>7} {f'${total_pnl / total_trades if total_trades > 0 else 0:,.2f}':>12} {f'${total_pnl:+,.2f}':>14}")
 
     def _display_ticker_summary(self, closed_trades, stock_rotator=None):
         """Display performance by ticker with rotation tier"""
@@ -421,7 +482,8 @@ class ProfitTracker:
                 tier_icon = {'premium': '🥇', 'standard': '🥈', 'frozen': '❄️'}.get(tier, '🥈')
 
             tier_display = f"{tier_icon}{tier[:7]}"
-            print(f"{ticker:<8} {tier_display:<10} {trades:>7} {wr:>7.1f}% {wins:>6} {losses:>7} {f'${avg_win:,.2f}':>12} {f'${avg_loss:,.2f}':>12} {f'${total_pnl:+,.2f}':>14}")
+            print(
+                f"{ticker:<8} {tier_display:<10} {trades:>7} {wr:>7.1f}% {wins:>6} {losses:>7} {f'${avg_win:,.2f}':>12} {f'${avg_loss:,.2f}':>12} {f'${total_pnl:+,.2f}':>14}")
 
     def _display_last_100_trades(self, closed_trades):
         """Display last 100 trades"""
@@ -448,7 +510,8 @@ class ProfitTracker:
             exit_display = exit_reason[:25] if len(exit_reason) > 25 else exit_reason
 
             emoji = '✅' if pnl_dollars > 0 else '❌' if pnl_dollars < 0 else '➖'
-            print(f"{i:<4} {emoji}{ticker:<7} {f'${pnl_dollars:+,.2f}':>12} {f'{pnl_pct:+.1f}%':>8} {score:>6} {signal_display:<25} {exit_display:<25}")
+            print(
+                f"{i:<4} {emoji}{ticker:<7} {f'${pnl_dollars:+,.2f}':>12} {f'{pnl_pct:+.1f}%':>8} {score:>6} {signal_display:<25} {exit_display:<25}")
 
     def _display_rotation_summary(self, stock_rotator):
         """Display stock rotation summary"""
@@ -466,7 +529,8 @@ class ProfitTracker:
         print(f"{'Metric':<30} {'Value':>20}")
         print(f"{'─' * 50}")
         print(f"{'Total Rotations':<30} {stats['rotation_count']:>20}")
-        print(f"{'Last Rotation':<30} {str(stats['last_rotation_date'])[:19] if stats['last_rotation_date'] else 'N/A':>20}")
+        print(
+            f"{'Last Rotation':<30} {str(stats['last_rotation_date'])[:19] if stats['last_rotation_date'] else 'N/A':>20}")
         print(f"{'Total Tickers Tracked':<30} {stats['total_tracked']:>20}")
 
         print(f"\n{'Tier Distribution:'}")
@@ -498,8 +562,10 @@ class ProfitTracker:
         stats = regime_detector.get_statistics()
 
         # SPY status
-        spy_vs_50 = ((stats['spy_close'] - stats['spy_50_sma']) / stats['spy_50_sma'] * 100) if stats['spy_50_sma'] > 0 else 0
-        spy_vs_200 = ((stats['spy_close'] - stats['spy_200_sma']) / stats['spy_200_sma'] * 100) if stats['spy_200_sma'] > 0 else 0
+        spy_vs_50 = ((stats['spy_close'] - stats['spy_50_sma']) / stats['spy_50_sma'] * 100) if stats[
+                                                                                                    'spy_50_sma'] > 0 else 0
+        spy_vs_200 = ((stats['spy_close'] - stats['spy_200_sma']) / stats['spy_200_sma'] * 100) if stats[
+                                                                                                       'spy_200_sma'] > 0 else 0
 
         print(f"{'Metric':<35} {'Value':>25}")
         print(f"{'─' * 60}")
@@ -555,16 +621,19 @@ class ProfitTracker:
         # 2. Performance by Signal
         html += self._generate_signal_summary_html(closed_trades)
 
-        # 3. Performance by Ticker
+        # 3. Exit Breakdown (NEW)
+        html += self._generate_exit_breakdown_html(closed_trades)
+
+        # 4. Performance by Ticker
         html += self._generate_ticker_summary_html(closed_trades, stock_rotator)
 
-        # 4. Last 100 Trades
+        # 5. Last 100 Trades
         html += self._generate_last_100_trades_html(closed_trades)
 
-        # 5. Stock Rotation Summary
+        # 6. Stock Rotation Summary
         html += self._generate_rotation_summary_html(stock_rotator)
 
-        # 6. Safeguard Summary
+        # 7. Safeguard Summary
         html += self._generate_safeguard_summary_html(regime_detector)
 
         return html
@@ -654,6 +723,85 @@ class ProfitTracker:
             """
 
         html += "</table>"
+        return html
+
+    def _generate_exit_breakdown_html(self, closed_trades):
+        """Generate HTML for exit breakdown"""
+        from collections import defaultdict
+
+        exit_stats = defaultdict(lambda: {
+            'count': 0, 'wins': 0, 'losses': 0,
+            'total_pnl': 0.0, 'win_pnl': 0.0, 'loss_pnl': 0.0
+        })
+
+        for trade in closed_trades:
+            exit_type = trade.get('exit_signal', 'unknown')
+            pnl = trade['pnl_dollars']
+            exit_stats[exit_type]['count'] += 1
+            exit_stats[exit_type]['total_pnl'] += pnl
+            if pnl > 0:
+                exit_stats[exit_type]['wins'] += 1
+                exit_stats[exit_type]['win_pnl'] += pnl
+            elif pnl < 0:
+                exit_stats[exit_type]['losses'] += 1
+                exit_stats[exit_type]['loss_pnl'] += pnl
+
+        total_trades = len(closed_trades)
+
+        html = """
+        <h3>🚪 Exit Breakdown</h3>
+        <table>
+            <tr>
+                <th>Exit Type</th><th>Count</th><th>Freq%</th><th>WR%</th><th>Wins</th><th>Losses</th>
+                <th>Avg P&L</th><th>Total P&L</th>
+            </tr>
+        """
+
+        # Sort by count (most frequent first)
+        sorted_exits = sorted(exit_stats.items(), key=lambda x: x[1]['count'], reverse=True)
+
+        for exit_type, stats in sorted_exits:
+            count = stats['count']
+            wins = stats['wins']
+            losses = stats['losses']
+            freq_pct = (count / total_trades * 100) if total_trades > 0 else 0
+            wr = (wins / count * 100) if count > 0 else 0
+            avg_pnl = (stats['total_pnl'] / count) if count > 0 else 0
+            total_pnl = stats['total_pnl']
+            pnl_color = '#27ae60' if total_pnl > 0 else '#e74c3c'
+
+            html += f"""
+            <tr>
+                <td><strong>{exit_type}</strong></td>
+                <td>{count}</td>
+                <td>{freq_pct:.1f}%</td>
+                <td>{wr:.1f}%</td>
+                <td>{wins}</td>
+                <td>{losses}</td>
+                <td>${avg_pnl:,.2f}</td>
+                <td style="color: {pnl_color}; font-weight: bold;">${total_pnl:+,.2f}</td>
+            </tr>
+            """
+
+        # Summary row
+        total_pnl = sum(s['total_pnl'] for s in exit_stats.values())
+        total_wins = sum(s['wins'] for s in exit_stats.values())
+        overall_wr = (total_wins / total_trades * 100) if total_trades > 0 else 0
+        pnl_color = '#27ae60' if total_pnl > 0 else '#e74c3c'
+
+        html += f"""
+            <tr style="background-color: #f8f9fa; font-weight: bold;">
+                <td>TOTAL</td>
+                <td>{total_trades}</td>
+                <td>100.0%</td>
+                <td>{overall_wr:.1f}%</td>
+                <td>{total_wins}</td>
+                <td>{total_trades - total_wins}</td>
+                <td>${total_pnl / total_trades if total_trades > 0 else 0:,.2f}</td>
+                <td style="color: {pnl_color};">${total_pnl:+,.2f}</td>
+            </tr>
+        </table>
+        """
         return html
 
     def _generate_ticker_summary_html(self, closed_trades, stock_rotator=None):
@@ -791,8 +939,10 @@ class ProfitTracker:
 
         stats = regime_detector.get_statistics()
 
-        spy_vs_50 = ((stats['spy_close'] - stats['spy_50_sma']) / stats['spy_50_sma'] * 100) if stats['spy_50_sma'] > 0 else 0
-        spy_vs_200 = ((stats['spy_close'] - stats['spy_200_sma']) / stats['spy_200_sma'] * 100) if stats['spy_200_sma'] > 0 else 0
+        spy_vs_50 = ((stats['spy_close'] - stats['spy_50_sma']) / stats['spy_50_sma'] * 100) if stats[
+                                                                                                    'spy_50_sma'] > 0 else 0
+        spy_vs_200 = ((stats['spy_close'] - stats['spy_200_sma']) / stats['spy_200_sma'] * 100) if stats[
+                                                                                                       'spy_200_sma'] > 0 else 0
 
         status_50 = '🟢 Above' if not stats['spy_below_50'] else '🔴 Below'
         status_200 = '🟢 Above' if not stats['spy_below_200'] else '🔴 Below'

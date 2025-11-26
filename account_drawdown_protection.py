@@ -46,8 +46,8 @@ class SafeguardConfig:
     NET_DISTRIBUTION_EXIT = 6
 
     # Position size multipliers
-    CAUTION_SIZE_MULTIPLIER = 0.75
-    WARNING_SIZE_MULTIPLIER = 0.50
+    CAUTION_SIZE_MULTIPLIER = 0.5
+    WARNING_SIZE_MULTIPLIER = 0.0
     DANGER_SIZE_MULTIPLIER = 0.0
 
     # Follow-Through Day Requirements
@@ -64,9 +64,9 @@ class SafeguardConfig:
 
     # Portfolio Peak Drawdown Circuit Breaker
     PEAK_DRAWDOWN_ENABLED = True
-    PEAK_DRAWDOWN_THRESHOLD = 5.0  # Trigger if portfolio drops 5% from 30-day peak
-    PEAK_DRAWDOWN_LOOKBACK_DAYS = 30  # Rolling window for peak calculation
-    PEAK_DRAWDOWN_LOCKOUT_DAYS = 5  # Trading days to stay in STOP_BUYING
+    PEAK_DRAWDOWN_THRESHOLD = 8.0  # Trigger if portfolio drops 5% from 30-day peak
+    PEAK_DRAWDOWN_LOOKBACK_DAYS = 20  # Rolling window for peak calculation
+    PEAK_DRAWDOWN_LOCKOUT_DAYS = 3  # Trading days to stay in STOP_BUYING
     PEAK_DRAWDOWN_RECOVERY_PCT = 97.0  # Must recover to 97% of peak to reset
 
     # Scaled Stop Loss Counter
@@ -217,7 +217,7 @@ class MarketRegimeDetector:
                 return {
                     'action': 'caution',
                     'position_size_multiplier': SafeguardConfig.CAUTION_SIZE_MULTIPLIER,
-                    'allow_new_entries': False,
+                    'allow_new_entries': True,
                     'reason': stop_loss_result['reason'],
                     'details': details
                 }
@@ -262,7 +262,7 @@ class MarketRegimeDetector:
             return {
                 'action': 'caution',
                 'position_size_multiplier': SafeguardConfig.WARNING_SIZE_MULTIPLIER,
-                'allow_new_entries': False,  # Changed from True
+                'allow_new_entries': True,  # Changed from True
                 'reason': f"Net Distribution: {net_distribution} (WARNING)",
                 'details': details
             }
@@ -271,7 +271,7 @@ class MarketRegimeDetector:
             return {
                 'action': 'caution',
                 'position_size_multiplier': SafeguardConfig.CAUTION_SIZE_MULTIPLIER,
-                'allow_new_entries': False,  # Changed from True
+                'allow_new_entries': True,  # Changed from True
                 'reason': f"Net Distribution: {net_distribution} (CAUTION)",
                 'details': details
             }
@@ -283,7 +283,7 @@ class MarketRegimeDetector:
             return {
                 'action': 'caution',
                 'position_size_multiplier': SafeguardConfig.CAUTION_SIZE_MULTIPLIER,
-                'allow_new_entries': False,  # Changed from True
+                'allow_new_entries': True,  # Changed from True
                 'reason': f"SPY ${self.spy_close:.2f} below 50 SMA ${self.spy_50_sma:.2f} (early warning)",
                 'details': details
             }
