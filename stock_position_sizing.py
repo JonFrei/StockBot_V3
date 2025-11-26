@@ -10,7 +10,7 @@ class SimplifiedSizingConfig:
     """Position sizing configuration"""
     BASE_POSITION_PCT = 10.0
     MIN_SHARES = 10
-    MAX_POSITION_PCT = 20.0
+    MAX_POSITION_PCT = 15.0
     MAX_TOTAL_POSITIONS = 25
     MIN_CASH_RESERVE_PCT = 10.0
     MAX_CASH_DEPLOYMENT_PCT = 85.0

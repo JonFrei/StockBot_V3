@@ -5,6 +5,7 @@ CHANGES:
 1. All trailing stops now use ATR with maximum floor caps
 2. Intraday checks use ATR-based calculations
 3. ATR passed through exit pipeline for consistent behavior
+4. Recovery manager re-lock on stop losses
 """
 
 import stock_indicators
@@ -20,9 +21,9 @@ class ExitConfig:
 
     # ATR-based trailing stops with floor caps
     # Level 0: Early protection of unrealized gains (before +10%)
-    LEVEL_0_TRAIL_ACTIVATION = 5.0  # Activate after +3% gain
+    LEVEL_0_TRAIL_ACTIVATION = 5.0  # Activate after +5% gain
     LEVEL_0_TRAIL_ATR_MULT = 2.5
-    LEVEL_0_TRAIL_MAX_PCT = 5.0  # Never give back more than 10%
+    LEVEL_0_TRAIL_MAX_PCT = 5.0  # Never give back more than 5%
 
     # Level 1: After first profit target (+10%)
     LEVEL_1_TRAIL_ATR_MULT = 2.0
@@ -228,7 +229,7 @@ def check_level_0_trailing_stop(pnl_pct, local_max, current_price, entry_price, 
     Level 0 trailing stop - protects gains before hitting +10% target
     NOW ATR-BASED with maximum floor cap
 
-    Activates when position reaches +3% gain, then trails using ATR
+    Activates when position reaches +5% gain, then trails using ATR
     """
     # Calculate gain from peak
     peak_gain_pct = ((local_max - entry_price) / entry_price * 100) if entry_price > 0 else 0
@@ -596,8 +597,8 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
     return exit_orders
 
 
-def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, profit_tracker, summary=None):
-    """Execute exit orders with summary logging"""
+def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, profit_tracker, summary=None, recovery_manager=None):
+    """Execute exit orders with summary logging and recovery manager re-lock"""
 
     for order in exit_orders:
         ticker = order['ticker']
@@ -724,6 +725,10 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
             is_stop_loss = any(kw in reason for kw in ['stop', 'emergency', 'intraday', 'trailing', 'atr'])
             if is_stop_loss and hasattr(strategy, 'regime_detector'):
                 strategy.regime_detector.record_stop_loss(current_date, ticker, pnl_pct)
+
+            # RECOVERY MODE: Trigger re-lock on any stop loss
+            if is_stop_loss and recovery_manager is not None:
+                recovery_manager.trigger_relock(current_date, f"stop_loss_{ticker}")
 
             # Execute
             sell_order = strategy.create_order(ticker, sell_quantity, 'sell')

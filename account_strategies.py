@@ -1,9 +1,11 @@
 """
-SwingTradeStrategy - WITH PORTFOLIO SAFEGUARDS
+SwingTradeStrategy - WITH RECOVERY MODE INTEGRATION
 
 Changes:
-- Calls update_portfolio_value() for peak drawdown tracking
-- Stop loss recording already handled by stock_position_monitoring.py
+- Integrates RecoveryModeManager for bear market rally trading
+- Calls update methods for recovery manager
+- Handles recovery mode position limits
+- Triggers re-lock on stop losses
 """
 
 from lumibot.strategies import Strategy
@@ -18,6 +20,7 @@ from stock_rotation import StockRotator, should_rotate
 
 from server_recovery import save_state_safe, load_state_safe
 from account_drawdown_protection import MarketRegimeDetector, SafeguardConfig
+from account_recovery_mode import RecoveryModeManager
 import account_broker_data
 from account_profit_tracking import get_summary, reset_summary
 
@@ -28,7 +31,7 @@ broker = Alpaca(Config.get_alpaca_config())
 # =============================================================================
 # CAUTION REGIME CONFIGURATION
 # =============================================================================
-CAUTION_MIN_PROFIT_PCT = 0.0  # Only sell during caution if +3% or more
+CAUTION_MIN_PROFIT_PCT = 3.0  # Only sell during caution if +3% or more
 
 
 class SwingTradeStrategy(Strategy):
@@ -48,6 +51,7 @@ class SwingTradeStrategy(Strategy):
         self.order_logger = account_profit_tracking.OrderLogger(self)
         self.position_monitor = stock_position_monitoring.PositionMonitor(self)
         self.regime_detector = MarketRegimeDetector()
+        self.recovery_manager = RecoveryModeManager()
         self.signal_processor = stock_signals.SignalProcessor()
         self.stock_rotator = StockRotator(profit_tracker=self.profit_tracker)
 
@@ -60,6 +64,7 @@ class SwingTradeStrategy(Strategy):
             f"   Peak Drawdown Protection: {SafeguardConfig.PEAK_DRAWDOWN_ENABLED} ({SafeguardConfig.PEAK_DRAWDOWN_THRESHOLD}%)")
         print(
             f"   Stop Loss Counter: {SafeguardConfig.STOP_LOSS_COUNTER_ENABLED} ({SafeguardConfig.STOP_LOSS_RATE_THRESHOLD}% rate)")
+        print(f"   Recovery Mode: Enabled (35% size, 5 max positions)")
         print(f"{'=' * 60}\n")
 
     def before_starting_trading(self):
@@ -99,7 +104,7 @@ class SwingTradeStrategy(Strategy):
             summary.set_context(current_date, self.portfolio_value, self.get_cash())
 
             # =================================================================
-            # UPDATE PORTFOLIO VALUE FOR PEAK DRAWDOWN TRACKING (NEW)
+            # UPDATE PORTFOLIO VALUE FOR PEAK DRAWDOWN TRACKING
             # =================================================================
             self.regime_detector.update_portfolio_value(current_date, self.portfolio_value)
 
@@ -128,6 +133,20 @@ class SwingTradeStrategy(Strategy):
                         spy_prev_close, spy_volume, spy_prev_volume
                     )
 
+                    # =================================================================
+                    # UPDATE RECOVERY MANAGER
+                    # =================================================================
+                    self.recovery_manager.update_spy_data(
+                        current_date,
+                        spy_close,
+                        spy_prev_close
+                    )
+                    self.recovery_manager.update_breadth(all_stock_data)
+                    self.recovery_manager.update_accum_dist(
+                        len(self.regime_detector.accumulation_days),
+                        len(self.regime_detector.distribution_days)
+                    )
+
             except Exception as e:
                 summary.add_error(f"Data fetch failed: {e}")
                 execution_tracker.add_error("Data Fetch", e)
@@ -136,11 +155,24 @@ class SwingTradeStrategy(Strategy):
                 return
 
             # =================================================================
-            # MARKET REGIME
+            # MARKET REGIME + RECOVERY MODE
             # =================================================================
             try:
                 num_positions = len(self.get_positions())
                 regime_result = self.regime_detector.detect_regime(num_positions, current_date)
+
+                # Check recovery mode if locked by 200 SMA
+                spy_below_200 = self.regime_detector._is_spy_below_200()
+                recovery_result = self.recovery_manager.evaluate(current_date, spy_below_200)
+
+                # Recovery mode overrides locked state
+                if spy_below_200 and recovery_result['recovery_mode_active']:
+                    regime_result['action'] = 'recovery_mode'
+                    regime_result['position_size_multiplier'] = recovery_result['position_multiplier']
+                    regime_result['allow_new_entries'] = True
+                    regime_result['reason'] = recovery_result['reason']
+                    regime_result['max_positions'] = recovery_result['max_positions']
+                    regime_result['recovery_profit_target'] = recovery_result['profit_target']
 
                 summary.set_regime(
                     regime_result['action'],
@@ -177,7 +209,7 @@ class SwingTradeStrategy(Strategy):
                 }
 
             # =================================================================
-            # CHECK EXITS
+            # CHECK EXITS (pass recovery_manager for re-lock on stop loss)
             # =================================================================
             try:
                 exit_orders = stock_position_monitoring.check_positions_for_exits(
@@ -193,7 +225,8 @@ class SwingTradeStrategy(Strategy):
                     current_date=current_date,
                     position_monitor=self.position_monitor,
                     profit_tracker=self.profit_tracker,
-                    summary=summary  # Pass summary for logging
+                    summary=summary,
+                    recovery_manager=self.recovery_manager
                 )
 
                 if exit_orders:
@@ -205,8 +238,6 @@ class SwingTradeStrategy(Strategy):
             # =================================================================
             # CAUTION REGIME: SELL PROFITABLE POSITIONS (WITH MINIMUM THRESHOLD)
             # =================================================================
-            # Track tickers already exited this iteration to avoid double-selling
-
             already_exited = {order['ticker'] for order in exit_orders} if exit_orders else set()
 
             if regime_result['action'] == 'caution':
@@ -218,11 +249,9 @@ class SwingTradeStrategy(Strategy):
                         if qty <= 0:
                             continue
 
-                        # Skip positions already exited this iteration
                         if ticker in already_exited:
                             continue
 
-                        # Get entry price
                         entry_price = account_broker_data.get_broker_entry_price(position, self, ticker)
                         if entry_price <= 0:
                             continue
@@ -231,12 +260,9 @@ class SwingTradeStrategy(Strategy):
                         pnl_pct = ((current_price - entry_price) / entry_price * 100)
                         pnl_dollars = (current_price - entry_price) * qty
 
-                        # UPDATED: Only sell if profit >= CAUTION_MIN_PROFIT_PCT
-                        # This prevents selling winners for pocket change (+$3, +0.1%)
                         if pnl_pct >= CAUTION_MIN_PROFIT_PCT:
                             summary.add_exit(ticker, qty, pnl_dollars, pnl_pct, 'caution_profit_take')
 
-                            # Record trade
                             metadata = self.position_monitor.get_position_metadata(ticker)
                             entry_signal = metadata.get('entry_signal', 'unknown') if metadata else 'unknown'
                             entry_score = metadata.get('entry_score', 0) if metadata else 0
@@ -264,7 +290,7 @@ class SwingTradeStrategy(Strategy):
                         continue
 
             # =================================================================
-            # SKIP IF BLOCKED
+            # SKIP IF BLOCKED OR AT RECOVERY LIMIT
             # =================================================================
             if not regime_result['allow_new_entries']:
                 execution_tracker.complete('SUCCESS')
@@ -273,6 +299,18 @@ class SwingTradeStrategy(Strategy):
                     account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
                 save_state_safe(self)
                 return
+
+            # Check recovery mode position limit
+            if regime_result['action'] == 'recovery_mode':
+                max_positions = regime_result.get('max_positions', 5)
+                if num_positions >= max_positions:
+                    summary.add_warning(f"Recovery mode: at max {max_positions} positions")
+                    execution_tracker.complete('SUCCESS')
+                    summary.print_summary()
+                    if not Config.BACKTESTING:
+                        account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
+                    save_state_safe(self)
+                    return
 
             # =================================================================
             # ROTATION
@@ -315,7 +353,7 @@ class SwingTradeStrategy(Strategy):
                                 summary.add_skip(ticker, f"Weak RS: {rs_result['relative_strength']:+.1f}% vs SPY")
                                 continue
                         except Exception:
-                            pass  # Allow trade if RS check fails
+                            pass
 
                     signal_result = self.signal_processor.process_ticker(ticker, data, None)
 
@@ -385,7 +423,7 @@ class SwingTradeStrategy(Strategy):
                     sizing_opportunities,
                     portfolio_context,
                     regime_multiplier,
-                    verbose=False  # Disable verbose output
+                    verbose=False
                 )
 
                 if not allocations:
