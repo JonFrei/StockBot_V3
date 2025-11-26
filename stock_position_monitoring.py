@@ -366,7 +366,7 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
 
             # Trigger recovery mode re-lock on stop loss
             if is_stop_loss and recovery_manager is not None:
-                recovery_manager.trigger_relock(f"stop_loss_{ticker}")
+                recovery_manager.trigger_relock(current_date, f"stop_loss_{ticker}")
 
             sell_order = strategy.create_order(ticker, sell_quantity, 'sell')
             strategy.submit_order(sell_order)
