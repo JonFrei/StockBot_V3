@@ -71,9 +71,9 @@ class SafeguardConfig:
 
     # Scaled Stop Loss Counter
     STOP_LOSS_COUNTER_ENABLED = True
-    STOP_LOSS_LOOKBACK_DAYS = 7  # Rolling window for counting stop losses
-    STOP_LOSS_RATE_THRESHOLD = 40.0  # Trigger if 30%+ of positions stopped out
-    STOP_LOSS_MIN_COUNT = 3  # Minimum stop losses before rate applies
+    STOP_LOSS_LOOKBACK_DAYS = 10  # Rolling window for counting stop losses
+    STOP_LOSS_RATE_THRESHOLD = 50.0  # Trigger if 30%+ of positions stopped out
+    STOP_LOSS_MIN_COUNT = 4  # Minimum stop losses before rate applies
     STOP_LOSS_LOCKOUT_DAYS = 3  # Trading days to stay in CAUTION
 
 

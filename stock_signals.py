@@ -31,9 +31,9 @@ class SignalConfig:
 
     # GOLDEN_CROSS
     GC_DISTANCE_MIN = 0.0
-    GC_DISTANCE_MAX = 7.0
-    GC_ADX_MIN = 22
-    GC_VOLUME_RATIO_MIN = 1.3
+    GC_DISTANCE_MAX = 8.0
+    GC_ADX_MIN = 20
+    GC_VOLUME_RATIO_MIN = 1.2
     GC_RSI_MIN = 50
     GC_RSI_MAX = 72
     GC_REQUIRE_SQUEEZE = True
