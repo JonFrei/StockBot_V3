@@ -377,5 +377,5 @@ BUY_STRATEGIES: Dict[str, Any] = {
     'swing_trade_1': swing_trade_1,
     'consolidation_breakout': consolidation_breakout,
     'golden_cross': golden_cross,
-    'bollinger_buy': bollinger_buy,
+    # 'bollinger_buy': bollinger_buy,
 }

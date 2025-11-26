@@ -1,10 +1,10 @@
 """
-Position Monitoring - UPDATED VERSION
+Position Monitoring - ATR-BASED TRAILING STOPS VERSION
 
-FIXES APPLIED:
-1. ATR-based stop loss (replaces fixed -5.5% emergency stop)
-2. Level 0 trailing stop (protects gains before +10% target)
-3. Remnant position cleanup (auto-close small positions after partial exits)
+CHANGES:
+1. All trailing stops now use ATR with maximum floor caps
+2. Intraday checks use ATR-based calculations
+3. ATR passed through exit pipeline for consistent behavior
 """
 
 import stock_indicators
@@ -18,10 +18,25 @@ class ExitConfig:
     ATR_STOP_MAX_PCT = 8.0
     FALLBACK_EMERGENCY_STOP = -5.5  # Used if ATR unavailable
 
-    # Level 0 trailing (protects unrealized gains before profit target)
+    # ATR-based trailing stops with floor caps
+    # Level 0: Early protection of unrealized gains (before +10%)
     LEVEL_0_TRAIL_ACTIVATION = 3.0  # Activate after +3% gain
-    LEVEL_0_TRAIL_PCT = 8.0  # 8% trailing from peak
+    LEVEL_0_TRAIL_ATR_MULT = 2.5
+    LEVEL_0_TRAIL_MAX_PCT = 10.0  # Never give back more than 10%
 
+    # Level 1: After first profit target (+10%)
+    LEVEL_1_TRAIL_ATR_MULT = 2.0
+    LEVEL_1_TRAIL_MAX_PCT = 8.0
+
+    # Level 2: After second profit target (+20%)
+    LEVEL_2_TRAIL_ATR_MULT = 1.75
+    LEVEL_2_TRAIL_MAX_PCT = 7.0
+
+    # Level 3: After third profit target (+30%)
+    LEVEL_3_TRAIL_ATR_MULT = 1.5
+    LEVEL_3_TRAIL_MAX_PCT = 6.0
+
+    # Profit targets (unchanged)
     PROFIT_TARGET_1 = 10.0
     PROFIT_TARGET_1_SELL = 33.0
 
@@ -30,10 +45,6 @@ class ExitConfig:
 
     PROFIT_TARGET_3 = 30.0
     PROFIT_TARGET_3_SELL = 50.0
-
-    TRAILING_STOP_LEVEL_1 = 6.0
-    TRAILING_STOP_LEVEL_2 = 7.5
-    TRAILING_STOP_LEVEL_3 = 10.0
 
     # Remnant position cleanup
     MIN_REMNANT_SHARES = 10
@@ -101,7 +112,7 @@ class PositionMonitor:
 
 
 # =============================================================================
-# EXIT CHECKS
+# ATR-BASED CALCULATIONS
 # =============================================================================
 
 def calculate_atr_stop_pct(atr, current_price):
@@ -129,6 +140,48 @@ def calculate_atr_stop_pct(atr, current_price):
 
     return -stop_pct  # Return as negative
 
+
+def calculate_atr_trail_pct(atr, current_price, profit_level):
+    """
+    Calculate ATR-based trailing stop percentage for given profit level
+
+    Args:
+        atr: Average True Range value
+        current_price: Current stock price
+        profit_level: 0, 1, 2, or 3
+
+    Returns:
+        float: Trailing stop percentage (positive, e.g., 6.0 means 6% from peak)
+    """
+    # Fallback values if ATR unavailable
+    fallbacks = {0: 8.0, 1: 6.0, 2: 7.0, 3: 6.0}
+
+    if not atr or atr <= 0 or current_price <= 0:
+        return fallbacks.get(profit_level, 8.0)
+
+    # Get ATR multiplier and max floor for this level
+    config = {
+        0: (ExitConfig.LEVEL_0_TRAIL_ATR_MULT, ExitConfig.LEVEL_0_TRAIL_MAX_PCT),
+        1: (ExitConfig.LEVEL_1_TRAIL_ATR_MULT, ExitConfig.LEVEL_1_TRAIL_MAX_PCT),
+        2: (ExitConfig.LEVEL_2_TRAIL_ATR_MULT, ExitConfig.LEVEL_2_TRAIL_MAX_PCT),
+        3: (ExitConfig.LEVEL_3_TRAIL_ATR_MULT, ExitConfig.LEVEL_3_TRAIL_MAX_PCT),
+    }
+
+    atr_mult, max_pct = config.get(profit_level, (2.0, 8.0))
+
+    # Calculate ATR-based trail
+    atr_pct = (atr / current_price) * 100
+    trail_pct = atr_pct * atr_mult
+
+    # Cap at maximum floor (never give back more than max_pct)
+    trail_pct = min(trail_pct, max_pct)
+
+    return trail_pct
+
+
+# =============================================================================
+# EXIT CHECKS
+# =============================================================================
 
 def check_intraday_stop_breach(low_price, entry_price, stop_threshold):
     """Check if intraday low breached stop"""
@@ -165,11 +218,12 @@ def check_atr_emergency_stop(pnl_pct, current_price, entry_price, atr=None):
     return None
 
 
-def check_level_0_trailing_stop(pnl_pct, local_max, current_price, entry_price):
+def check_level_0_trailing_stop(pnl_pct, local_max, current_price, entry_price, atr=None):
     """
     Level 0 trailing stop - protects gains before hitting +10% target
+    NOW ATR-BASED with maximum floor cap
 
-    Activates when position reaches +3% gain, then trails at 8% from peak
+    Activates when position reaches +3% gain, then trails using ATR
     """
     # Calculate gain from peak
     peak_gain_pct = ((local_max - entry_price) / entry_price * 100) if entry_price > 0 else 0
@@ -178,16 +232,19 @@ def check_level_0_trailing_stop(pnl_pct, local_max, current_price, entry_price):
     if peak_gain_pct < ExitConfig.LEVEL_0_TRAIL_ACTIVATION:
         return None
 
+    # Calculate ATR-based trail percentage
+    trail_pct = calculate_atr_trail_pct(atr, current_price, profit_level=0)
+
     # Calculate drawdown from peak
     drawdown_from_peak = ((current_price - local_max) / local_max * 100) if local_max > 0 else 0
 
     # Check if trailing stop triggered
-    if drawdown_from_peak <= -ExitConfig.LEVEL_0_TRAIL_PCT:
+    if drawdown_from_peak <= -trail_pct:
         return {
             'type': 'full_exit',
             'reason': 'level_0_trail',
             'sell_pct': 100.0,
-            'message': f'L0 trail {ExitConfig.LEVEL_0_TRAIL_PCT}% from ${local_max:.2f} (peak +{peak_gain_pct:.1f}%)'
+            'message': f'L0 ATR trail {trail_pct:.1f}% from ${local_max:.2f} (peak +{peak_gain_pct:.1f}%)'
         }
 
     return None
@@ -260,14 +317,17 @@ def check_emergency_exit_per_level(profit_level, current_price, entry_price,
     return None
 
 
-def check_trailing_stop(profit_level, local_max, current_price):
-    """Progressive trailing stop"""
+def check_trailing_stop(profit_level, local_max, current_price, atr=None):
+    """
+    Progressive trailing stop - NOW ATR-BASED
+
+    Uses ATR to calculate trail percentage with maximum floor caps
+    """
     if profit_level == 0:
         return None
 
-    trail_pct = {1: ExitConfig.TRAILING_STOP_LEVEL_1,
-                 2: ExitConfig.TRAILING_STOP_LEVEL_2,
-                 3: ExitConfig.TRAILING_STOP_LEVEL_3}.get(profit_level, 10.0)
+    # Calculate ATR-based trail percentage for this level
+    trail_pct = calculate_atr_trail_pct(atr, current_price, profit_level)
 
     drawdown = ((current_price - local_max) / local_max * 100)
 
@@ -276,20 +336,23 @@ def check_trailing_stop(profit_level, local_max, current_price):
             'type': 'full_exit',
             'reason': f'trailing_L{profit_level}',
             'sell_pct': 100.0,
-            'message': f'L{profit_level} trail {trail_pct}% from ${local_max:.2f}'
+            'message': f'L{profit_level} ATR trail {trail_pct:.1f}% from ${local_max:.2f}'
         }
 
     return None
 
 
-def check_intraday_trailing_breach(low_price, local_max, profit_level):
-    """Intraday trailing breach"""
+def check_intraday_trailing_breach(low_price, local_max, profit_level, atr=None, current_price=None):
+    """
+    Intraday trailing breach - NOW ATR-BASED
+
+    Checks if intraday low breached the ATR-based trailing stop
+    """
     if profit_level == 0:
         return None
 
-    trail_pct = {1: ExitConfig.TRAILING_STOP_LEVEL_1,
-                 2: ExitConfig.TRAILING_STOP_LEVEL_2,
-                 3: ExitConfig.TRAILING_STOP_LEVEL_3}.get(profit_level, 10.0)
+    # Calculate ATR-based trail percentage
+    trail_pct = calculate_atr_trail_pct(atr, current_price or local_max, profit_level)
 
     trail_stop_price = local_max * (1 - trail_pct / 100)
 
@@ -298,7 +361,36 @@ def check_intraday_trailing_breach(low_price, local_max, profit_level):
             'type': 'full_exit',
             'reason': f'intraday_trail_L{profit_level}',
             'sell_pct': 100.0,
-            'message': f'Intraday trail L{profit_level}'
+            'message': f'Intraday ATR trail L{profit_level} @ ${trail_stop_price:.2f}'
+        }
+
+    return None
+
+
+def check_intraday_level0_breach(low_price, local_max, entry_price, atr=None, current_price=None):
+    """
+    Check if intraday low breached Level 0 trailing stop
+
+    Ensures we don't get gapped through our L0 trail on volatile days
+    """
+    # Calculate gain from peak
+    peak_gain_pct = ((local_max - entry_price) / entry_price * 100) if entry_price > 0 else 0
+
+    # Only check if L0 trail is active
+    if peak_gain_pct < ExitConfig.LEVEL_0_TRAIL_ACTIVATION:
+        return None
+
+    # Calculate ATR-based trail percentage
+    trail_pct = calculate_atr_trail_pct(atr, current_price or local_max, profit_level=0)
+
+    trail_stop_price = local_max * (1 - trail_pct / 100)
+
+    if low_price <= trail_stop_price:
+        return {
+            'type': 'full_exit',
+            'reason': 'intraday_L0_trail',
+            'sell_pct': 100.0,
+            'message': f'Intraday L0 ATR trail @ ${trail_stop_price:.2f}'
         }
 
     return None
@@ -336,7 +428,7 @@ def check_remnant_position(remaining_shares, current_price):
 # =============================================================================
 
 def check_positions_for_exits(strategy, current_date, all_stock_data, position_monitor):
-    """Check all positions for exit conditions"""
+    """Check all positions for exit conditions - WITH ATR-BASED TRAILING"""
     import account_broker_data
 
     exit_orders = []
@@ -364,7 +456,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         if current_price <= 0:
             continue
 
-        # Get ATR for dynamic stop loss
+        # Get ATR for dynamic stops - CRITICAL for ATR-based trailing
         atr = data.get('atr_14', None)
 
         # Ensure tracked
@@ -400,9 +492,18 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
             # Close-based ATR stop
             if not exit_signal:
                 exit_signal = check_atr_emergency_stop(pnl_pct, current_price, broker_entry_price, atr)
-            # Level 0 trailing (protect unrealized gains)
+
+            # Intraday Level 0 trail breach (gap protection)
             if not exit_signal:
-                exit_signal = check_level_0_trailing_stop(pnl_pct, local_max, current_price, broker_entry_price)
+                exit_signal = check_intraday_level0_breach(
+                    low_price, local_max, broker_entry_price, atr, current_price
+                )
+
+            # Close-based Level 0 trailing (protect unrealized gains)
+            if not exit_signal:
+                exit_signal = check_level_0_trailing_stop(
+                    pnl_pct, local_max, current_price, broker_entry_price, atr
+                )
 
         # Profit taking (highest priority after initial stops)
         if not exit_signal:
@@ -415,11 +516,15 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
                 level_1_lock_price, level_2_lock_price
             )
 
+        # Intraday trailing breach (gap protection for L1+)
         if not exit_signal and profit_level > 0:
-            exit_signal = check_intraday_trailing_breach(low_price, local_max, profit_level)
+            exit_signal = check_intraday_trailing_breach(
+                low_price, local_max, profit_level, atr, current_price
+            )
 
+        # Close-based trailing stop
         if not exit_signal and profit_level > 0:
-            exit_signal = check_trailing_stop(profit_level, local_max, current_price)
+            exit_signal = check_trailing_stop(profit_level, local_max, current_price, atr)
 
         # Update local max if no exit
         if not exit_signal:

@@ -1,10 +1,10 @@
 """
-SwingTradeStrategy - STREAMLINED LOGGING VERSION
+SwingTradeStrategy - WITH CAUTION MINIMUM PROFIT THRESHOLD
 
 Changes:
-- Removed verbose per-event logging
-- Uses DailySummary for consolidated output
-- One summary printed per trading iteration
+- Added CAUTION_MIN_PROFIT_PCT = 3.0
+- Only sells positions during caution if profit >= 3%
+- Prevents selling winners for pocket change
 """
 
 from lumibot.strategies import Strategy
@@ -25,6 +25,11 @@ from account_profit_tracking import get_summary, reset_summary
 from lumibot.brokers import Alpaca
 
 broker = Alpaca(Config.get_alpaca_config())
+
+# =============================================================================
+# CAUTION REGIME CONFIGURATION
+# =============================================================================
+CAUTION_MIN_PROFIT_PCT = 3.0  # Only sell during caution if +3% or more
 
 
 class SwingTradeStrategy(Strategy):
@@ -52,6 +57,7 @@ class SwingTradeStrategy(Strategy):
         print(f"🤖 SwingTradeStrategy Initialized")
         print(f"   Tickers: {len(self.tickers)} | Threshold: {stock_signals.SignalConfig.MIN_SCORE_THRESHOLD}")
         print(f"   Mode: {'BACKTEST' if Config.BACKTESTING else 'LIVE'}")
+        print(f"   Caution Min Profit: {CAUTION_MIN_PROFIT_PCT}%")
         print(f"{'=' * 60}\n")
 
     def before_starting_trading(self):
@@ -190,7 +196,7 @@ class SwingTradeStrategy(Strategy):
                 summary.add_error(f"Exit processing failed: {e}")
 
             # =================================================================
-            # CAUTION REGIME: SELL PROFITABLE POSITIONS
+            # CAUTION REGIME: SELL PROFITABLE POSITIONS (WITH MINIMUM THRESHOLD)
             # =================================================================
             if regime_result['action'] == 'caution':
                 positions = self.get_positions()
@@ -210,8 +216,9 @@ class SwingTradeStrategy(Strategy):
                         pnl_pct = ((current_price - entry_price) / entry_price * 100)
                         pnl_dollars = (current_price - entry_price) * qty
 
-                        # Sell if profitable
-                        if pnl_dollars > 0:
+                        # UPDATED: Only sell if profit >= CAUTION_MIN_PROFIT_PCT
+                        # This prevents selling winners for pocket change (+$3, +0.1%)
+                        if pnl_pct >= CAUTION_MIN_PROFIT_PCT:
                             summary.add_exit(ticker, qty, pnl_dollars, pnl_pct, 'caution_profit_take')
 
                             # Record trade
