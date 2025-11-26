@@ -25,8 +25,8 @@ class RotationConfig:
     STANDARD_MIN_TRADES = 7
 
     # Frozen requirements
-    FROZEN_WIN_RATE = 40.0
-    FROZEN_MIN_TRADES = 7
+    FROZEN_WIN_RATE = 50.0
+    FROZEN_MIN_TRADES = 5
 
     # Position size multipliers
     PREMIUM_MULTIPLIER = 1.5
