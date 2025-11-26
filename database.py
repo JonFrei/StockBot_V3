@@ -472,7 +472,10 @@ class InMemoryDatabase:
             'was_watchlisted': was_watchlisted,
             'days_on_watchlist': days_on_watchlist
         }])
-        self.order_log_df = pd.concat([self.order_log_df, new_row], ignore_index=True)
+        if self.order_log_df.empty:
+            self.order_log_df = new_row
+        else:
+            self.order_log_df = pd.concat([self.order_log_df, new_row], ignore_index=True)
 
     def get_order_log(self, ticker=None, limit=None):
         if self.order_log_df.empty:
@@ -505,7 +508,10 @@ class InMemoryDatabase:
             'spy_close': float(spy_close) if spy_close else None,
             'market_regime': market_regime
         }])
-        self.daily_metrics_df = pd.concat([self.daily_metrics_df, new_row], ignore_index=True)
+        if self.daily_metrics_df.empty:
+            self.daily_metrics_df = new_row
+        else:
+            self.daily_metrics_df = pd.concat([self.daily_metrics_df, new_row], ignore_index=True)
 
     def get_daily_metrics(self, date):
         if self.daily_metrics_df.empty:
@@ -537,7 +543,10 @@ class InMemoryDatabase:
             'avg_pnl': float(avg_pnl),
             'last_updated': datetime.now()
         }])
-        self.signal_performance_df = pd.concat([self.signal_performance_df, new_row], ignore_index=True)
+        if self.signal_performance_df.empty:
+            self.signal_performance_df = new_row
+        else:
+            self.signal_performance_df = pd.concat([self.signal_performance_df, new_row], ignore_index=True)
 
     def get_signal_performance(self, signal_name):
         if self.signal_performance_df.empty:

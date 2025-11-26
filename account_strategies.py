@@ -275,9 +275,12 @@ class SwingTradeStrategy(Strategy):
             # =================================================================
             all_opportunities = []
 
+            current_positions = self.get_positions()
+            current_position_symbols = {p.symbol for p in current_positions}
+
             for ticker in all_tickers:
                 try:
-                    if ticker in self.positions:
+                    if ticker in current_position_symbols:
                         continue
 
                     if not self.stock_rotator.is_tradeable(ticker):
