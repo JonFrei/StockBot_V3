@@ -179,7 +179,7 @@ class MarketRegimeDetector:
             return {
                 'action': 'caution',
                 'position_size_multiplier': SafeguardConfig.WARNING_SIZE_MULTIPLIER,
-                'allow_new_entries': True,
+                'allow_new_entries': False,  # Changed from True
                 'reason': f"Net Distribution: {net_distribution} (WARNING)",
                 'details': details
             }
@@ -188,7 +188,7 @@ class MarketRegimeDetector:
             return {
                 'action': 'caution',
                 'position_size_multiplier': SafeguardConfig.CAUTION_SIZE_MULTIPLIER,
-                'allow_new_entries': True,
+                'allow_new_entries': False,  # Changed from True
                 'reason': f"Net Distribution: {net_distribution} (CAUTION)",
                 'details': details
             }
@@ -200,7 +200,7 @@ class MarketRegimeDetector:
             return {
                 'action': 'caution',
                 'position_size_multiplier': SafeguardConfig.CAUTION_SIZE_MULTIPLIER,
-                'allow_new_entries': True,
+                'allow_new_entries': False,  # Changed from True
                 'reason': f"SPY ${self.spy_close:.2f} below 50 SMA ${self.spy_50_sma:.2f} (early warning)",
                 'details': details
             }

@@ -190,6 +190,58 @@ class SwingTradeStrategy(Strategy):
                 summary.add_error(f"Exit processing failed: {e}")
 
             # =================================================================
+            # CAUTION REGIME: SELL PROFITABLE POSITIONS
+            # =================================================================
+            if regime_result['action'] == 'caution':
+                positions = self.get_positions()
+                for position in positions:
+                    try:
+                        ticker = position.symbol
+                        qty = int(position.quantity)
+                        if qty <= 0:
+                            continue
+
+                        # Get entry price
+                        entry_price = account_broker_data.get_broker_entry_price(position, self, ticker)
+                        if entry_price <= 0:
+                            continue
+
+                        current_price = self.get_last_price(ticker)
+                        pnl_pct = ((current_price - entry_price) / entry_price * 100)
+                        pnl_dollars = (current_price - entry_price) * qty
+
+                        # Sell if profitable
+                        if pnl_dollars > 0:
+                            summary.add_exit(ticker, qty, pnl_dollars, pnl_pct, 'caution_profit_take')
+
+                            # Record trade
+                            metadata = self.position_monitor.get_position_metadata(ticker)
+                            entry_signal = metadata.get('entry_signal', 'unknown') if metadata else 'unknown'
+                            entry_score = metadata.get('entry_score', 0) if metadata else 0
+
+                            self.profit_tracker.record_trade(
+                                ticker=ticker,
+                                quantity_sold=qty,
+                                entry_price=entry_price,
+                                exit_price=current_price,
+                                exit_date=current_date,
+                                entry_signal=entry_signal,
+                                exit_signal={'reason': 'caution_profit_take'},
+                                entry_score=entry_score
+                            )
+
+                            self.position_monitor.clean_position_metadata(ticker)
+
+                            sell_order = self.create_order(ticker, qty, 'sell')
+                            self.submit_order(sell_order)
+
+                            execution_tracker.record_action('exits', count=1)
+
+                    except Exception as e:
+                        summary.add_warning(f"Caution exit failed {ticker}: {e}")
+                        continue
+
+            # =================================================================
             # SKIP IF BLOCKED
             # =================================================================
             if not regime_result['allow_new_entries']:

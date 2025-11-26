@@ -447,7 +447,7 @@ def generate_detailed_summary_html(strategy, current_date):
     """
     Generate HTML for detailed trading summary
 
-    Uses safe data collection with error handling for each section
+    Uses the comprehensive summary from ProfitTracker when available
 
     Returns:
         str: HTML content
@@ -468,17 +468,32 @@ def generate_detailed_summary_html(strategy, current_date):
     trades_html = safe_generate_trades_section(strategy, current_date)
     html += trades_html
 
-    # Stock Rotation (safe)
-    rotation_html = safe_generate_rotation_section(strategy)
-    html += rotation_html
+    # Use comprehensive summary from ProfitTracker if available
+    try:
+        if hasattr(strategy, 'profit_tracker') and hasattr(strategy, 'stock_rotator') and hasattr(strategy, 'regime_detector'):
+            comprehensive_html = strategy.profit_tracker.generate_final_summary_html(
+                stock_rotator=strategy.stock_rotator,
+                regime_detector=strategy.regime_detector
+            )
+            html += '<div class="section-divider"></div>'
+            html += comprehensive_html
+        else:
+            # Fallback to old methods
+            rotation_html = safe_generate_rotation_section(strategy)
+            html += rotation_html
 
-    # Overall Performance (safe)
-    performance_html = safe_generate_performance_section(strategy)
-    html += performance_html
+            performance_html = safe_generate_performance_section(strategy)
+            html += performance_html
 
-    # Top Performers (safe)
-    top_performers_html = safe_generate_top_performers_section(strategy)
-    html += top_performers_html
+            top_performers_html = safe_generate_top_performers_section(strategy)
+            html += top_performers_html
+    except Exception as e:
+        error_html = generate_error_section_html(
+            "Comprehensive Summary",
+            str(e),
+            traceback.format_exc()
+        )
+        html += error_html
 
     # Footer
     html += f"""
@@ -545,7 +560,6 @@ def safe_generate_positions_section(strategy):
                     ticker = position.symbol
                     qty = int(position.quantity)
 
-
                     entry_price = None
                     # Try avg_entry_price first
                     if hasattr(position, 'avg_entry_price') and position.avg_entry_price:
@@ -598,7 +612,9 @@ def safe_generate_positions_section(strategy):
                     total_unrealized += pnl_dollars
 
                     # Get award from stock rotator
-                    award = strategy.stock_rotator.get_award(ticker)
+                    award = 'standard'
+                    if hasattr(strategy, 'stock_rotator'):
+                        award = strategy.stock_rotator.get_award(ticker)
                     award_emoji = {
                         'premium': '🥇',
                         'standard': '🥈',
@@ -606,8 +622,6 @@ def safe_generate_positions_section(strategy):
                         'none': '⚪',
                         'frozen': '❄️'
                     }.get(award, '❓')
-
-                    pnl_class = 'positive' if pnl_dollars > 0 else 'negative'
 
                     html += f"""
                     <tr>
@@ -628,7 +642,6 @@ def safe_generate_positions_section(strategy):
                     </tr>
                     """
 
-            pnl_class = 'positive' if total_unrealized > 0 else 'negative'
             html += f"""
                 <tr style="background-color: #f8f9fa; font-weight: bold;">
                     <td colspan="4">TOTAL UNREALIZED P&L</td>
@@ -645,13 +658,14 @@ def safe_generate_positions_section(strategy):
         return generate_error_section_html("Active Positions", str(e), traceback.format_exc())
 
 
-# In account_email_notifications.py
-
 def safe_generate_trades_section(strategy, current_date):
     """Safely generate today's trades section with error handling"""
     try:
-        today_trades = [t for t in strategy.profit_tracker.closed_trades
-                        if t.get('exit_date') and t['exit_date'].date() == current_date.date()]
+        today_trades = []
+        if hasattr(strategy, 'profit_tracker'):
+            all_trades = strategy.profit_tracker.get_closed_trades()
+            today_trades = [t for t in all_trades
+                           if t.get('exit_date') and hasattr(t['exit_date'], 'date') and t['exit_date'].date() == current_date.date()]
 
         html = f"""
         <h3>🔄 Today's Closed Trades ({len(today_trades)})</h3>
@@ -726,6 +740,9 @@ def safe_generate_trades_section(strategy, current_date):
 def safe_generate_rotation_section(strategy):
     """Safely generate rotation section with error handling"""
     try:
+        if not hasattr(strategy, 'stock_rotator'):
+            return "<p>Stock rotation not available</p>"
+
         html = """
         <h3>🏆 Stock Rotation Status</h3>
         <table>
@@ -751,7 +768,7 @@ def safe_generate_rotation_section(strategy):
             }.get(award_type, '❓')
 
             multiplier = {
-                'premium': '1.3x',
+                'premium': '1.5x',
                 'standard': '1.0x',
                 'trial': '1.0x',
                 'none': '0.6x',
@@ -776,14 +793,18 @@ def safe_generate_rotation_section(strategy):
 def safe_generate_performance_section(strategy):
     """Safely generate performance section with error handling"""
     try:
-        total_trades = len(strategy.profit_tracker.closed_trades)
+        if not hasattr(strategy, 'profit_tracker'):
+            return "<p>No closed trades yet</p>"
+
+        closed_trades = strategy.profit_tracker.get_closed_trades()
+        total_trades = len(closed_trades)
 
         if total_trades == 0:
             return "<p>No closed trades yet</p>"
 
-        total_wins = sum(1 for t in strategy.profit_tracker.closed_trades if t['pnl_dollars'] > 0)
+        total_wins = sum(1 for t in closed_trades if t['pnl_dollars'] > 0)
         overall_wr = (total_wins / total_trades * 100)
-        total_realized = sum(t['pnl_dollars'] for t in strategy.profit_tracker.closed_trades)
+        total_realized = sum(t['pnl_dollars'] for t in closed_trades)
 
         html = f"""
         <div style="background-color: #ecf0f1; padding: 15px; border-radius: 5px; margin: 10px 0;">
@@ -805,13 +826,17 @@ def safe_generate_performance_section(strategy):
 def safe_generate_top_performers_section(strategy):
     """Safely generate top performers section with error handling"""
     try:
-        total_trades = len(strategy.profit_tracker.closed_trades)
+        if not hasattr(strategy, 'profit_tracker'):
+            return ""
+
+        closed_trades = strategy.profit_tracker.get_closed_trades()
+        total_trades = len(closed_trades)
 
         if total_trades == 0:
             return ""
 
         ticker_stats = {}
-        for trade in strategy.profit_tracker.closed_trades:
+        for trade in closed_trades:
             ticker = trade['ticker']
             if ticker not in ticker_stats:
                 ticker_stats[ticker] = {'trades': 0, 'wins': 0, 'total_pnl': 0}
@@ -841,7 +866,9 @@ def safe_generate_top_performers_section(strategy):
             wr = (wins / trades * 100) if trades > 0 else 0
             total_pnl = stats['total_pnl']
 
-            award = strategy.stock_rotator.get_award(ticker)
+            award = 'standard'
+            if hasattr(strategy, 'stock_rotator'):
+                award = strategy.stock_rotator.get_award(ticker)
             award_emoji = {
                 'premium': '🥇',
                 'standard': '🥈',
