@@ -206,6 +206,7 @@ class SwingTradeStrategy(Strategy):
             # CAUTION REGIME: SELL PROFITABLE POSITIONS (WITH MINIMUM THRESHOLD)
             # =================================================================
             # Track tickers already exited this iteration to avoid double-selling
+
             already_exited = {order['ticker'] for order in exit_orders} if exit_orders else set()
 
             if regime_result['action'] == 'caution':
