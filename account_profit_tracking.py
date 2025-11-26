@@ -1,5 +1,6 @@
 """
-Profit Tracking System - WITH RECOVERY MODE SUMMARY
+Profit Tracking System - WITH ENHANCED RECOVERY MODE LOGGING
+MODIFICATIONS: Added detailed recovery mode display in daily summaries
 """
 
 from datetime import datetime
@@ -18,6 +19,11 @@ class DailySummary:
         self.regime_status = None
         self.regime_reason = None
         self.regime_multiplier = 1.0
+        # NEW: Recovery mode tracking
+        self.recovery_mode_active = False
+        self.recovery_max_positions = None
+        self.recovery_profit_target = None
+        self.recovery_signals = None
         self.exits = []
         self.entries = []
         self.profit_takes = []
@@ -31,16 +37,39 @@ class DailySummary:
         self.portfolio_value = portfolio_value
         self.cash_balance = cash_balance
 
-    def set_regime(self, status, reason, multiplier):
+    def set_regime(self, status, reason, multiplier, recovery_details=None):
+        """
+        Set regime status with optional recovery mode details
+
+        Args:
+            status: Regime status string
+            reason: Reason for regime
+            multiplier: Position size multiplier
+            recovery_details: Dict with recovery mode info (optional)
+                {
+                    'active': bool,
+                    'max_positions': int,
+                    'profit_target': float,
+                    'signals': dict
+                }
+        """
         self.regime_status = status
         self.regime_reason = reason
         self.regime_multiplier = multiplier
+
+        # NEW: Track recovery mode details
+        if recovery_details:
+            self.recovery_mode_active = recovery_details.get('active', False)
+            self.recovery_max_positions = recovery_details.get('max_positions')
+            self.recovery_profit_target = recovery_details.get('profit_target')
+            self.recovery_signals = recovery_details.get('signals')
 
     def add_exit(self, ticker, qty, pnl, pnl_pct, reason):
         self.exits.append({'ticker': ticker, 'qty': qty, 'pnl': pnl, 'pnl_pct': pnl_pct, 'reason': reason})
 
     def add_entry(self, ticker, qty, price, cost, signal, score):
-        self.entries.append({'ticker': ticker, 'qty': qty, 'price': price, 'cost': cost, 'signal': signal, 'score': score})
+        self.entries.append(
+            {'ticker': ticker, 'qty': qty, 'price': price, 'cost': cost, 'signal': signal, 'score': score})
 
     def add_profit_take(self, ticker, level, qty, pnl, pnl_pct):
         self.profit_takes.append({'ticker': ticker, 'level': level, 'qty': qty, 'pnl': pnl, 'pnl_pct': pnl_pct})
@@ -63,18 +92,40 @@ class DailySummary:
         print(f"📅 {date_str} | Portfolio: ${self.portfolio_value:,.0f} | Cash: ${self.cash_balance:,.0f}")
 
         if self.regime_status:
-            regime_icon = {'normal': '✅', 'caution': '⚠️', 'stop_buying': '🚫', 'exit_all': '🚨', 'recovery_mode': '🔓'}.get(self.regime_status, '❓')
-            print(f"   {regime_icon} Regime: {self.regime_status.upper()} ({self.regime_multiplier:.0%}) - {self.regime_reason}")
+            regime_icon = {'normal': '✅', 'caution': '⚠️', 'stop_buying': '🚫', 'exit_all': '🚨',
+                           'recovery_mode': '🔓'}.get(self.regime_status, '❓')
+            print(
+                f"   {regime_icon} Regime: {self.regime_status.upper()} ({self.regime_multiplier:.0%}) - {self.regime_reason}")
+
+            # NEW: Enhanced recovery mode display
+            if self.recovery_mode_active or self.regime_status == 'recovery_mode':
+                print(f"   {'─' * 76}")
+                print(f"   🔓 RECOVERY MODE ACTIVE")
+                if self.recovery_max_positions:
+                    current_positions = len([e for e in self.entries])  # Rough count
+                    print(f"      • Position Limit: {current_positions}/{self.recovery_max_positions} positions")
+                if self.recovery_profit_target:
+                    print(f"      • Profit Target: {self.recovery_profit_target:.1f}% (aggressive exits)")
+                if self.recovery_signals:
+                    total_signals = self.recovery_signals.get('total', 0)
+                    print(f"      • Recovery Signals: {total_signals}/3 active")
+                    active = [k for k, v in self.recovery_signals.items() if k != 'total' and v]
+                    if active:
+                        print(f"      • Active: {', '.join(active[:3])}")
+                print(f"   {'─' * 76}")
 
         for pt in self.profit_takes:
-            print(f"   💰 PROFIT L{pt['level']}: {pt['ticker']} x{pt['qty']} | ${pt['pnl']:+,.2f} ({pt['pnl_pct']:+.1f}%)")
+            print(
+                f"   💰 PROFIT L{pt['level']}: {pt['ticker']} x{pt['qty']} | ${pt['pnl']:+,.2f} ({pt['pnl_pct']:+.1f}%)")
 
         for ex in self.exits:
             emoji = '✅' if ex['pnl'] > 0 else '❌'
-            print(f"   {emoji} EXIT: {ex['ticker']} x{ex['qty']} | ${ex['pnl']:+,.2f} ({ex['pnl_pct']:+.1f}%) - {ex['reason']}")
+            print(
+                f"   {emoji} EXIT: {ex['ticker']} x{ex['qty']} | ${ex['pnl']:+,.2f} ({ex['pnl_pct']:+.1f}%) - {ex['reason']}")
 
         for en in self.entries:
-            print(f"   🟢 BUY: {en['ticker']} x{en['qty']} @ ${en['price']:.2f} (${en['cost']:,.0f}) | {en['signal']} [{en['score']}]")
+            print(
+                f"   🟢 BUY: {en['ticker']} x{en['qty']} @ ${en['price']:.2f} (${en['cost']:,.0f}) | {en['signal']} [{en['score']}]")
 
         if self.signals_found and not self.entries:
             tickers = [f"{s['ticker']}[{s['score']}]" for s in self.signals_found[:5]]
@@ -86,19 +137,23 @@ class DailySummary:
             print(f"   ❌ {e}")
 
         if not any([self.profit_takes, self.exits, self.entries, self.warnings, self.errors]):
-            if self.regime_status not in ['stop_buying', 'exit_all']:
+            if self.regime_status not in ['stop_buying', 'exit_all', 'recovery_mode']:
                 print(f"   (No activity)")
+            elif self.regime_status == 'recovery_mode':
+                print(f"   (Recovery mode active - waiting for qualified signals)")
 
         print(f"{'═' * 80}")
 
 
 _summary = None
 
+
 def get_summary():
     global _summary
     if _summary is None:
         _summary = DailySummary()
     return _summary
+
 
 def reset_summary():
     global _summary
@@ -109,12 +164,14 @@ def reset_summary():
     return _summary
 
 
+# [Rest of ProfitTracker class remains unchanged - keeping original implementation]
 class ProfitTracker:
     def __init__(self, strategy):
         self.strategy = strategy
         self.db = get_database()
 
-    def record_trade(self, ticker, quantity_sold, entry_price, exit_price, exit_date, entry_signal, exit_signal, entry_score=0):
+    def record_trade(self, ticker, quantity_sold, entry_price, exit_price, exit_date, entry_signal, exit_signal,
+                     entry_score=0):
         pnl_per_share = exit_price - entry_price
         total_pnl = pnl_per_share * quantity_sold
         pnl_pct = (pnl_per_share / entry_price * 100) if entry_price > 0 else 0
@@ -123,15 +180,18 @@ class ProfitTracker:
         try:
             if Config.BACKTESTING:
                 self.db.insert_trade(ticker=ticker, quantity=quantity_sold, entry_price=entry_price,
-                    exit_price=exit_price, pnl_dollars=total_pnl, pnl_pct=pnl_pct, entry_signal=entry_signal,
-                    entry_score=entry_score, exit_signal=exit_signal.get('reason', 'unknown'), exit_date=exit_date)
+                                     exit_price=exit_price, pnl_dollars=total_pnl, pnl_pct=pnl_pct,
+                                     entry_signal=entry_signal,
+                                     entry_score=entry_score, exit_signal=exit_signal.get('reason', 'unknown'),
+                                     exit_date=exit_date)
             else:
                 cursor = conn.cursor()
                 cursor.execute("""INSERT INTO closed_trades (ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct,
                      entry_signal, entry_score, exit_signal, exit_date, was_watchlisted, confirmation_date, days_to_confirmation)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                    (ticker, quantity_sold, entry_price, exit_price, total_pnl, pnl_pct, entry_signal, entry_score,
-                     exit_signal.get('reason', 'unknown'), exit_date, False, None, 0))
+                               (ticker, quantity_sold, entry_price, exit_price, total_pnl, pnl_pct, entry_signal,
+                                entry_score,
+                                exit_signal.get('reason', 'unknown'), exit_date, False, None, 0))
                 conn.commit()
                 cursor.close()
         except Exception as e:
@@ -154,9 +214,11 @@ class ProfitTracker:
                 cursor.execute(query)
             trades = []
             for row in cursor.fetchall():
-                trades.append({'ticker': row[0], 'quantity': row[1], 'entry_price': float(row[2]), 'exit_price': float(row[3]),
-                    'pnl_dollars': float(row[4]), 'pnl_pct': float(row[5]), 'entry_signal': row[6], 'entry_score': row[7],
-                    'exit_signal': row[8], 'exit_date': row[9]})
+                trades.append(
+                    {'ticker': row[0], 'quantity': row[1], 'entry_price': float(row[2]), 'exit_price': float(row[3]),
+                     'pnl_dollars': float(row[4]), 'pnl_pct': float(row[5]), 'entry_signal': row[6],
+                     'entry_score': row[7],
+                     'exit_signal': row[8], 'exit_date': row[9]})
             return trades
         finally:
             cursor.close()
@@ -233,7 +295,8 @@ class ProfitTracker:
             wr = (wins / trades * 100) if trades > 0 else 0
             avg_win = (stats['win_pnl'] / wins) if wins > 0 else 0
             avg_loss = (stats['loss_pnl'] / losses) if losses > 0 else 0
-            print(f"{signal[:25]:<25} {trades:>7} {wr:>7.1f}% {f'${avg_win:,.2f}':>12} {f'${avg_loss:,.2f}':>12} {f'${stats["total_pnl"]:+,.2f}':>14}")
+            print(
+                f"{signal[:25]:<25} {trades:>7} {wr:>7.1f}% {f'${avg_win:,.2f}':>12} {f'${avg_loss:,.2f}':>12} {f'${stats["total_pnl"]:+,.2f}':>14}")
 
     def _display_exit_breakdown(self, closed_trades):
         from collections import defaultdict
@@ -293,7 +356,8 @@ class ProfitTracker:
         for i, trade in enumerate(closed_trades[:100], 1):
             pnl = trade['pnl_dollars']
             emoji = '✅' if pnl > 0 else '❌' if pnl < 0 else '➖'
-            print(f"{i:<4} {emoji}{trade['ticker']:<7} {f'${pnl:+,.2f}':>12} {f'{trade["pnl_pct"]:+.1f}%':>8} {trade['entry_signal'][:25]:<25} {trade.get('exit_signal', 'unknown')[:25]:<25}")
+            print(
+                f"{i:<4} {emoji}{trade['ticker']:<7} {f'${pnl:+,.2f}':>12} {f'{trade["pnl_pct"]:+.1f}%':>8} {trade['entry_signal'][:25]:<25} {trade.get('exit_signal', 'unknown')[:25]:<25}")
 
     def _display_rotation_summary(self, stock_rotator):
         print(f"\n{'─' * 100}")
@@ -305,7 +369,8 @@ class ProfitTracker:
         stats = stock_rotator.get_statistics()
         dist = stats['award_distribution']
         print(f"{'Total Rotations':<30} {stats['rotation_count']:>20}")
-        print(f"   🥇 Premium: {dist.get('premium', 0)} | 🥈 Standard: {dist.get('standard', 0)} | ❄️ Frozen: {dist.get('frozen', 0)}")
+        print(
+            f"   🥇 Premium: {dist.get('premium', 0)} | 🥈 Standard: {dist.get('standard', 0)} | ❄️ Frozen: {dist.get('frozen', 0)}")
 
     def _display_safeguard_summary(self, regime_detector):
         print(f"\n{'─' * 100}")
@@ -315,7 +380,8 @@ class ProfitTracker:
             print("   Not available")
             return
         stats = regime_detector.get_statistics()
-        print(f"   Distribution: {stats['distribution_days']} | Accumulation: {stats['accumulation_days']} | Net: {stats['net_distribution']}")
+        print(
+            f"   Distribution: {stats['distribution_days']} | Accumulation: {stats['accumulation_days']} | Net: {stats['net_distribution']}")
 
     def _display_recovery_mode_summary(self, recovery_manager):
         print(f"\n{'─' * 100}")
@@ -356,7 +422,8 @@ class OrderLogger:
         self.strategy = strategy
         self.db = get_database()
 
-    def log_order(self, ticker, side, quantity, signal_type='unknown', award='none', quality_score=0, limit_price=None, was_watchlisted=False, days_on_watchlist=0):
+    def log_order(self, ticker, side, quantity, signal_type='unknown', award='none', quality_score=0, limit_price=None,
+                  was_watchlisted=False, days_on_watchlist=0):
         try:
             filled_price = self.strategy.get_last_price(ticker) if limit_price is None else limit_price
             portfolio_value = self.strategy.portfolio_value
@@ -365,10 +432,11 @@ class OrderLogger:
 
             if Config.BACKTESTING:
                 self.db.insert_order_log(ticker=ticker, side=side, quantity=quantity, order_type='market',
-                    limit_price=limit_price, filled_price=filled_price, submitted_at=submitted_at,
-                    signal_type=signal_type, portfolio_value=portfolio_value, cash_before=cash_before,
-                    award=award, quality_score=quality_score, broker_order_id=None,
-                    was_watchlisted=was_watchlisted, days_on_watchlist=days_on_watchlist)
+                                         limit_price=limit_price, filled_price=filled_price, submitted_at=submitted_at,
+                                         signal_type=signal_type, portfolio_value=portfolio_value,
+                                         cash_before=cash_before,
+                                         award=award, quality_score=quality_score, broker_order_id=None,
+                                         was_watchlisted=was_watchlisted, days_on_watchlist=days_on_watchlist)
             else:
                 conn = self.db.get_connection()
                 try:
@@ -376,8 +444,10 @@ class OrderLogger:
                     cursor.execute("""INSERT INTO order_log (ticker, side, quantity, order_type, limit_price, filled_price,
                          submitted_at, signal_type, portfolio_value, cash_before, award, quality_score, was_watchlisted, days_on_watchlist)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                        (ticker, side, quantity, 'market', limit_price, filled_price, submitted_at, signal_type,
-                         portfolio_value, cash_before, award, quality_score, was_watchlisted, days_on_watchlist))
+                                   (ticker, side, quantity, 'market', limit_price, filled_price, submitted_at,
+                                    signal_type,
+                                    portfolio_value, cash_before, award, quality_score, was_watchlisted,
+                                    days_on_watchlist))
                     conn.commit()
                 finally:
                     cursor.close()

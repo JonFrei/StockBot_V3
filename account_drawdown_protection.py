@@ -40,13 +40,13 @@ class SafeguardConfig:
     DISTRIBUTION_LOOKBACK_DAYS = 25
 
     # Net distribution thresholds (distribution - accumulation)
-    NET_DISTRIBUTION_CAUTION = 3
+    NET_DISTRIBUTION_CAUTION = 4
     NET_DISTRIBUTION_WARNING = 4
     NET_DISTRIBUTION_DANGER = 5
     NET_DISTRIBUTION_EXIT = 6
 
     # Position size multipliers
-    CAUTION_SIZE_MULTIPLIER = 0.5
+    CAUTION_SIZE_MULTIPLIER = 0.65
     WARNING_SIZE_MULTIPLIER = 0.0
     DANGER_SIZE_MULTIPLIER = 0.0
 
@@ -65,7 +65,7 @@ class SafeguardConfig:
     # Portfolio Peak Drawdown Circuit Breaker
     PEAK_DRAWDOWN_ENABLED = True
     PEAK_DRAWDOWN_THRESHOLD = 8.0  # Trigger if portfolio drops 5% from 30-day peak
-    PEAK_DRAWDOWN_LOOKBACK_DAYS = 20  # Rolling window for peak calculation
+    PEAK_DRAWDOWN_LOOKBACK_DAYS = 30  # Rolling window for peak calculation
     PEAK_DRAWDOWN_LOCKOUT_DAYS = 3  # Trading days to stay in STOP_BUYING
     PEAK_DRAWDOWN_RECOVERY_PCT = 97.0  # Must recover to 97% of peak to reset
 
