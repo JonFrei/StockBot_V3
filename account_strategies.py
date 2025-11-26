@@ -56,8 +56,10 @@ class SwingTradeStrategy(Strategy):
         print(f"🤖 SwingTradeStrategy Initialized")
         print(f"   Tickers: {len(self.tickers)} | Threshold: {stock_signals.SignalConfig.MIN_SCORE_THRESHOLD}")
         print(f"   Mode: {'BACKTEST' if Config.BACKTESTING else 'LIVE'}")
-        print(f"   Peak Drawdown Protection: {SafeguardConfig.PEAK_DRAWDOWN_ENABLED} ({SafeguardConfig.PEAK_DRAWDOWN_THRESHOLD}%)")
-        print(f"   Stop Loss Counter: {SafeguardConfig.STOP_LOSS_COUNTER_ENABLED} ({SafeguardConfig.STOP_LOSS_RATE_THRESHOLD}% rate)")
+        print(
+            f"   Peak Drawdown Protection: {SafeguardConfig.PEAK_DRAWDOWN_ENABLED} ({SafeguardConfig.PEAK_DRAWDOWN_THRESHOLD}%)")
+        print(
+            f"   Stop Loss Counter: {SafeguardConfig.STOP_LOSS_COUNTER_ENABLED} ({SafeguardConfig.STOP_LOSS_RATE_THRESHOLD}% rate)")
         print(f"{'=' * 60}\n")
 
     def before_starting_trading(self):
@@ -203,6 +205,9 @@ class SwingTradeStrategy(Strategy):
             # =================================================================
             # CAUTION REGIME: SELL PROFITABLE POSITIONS (WITH MINIMUM THRESHOLD)
             # =================================================================
+            # Track tickers already exited this iteration to avoid double-selling
+            already_exited = {order['ticker'] for order in exit_orders} if exit_orders else set()
+
             if regime_result['action'] == 'caution':
                 positions = self.get_positions()
                 for position in positions:
@@ -210,6 +215,10 @@ class SwingTradeStrategy(Strategy):
                         ticker = position.symbol
                         qty = int(position.quantity)
                         if qty <= 0:
+                            continue
+
+                        # Skip positions already exited this iteration
+                        if ticker in already_exited:
                             continue
 
                         # Get entry price
@@ -275,12 +284,9 @@ class SwingTradeStrategy(Strategy):
             # =================================================================
             all_opportunities = []
 
-            current_positions = self.get_positions()
-            current_position_symbols = {p.symbol for p in current_positions}
-
             for ticker in all_tickers:
                 try:
-                    if ticker in current_position_symbols:
+                    if ticker in self.positions:
                         continue
 
                     if not self.stock_rotator.is_tradeable(ticker):
