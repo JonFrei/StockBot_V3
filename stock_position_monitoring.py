@@ -20,9 +20,9 @@ class ExitConfig:
 
     # ATR-based trailing stops with floor caps
     # Level 0: Early protection of unrealized gains (before +10%)
-    LEVEL_0_TRAIL_ACTIVATION = 3.0  # Activate after +3% gain
+    LEVEL_0_TRAIL_ACTIVATION = 5.0  # Activate after +3% gain
     LEVEL_0_TRAIL_ATR_MULT = 2.5
-    LEVEL_0_TRAIL_MAX_PCT = 6.0  # Never give back more than 10%
+    LEVEL_0_TRAIL_MAX_PCT = 5.0  # Never give back more than 10%
 
     # Level 1: After first profit target (+10%)
     LEVEL_1_TRAIL_ATR_MULT = 2.0
