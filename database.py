@@ -406,7 +406,10 @@ class InMemoryDatabase:
             'confirmation_date': confirmation_date,
             'days_to_confirmation': days_to_confirmation
         }])
-        self.closed_trades_df = pd.concat([self.closed_trades_df, new_row], ignore_index=True)
+        if self.closed_trades_df.empty:
+            self.closed_trades_df = new_row
+        else:
+            self.closed_trades_df = pd.concat([self.closed_trades_df, new_row], ignore_index=True)
 
     def get_closed_trades(self, limit=None):
         if self.closed_trades_df.empty:

@@ -22,19 +22,19 @@ class ExitConfig:
     # Level 0: Early protection of unrealized gains (before +10%)
     LEVEL_0_TRAIL_ACTIVATION = 3.0  # Activate after +3% gain
     LEVEL_0_TRAIL_ATR_MULT = 2.5
-    LEVEL_0_TRAIL_MAX_PCT = 10.0  # Never give back more than 10%
+    LEVEL_0_TRAIL_MAX_PCT = 6.0  # Never give back more than 10%
 
     # Level 1: After first profit target (+10%)
     LEVEL_1_TRAIL_ATR_MULT = 2.0
-    LEVEL_1_TRAIL_MAX_PCT = 8.0
+    LEVEL_1_TRAIL_MAX_PCT = 10.0
 
     # Level 2: After second profit target (+20%)
     LEVEL_2_TRAIL_ATR_MULT = 1.75
-    LEVEL_2_TRAIL_MAX_PCT = 7.0
+    LEVEL_2_TRAIL_MAX_PCT = 9.0
 
     # Level 3: After third profit target (+30%)
     LEVEL_3_TRAIL_ATR_MULT = 1.5
-    LEVEL_3_TRAIL_MAX_PCT = 6.0
+    LEVEL_3_TRAIL_MAX_PCT = 8.0
 
     # Profit targets (unchanged)
     PROFIT_TARGET_1 = 10.0

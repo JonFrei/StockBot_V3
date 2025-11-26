@@ -29,7 +29,7 @@ broker = Alpaca(Config.get_alpaca_config())
 # =============================================================================
 # CAUTION REGIME CONFIGURATION
 # =============================================================================
-CAUTION_MIN_PROFIT_PCT = 3.0  # Only sell during caution if +3% or more
+CAUTION_MIN_PROFIT_PCT = 0.0  # Only sell during caution if +3% or more
 
 
 class SwingTradeStrategy(Strategy):
