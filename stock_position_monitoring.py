@@ -50,6 +50,11 @@ class ExitConfig:
     MIN_REMNANT_SHARES = 10
     MIN_REMNANT_VALUE = 500.0  # dollars
 
+    # Time-based exit for stagnant positions
+    STAGNANT_MAX_DAYS = 15  # Exit if held this long without meaningful gain
+    STAGNANT_MIN_GAIN_PCT = 3.0  # Must gain at least this % to not be considered stagnant
+    STAGNANT_ENABLED = True
+
 
 class PositionMonitor:
     """Tracks position metadata"""
@@ -423,6 +428,46 @@ def check_remnant_position(remaining_shares, current_price):
     return None
 
 
+def check_stagnant_position(entry_date, current_date, pnl_pct):
+    """
+    Check if position is stagnant (held too long without meaningful gain)
+
+    Frees up capital from positions that aren't moving.
+
+    Args:
+        entry_date: Date position was opened
+        current_date: Current date
+        pnl_pct: Current P&L percentage
+
+    Returns:
+        dict: Exit signal if stagnant, None otherwise
+    """
+    if not ExitConfig.STAGNANT_ENABLED:
+        return None
+
+    # Calculate days held
+    if entry_date is None or current_date is None:
+        return None
+
+    # Handle timezone-aware datetimes
+    entry = entry_date.replace(tzinfo=None) if hasattr(entry_date, 'tzinfo') and entry_date.tzinfo else entry_date
+    current = current_date.replace(tzinfo=None) if hasattr(current_date,
+                                                           'tzinfo') and current_date.tzinfo else current_date
+
+    days_held = (current - entry).days
+
+    # Check if stagnant: held too long without sufficient gain
+    if days_held >= ExitConfig.STAGNANT_MAX_DAYS and pnl_pct < ExitConfig.STAGNANT_MIN_GAIN_PCT:
+        return {
+            'type': 'full_exit',
+            'reason': 'stagnant_exit',
+            'sell_pct': 100.0,
+            'message': f'Stagnant {days_held}d with only {pnl_pct:+.1f}% gain (min: {ExitConfig.STAGNANT_MIN_GAIN_PCT}%)'
+        }
+
+    return None
+
+
 # =============================================================================
 # MAIN FUNCTIONS
 # =============================================================================
@@ -525,6 +570,11 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         # Close-based trailing stop
         if not exit_signal and profit_level > 0:
             exit_signal = check_trailing_stop(profit_level, local_max, current_price, atr)
+
+        # Time-based stagnant exit
+        if not exit_signal:
+            entry_date = metadata.get('entry_date')
+            exit_signal = check_stagnant_position(entry_date, current_date, pnl_pct)
 
         # Update local max if no exit
         if not exit_signal:

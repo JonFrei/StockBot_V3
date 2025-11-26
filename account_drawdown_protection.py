@@ -76,6 +76,10 @@ class SafeguardConfig:
     STOP_LOSS_MIN_COUNT = 4  # Minimum stop losses before rate applies
     STOP_LOSS_LOCKOUT_DAYS = 3  # Trading days to stay in CAUTION
 
+    # Relative Strength Filter
+    RELATIVE_STRENGTH_ENABLED = True
+    RELATIVE_STRENGTH_LOOKBACK = 20  # Days to measure performance
+    RELATIVE_STRENGTH_MIN_OUTPERFORM = 0.0  # Stock must outperform SPY by this % (0 = match, 1.0 = beat by 1%)
 
 class MarketRegimeDetector:
     """
@@ -110,6 +114,7 @@ class MarketRegimeDetector:
         # Exit state
         self.exit_triggered = False
         self.exit_date = None
+        self.spy_price_history = []  # [{'date': date, 'close': float}]
 
         # ======================================================================
         # NEW: Portfolio-Level Safeguard State
@@ -310,6 +315,9 @@ class MarketRegimeDetector:
         self.spy_volume = spy_volume or 0
         self.spy_prev_volume = spy_prev_volume or 0
 
+        # Track SPY price history for relative strength
+        self.update_spy_price_history(date, spy_close)
+
         # Check for distribution or accumulation day
         if spy_prev_close and spy_volume and spy_prev_volume:
             self._check_distribution_or_accumulation(
@@ -341,6 +349,110 @@ class MarketRegimeDetector:
             if self._normalize_date(p['date']).date() != date.date()
         ]
         self.portfolio_history.append({'date': date, 'value': portfolio_value})
+
+    def update_spy_price_history(self, date, spy_close):
+        """
+        Track SPY price history for relative strength calculations
+
+        Args:
+            date: Current date
+            spy_close: SPY closing price
+        """
+        # Normalize date
+        if hasattr(date, 'tzinfo') and date.tzinfo is not None:
+            date = date.replace(tzinfo=None)
+
+        # Avoid duplicates for same date
+        self.spy_price_history = [
+            p for p in self.spy_price_history
+            if self._normalize_date(p['date']).date() != date.date()
+        ]
+        self.spy_price_history.append({'date': date, 'close': spy_close})
+
+        # Keep only lookback period + buffer
+        max_history = SafeguardConfig.RELATIVE_STRENGTH_LOOKBACK + 5
+        if len(self.spy_price_history) > max_history:
+            self.spy_price_history = sorted(
+                self.spy_price_history,
+                key=lambda x: x['date']
+            )[-max_history:]
+
+    def get_spy_performance(self, lookback_days=None):
+        """
+        Get SPY performance over lookback period
+
+        Args:
+            lookback_days: Days to look back (default: RELATIVE_STRENGTH_LOOKBACK)
+
+        Returns:
+            float: SPY percentage change, or None if insufficient data
+        """
+        if lookback_days is None:
+            lookback_days = SafeguardConfig.RELATIVE_STRENGTH_LOOKBACK
+
+        if len(self.spy_price_history) < 2:
+            return None
+
+        # Sort by date
+        sorted_history = sorted(self.spy_price_history, key=lambda x: x['date'])
+
+        # Get current and past price
+        current_price = sorted_history[-1]['close']
+
+        # Find price from ~lookback_days ago
+        if len(sorted_history) <= lookback_days:
+            past_price = sorted_history[0]['close']
+        else:
+            past_price = sorted_history[-lookback_days - 1]['close']
+
+        if past_price <= 0:
+            return None
+
+        return ((current_price - past_price) / past_price) * 100
+
+    def check_relative_strength(self, stock_current_price, stock_past_price):
+        """
+        Check if stock is outperforming SPY
+
+        Args:
+            stock_current_price: Stock's current price
+            stock_past_price: Stock's price from lookback_days ago
+
+        Returns:
+            dict: {
+                'passes': bool,
+                'stock_performance': float,
+                'spy_performance': float,
+                'relative_strength': float (stock - SPY)
+            }
+        """
+        if not SafeguardConfig.RELATIVE_STRENGTH_ENABLED:
+            return {'passes': True, 'stock_performance': 0, 'spy_performance': 0, 'relative_strength': 0}
+
+        # Get SPY performance
+        spy_perf = self.get_spy_performance()
+        if spy_perf is None:
+            # Insufficient SPY data - allow trade
+            return {'passes': True, 'stock_performance': 0, 'spy_performance': 0, 'relative_strength': 0}
+
+        # Calculate stock performance
+        if stock_past_price <= 0 or stock_current_price <= 0:
+            return {'passes': True, 'stock_performance': 0, 'spy_performance': spy_perf, 'relative_strength': 0}
+
+        stock_perf = ((stock_current_price - stock_past_price) / stock_past_price) * 100
+
+        # Calculate relative strength (positive = outperforming SPY)
+        relative_strength = stock_perf - spy_perf
+
+        # Check if passes threshold
+        passes = relative_strength >= SafeguardConfig.RELATIVE_STRENGTH_MIN_OUTPERFORM
+
+        return {
+            'passes': passes,
+            'stock_performance': round(stock_perf, 2),
+            'spy_performance': round(spy_perf, 2),
+            'relative_strength': round(relative_strength, 2)
+        }
 
     def record_stop_loss(self, date, ticker, loss_pct):
         """

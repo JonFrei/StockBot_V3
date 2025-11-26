@@ -302,6 +302,21 @@ class SwingTradeStrategy(Strategy):
                     if not vol_metrics.get('allow_trading', True):
                         continue
 
+                    # Relative strength check
+                    if hasattr(self, 'regime_detector') and len(data.get('raw', [])) >= 20:
+                        try:
+                            raw_df = data.get('raw')
+                            stock_current = data['close']
+                            stock_past = float(raw_df['close'].iloc[-21]) if len(raw_df) >= 21 else float(
+                                raw_df['close'].iloc[0])
+
+                            rs_result = self.regime_detector.check_relative_strength(stock_current, stock_past)
+                            if not rs_result['passes']:
+                                summary.add_skip(ticker, f"Weak RS: {rs_result['relative_strength']:+.1f}% vs SPY")
+                                continue
+                        except Exception:
+                            pass  # Allow trade if RS check fails
+
                     signal_result = self.signal_processor.process_ticker(ticker, data, None)
 
                     if signal_result['action'] == 'buy':
