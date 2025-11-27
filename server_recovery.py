@@ -1,8 +1,8 @@
 """
 State Persistence - Dual Mode (PostgreSQL for live, in-memory for backtesting)
-WITH INTEGRATED POSITION RECONCILIATION
+WITH INTEGRATED POSITION RECONCILIATION AND ROTATION STATE
 
-UPDATED: Removed DrawdownProtection, kept only essential state
+UPDATED: Added rotation state persistence
 """
 
 from datetime import datetime
@@ -32,9 +32,6 @@ class StatePersistence:
         try:
             cursor = conn.cursor()
 
-            # Note: We no longer save drawdown_protection state
-            # The new regime detector is stateless - it rebuilds from recent data
-
             # Clear and save position metadata
             cursor.execute("DELETE FROM position_metadata")
             for ticker, meta in strategy.position_monitor.positions_metadata.items():
@@ -49,12 +46,18 @@ class StatePersistence:
                     meta['entry_signal'],
                     meta.get('entry_score', 0),
                     meta.get('highest_price', meta.get('local_max', 0)),
-                    meta.get('profit_level', 0),  # INTEGER: 0, 1, 2, 3
+                    meta.get('profit_level', 0),
                     meta.get('level_1_lock_price'),
                     meta.get('level_2_lock_price')
                 ))
 
             conn.commit()
+
+            # Save rotation state (uses its own method)
+            if hasattr(strategy, 'stock_rotator') and strategy.stock_rotator:
+                rotation_states = strategy.stock_rotator.get_state_for_persistence()
+                self.db.save_rotation_state(rotation_states)
+
             print(f"[DATABASE] State saved to PostgreSQL at {datetime.now().strftime('%H:%M:%S')}")
 
         except Exception as e:
@@ -68,8 +71,6 @@ class StatePersistence:
     def _save_state_memory(self, strategy):
         """Save to in-memory database"""
 
-        # Note: Regime detector state not saved - it rebuilds naturally
-
         # Save position metadata
         self.db.clear_all_position_metadata()
         for ticker, meta in strategy.position_monitor.positions_metadata.items():
@@ -79,10 +80,15 @@ class StatePersistence:
                 entry_signal=meta['entry_signal'],
                 entry_score=meta.get('entry_score', 0),
                 highest_price=meta.get('highest_price', meta.get('local_max', 0)),
-                profit_level=meta.get('profit_level', 0),  # INTEGER: 0, 1, 2, 3
+                profit_level=meta.get('profit_level', 0),
                 level_1_lock_price=meta.get('level_1_lock_price'),
                 level_2_lock_price=meta.get('level_2_lock_price')
             )
+
+        # Save rotation state
+        if hasattr(strategy, 'stock_rotator') and strategy.stock_rotator:
+            rotation_states = strategy.stock_rotator.get_state_for_persistence()
+            self.db.save_rotation_state(rotation_states)
 
     def load_state(self, strategy):
         """Load bot state (PostgreSQL or in-memory)"""
@@ -102,12 +108,6 @@ class StatePersistence:
             print(f"🔄 RESTORING STATE FROM DATABASE")
             print(f"{'=' * 80}")
 
-            # Note: Regime detector state is NOT loaded
-            # It rebuilds naturally from:
-            # - Recent stop losses (tracked in closed_trades table)
-            # - SPY data (fetched fresh each iteration)
-            # - Distribution days (recalculated from SPY history)
-
             # Load position metadata
             cursor.execute(
                 "SELECT ticker, entry_date, entry_signal, entry_score, highest_price, profit_level, level_1_lock_price, level_2_lock_price FROM position_metadata")
@@ -118,12 +118,19 @@ class StatePersistence:
                     'entry_signal': pos[2],
                     'entry_score': pos[3],
                     'highest_price': float(pos[4]) if pos[4] else 0,
-                    'local_max': float(pos[4]) if pos[4] else 0,  # Alias for highest_price
-                    'profit_level': pos[5] if pos[5] else 0,  # INTEGER: 0, 1, 2, 3
+                    'local_max': float(pos[4]) if pos[4] else 0,
+                    'profit_level': pos[5] if pos[5] else 0,
                     'level_1_lock_price': float(pos[6]) if pos[6] else None,
                     'level_2_lock_price': float(pos[7]) if pos[7] else None
                 }
             print(f"✅ Position Metadata: {len(positions)} position(s)")
+
+            # Load rotation state
+            if hasattr(strategy, 'stock_rotator') and strategy.stock_rotator:
+                rotation_states = self.db.load_rotation_state()
+                if rotation_states:
+                    strategy.stock_rotator.load_state_from_persistence(rotation_states)
+                    print(f"✅ Rotation State: {len(rotation_states)} ticker(s)")
 
             print(f"{'=' * 80}\n")
 
@@ -151,6 +158,13 @@ class StatePersistence:
         strategy.position_monitor.positions_metadata = positions.copy()
         print(f"✅ Position Metadata: {len(positions)} position(s)")
 
+        # Load rotation state
+        if hasattr(strategy, 'stock_rotator') and strategy.stock_rotator:
+            rotation_states = self.db.load_rotation_state()
+            if rotation_states:
+                strategy.stock_rotator.load_state_from_persistence(rotation_states)
+                print(f"✅ Rotation State: {len(rotation_states)} ticker(s)")
+
         print(f"{'=' * 80}\n")
 
         return True
@@ -158,13 +172,10 @@ class StatePersistence:
     def _reconcile_broker_positions(self, strategy):
         """
         INTEGRATED RECONCILIATION - Runs on every startup
-        NOW USES CENTRALIZED BROKER UTILITIES from account_broker_data
 
         Syncs broker positions with database:
         - Adopts orphaned positions (in broker, not in database)
         - Cleans stale entries (in database, not in broker)
-        - Uses broker's avg_entry_price for accuracy
-        - Broker is source of truth for quantity/price
         """
         import account_broker_data
 
@@ -199,32 +210,28 @@ class StatePersistence:
                     position = next(p for p in broker_positions if p.symbol == ticker)
                     quantity = account_broker_data.get_position_quantity(position, ticker)
 
-                    # USE CENTRALIZED UTILITY
                     entry_price = account_broker_data.get_broker_entry_price(position, strategy, ticker)
 
                     if not account_broker_data.validate_entry_price(entry_price, ticker):
                         print(f"   ❌ {ticker}: Invalid entry price - SKIPPING")
                         continue
 
-                    # Get current price for highest_price
                     try:
                         current_price = strategy.get_last_price(ticker)
                         highest_price = max(entry_price, current_price)
                     except:
                         highest_price = entry_price
 
-                    # Add to position tracking
                     strategy.position_monitor.positions_metadata[ticker] = {
                         'entry_date': current_date,
                         'entry_signal': 'recovered_orphan',
                         'entry_score': 0,
                         'highest_price': highest_price,
-                        'profit_level_1_locked': False,
-                        'profit_level_2_locked': False,
-                        'profit_level_3_locked': False
+                        'profit_level': 0,
+                        'level_1_lock_price': None,
+                        'level_2_lock_price': None
                     }
 
-                    # Save to database
                     self._save_position_metadata(ticker, current_date, entry_price, highest_price)
 
                     print(f"   ✅ {ticker}: ADOPTED - {quantity} shares @ ${entry_price:.2f}")
@@ -243,10 +250,8 @@ class StatePersistence:
                 for ticker in missing:
                     print(f"   🗑️  {ticker}: Position closed - cleaning metadata")
 
-                    # Remove from tracking
                     del strategy.position_monitor.positions_metadata[ticker]
 
-                    # Remove from database
                     self._delete_position_metadata(ticker)
 
                     cleaned_count += 1
@@ -287,7 +292,7 @@ class StatePersistence:
                 cursor.execute("""
                     INSERT INTO position_metadata 
                     (ticker, entry_date, entry_signal, entry_score, highest_price,
-                     profit_level_1_locked, profit_level_2_locked, profit_level_3_locked)
+                     profit_level, level_1_lock_price, level_2_lock_price)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (ticker) DO UPDATE SET
                         entry_date = EXCLUDED.entry_date,
@@ -300,9 +305,9 @@ class StatePersistence:
                     'recovered_orphan',
                     0,
                     highest_price,
-                    False,
-                    False,
-                    False
+                    0,
+                    None,
+                    None
                 ))
 
                 conn.commit()
@@ -345,7 +350,7 @@ def save_state_safe(strategy):
     except Exception as e:
         print(f"⚠️ Failed to save state: {e}")
         if not Config.BACKTESTING:
-            raise  # Don't continue if DB save fails in live mode
+            raise
 
 
 def load_state_safe(strategy):
@@ -356,5 +361,5 @@ def load_state_safe(strategy):
     except Exception as e:
         print(f"⚠️ Failed to load state: {e}")
         if not Config.BACKTESTING:
-            raise  # Don't continue if DB load fails in live mode
+            raise
         return False

@@ -154,7 +154,7 @@ class SwingTradeStrategy(Strategy):
                 # =============================================================
                 # HANDLE CRISIS EXIT - Exit ALL positions
                 # =============================================================
-                '''
+
                 if regime_result.get('exit_all', False):
                     positions = self.get_positions()
                     exit_count = 0
@@ -204,7 +204,7 @@ class SwingTradeStrategy(Strategy):
 
                     save_state_safe(self)
                     return
-                '''
+
                 # =============================================================
                 # HANDLE LOCKOUT/BLOCK - No new entries
                 # =============================================================

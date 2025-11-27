@@ -1,15 +1,16 @@
 """
-Position Sizing - STREAMLINED VERSION
+Position Sizing - STREAMLINED VERSION (No MIN_SHARES Enforcement)
 
-Added verbose=False option to suppress detailed output
-Now applies rotation_mult from stock rotation system
+Changes from previous version:
+- Removed MIN_SHARES enforcement (was 5)
+- Let stock_position_monitoring.py handle small positions via remnant cleanup
+- Applies rotation multiplier from stock rotation system
 """
 
 
 class SimplifiedSizingConfig:
     """Position sizing configuration"""
     BASE_POSITION_PCT = 10.0
-    MIN_SHARES = 5
     MAX_POSITION_PCT = 15.0
     MAX_TOTAL_POSITIONS = 25
     MIN_CASH_RESERVE_PCT = 10.0
@@ -19,13 +20,16 @@ class SimplifiedSizingConfig:
 
 def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier=1.0, verbose=True):
     """
-    Position sizing with optional verbose output
+    Position sizing with rotation multiplier support
 
     Args:
         opportunities: List of opportunity dicts
         portfolio_context: Portfolio state dict
         regime_multiplier: From safeguard system (0.0 to 1.0)
         verbose: If False, suppress detailed logging
+
+    Returns:
+        List of allocation dicts with quantity, price, cost, etc.
     """
     if not opportunities:
         return []
@@ -37,7 +41,7 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
     daily_limit = portfolio_value * (SimplifiedSizingConfig.MAX_DAILY_DEPLOYMENT_PCT / 100)
     max_deployment = min(cash_limit, daily_limit)
 
-    # Calculate initial positions
+    # Calculate positions
     allocations = []
 
     for opp in opportunities:
@@ -48,11 +52,19 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
 
         # Apply all multipliers: regime, volatility, and rotation
         position_pct = SimplifiedSizingConfig.BASE_POSITION_PCT * regime_multiplier * vol_mult * rotation_mult
-        position_pct = max(1.0, min(position_pct, SimplifiedSizingConfig.MAX_POSITION_PCT))
+        position_pct = max(0.5, min(position_pct, SimplifiedSizingConfig.MAX_POSITION_PCT))
 
         position_dollars = portfolio_value * (position_pct / 100)
         current_price = data['close']
+
+        # Calculate quantity - no minimum enforcement
         quantity = int(position_dollars / current_price)
+
+        # Skip if quantity is 0 (price too high for allocated dollars)
+        if quantity <= 0:
+            if verbose:
+                print(f"   ⚠️ {ticker}: Position too small (${position_dollars:.0f} / ${current_price:.2f} = 0 shares)")
+            continue
 
         allocations.append({
             'ticker': ticker,
@@ -71,12 +83,6 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
     if not allocations:
         return []
 
-    # Enforce MIN_SHARES
-    allocations = _enforce_min_shares(allocations, max_deployment, portfolio_value, verbose)
-
-    if not allocations:
-        return []
-
     # Scale if over budget
     total_cost = sum(a['cost'] for a in allocations)
     if total_cost > max_deployment:
@@ -85,83 +91,13 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
         scaled = []
         for alloc in allocations:
             scaled_qty = int(alloc['quantity'] * scale_factor)
-            if scaled_qty >= SimplifiedSizingConfig.MIN_SHARES:
+            if scaled_qty > 0:  # Keep if at least 1 share
                 alloc['quantity'] = scaled_qty
                 alloc['cost'] = scaled_qty * alloc['price']
                 alloc['pct_portfolio'] = (alloc['cost'] / portfolio_value * 100)
                 scaled.append(alloc)
 
         allocations = scaled
-
-    return allocations
-
-
-def _enforce_min_shares(allocations, max_budget, portfolio_value, verbose=True):
-    """Enforce MIN_SHARES requirement"""
-    MIN_SHARES = SimplifiedSizingConfig.MIN_SHARES
-
-    below_min = [a for a in allocations if a['quantity'] < MIN_SHARES]
-    if not below_min:
-        return allocations
-
-    # Sort by price (most expensive first)
-    sorted_allocs = sorted(allocations, key=lambda x: x['price'], reverse=True)
-
-    for i in range(len(sorted_allocs)):
-        remaining = sorted_allocs[i:]
-        total_cost = sum(a['cost'] for a in remaining)
-
-        if total_cost <= max_budget:
-            below_min = [a for a in remaining if a['quantity'] < MIN_SHARES]
-            if not below_min:
-                return remaining
-
-            remaining = _redistribute_budget(remaining, max_budget, portfolio_value)
-            below_min = [a for a in remaining if a['quantity'] < MIN_SHARES]
-            if not below_min:
-                return remaining
-
-    return []
-
-
-def _redistribute_budget(allocations, max_budget, portfolio_value):
-    """Redistribute budget to meet MIN_SHARES"""
-    MIN_SHARES = SimplifiedSizingConfig.MIN_SHARES
-
-    below_min = [a for a in allocations if a['quantity'] < MIN_SHARES]
-    above_min = [a for a in allocations if a['quantity'] >= MIN_SHARES]
-
-    if not below_min:
-        return allocations
-
-    boost_needed = sum((MIN_SHARES - a['quantity']) * a['price'] for a in below_min)
-
-    total_above_cost = sum(a['cost'] for a in above_min)
-    total_below_cost = sum(a['cost'] for a in below_min)
-    remaining_budget = max_budget - total_above_cost - total_below_cost
-
-    if remaining_budget >= boost_needed:
-        for alloc in below_min:
-            if alloc['quantity'] < MIN_SHARES:
-                alloc['quantity'] = MIN_SHARES
-                alloc['cost'] = MIN_SHARES * alloc['price']
-                alloc['pct_portfolio'] = (alloc['cost'] / portfolio_value * 100)
-        return allocations
-    else:
-        if above_min and boost_needed > 0:
-            reduction_needed = boost_needed - remaining_budget
-            reduction_factor = 1.0 - (reduction_needed / total_above_cost) if total_above_cost > 0 else 1.0
-
-            for alloc in above_min:
-                new_qty = max(MIN_SHARES, int(alloc['quantity'] * reduction_factor))
-                alloc['quantity'] = new_qty
-                alloc['cost'] = new_qty * alloc['price']
-                alloc['pct_portfolio'] = (alloc['cost'] / portfolio_value * 100)
-
-            for alloc in below_min:
-                alloc['quantity'] = MIN_SHARES
-                alloc['cost'] = MIN_SHARES * alloc['price']
-                alloc['pct_portfolio'] = (alloc['cost'] / portfolio_value * 100)
 
     return allocations
 

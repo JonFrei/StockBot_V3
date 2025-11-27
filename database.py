@@ -4,7 +4,7 @@ Railway-optimized with connection pooling
 
 DUAL MODE: PostgreSQL for live, in-memory for backtesting
 
-UPDATED: Fixed position_metadata to use profit_level integer instead of boolean flags
+UPDATED: Added rotation_state table for tier persistence
 """
 
 import os
@@ -32,7 +32,6 @@ class Database:
         if not database_url:
             raise Exception("DATABASE_URL environment variable not set")
 
-        # Railway provides DATABASE_URL, create connection pool
         self.connection_pool = psycopg2.pool.SimpleConnectionPool(
             minconn=1,
             maxconn=10,
@@ -94,7 +93,7 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_closed_trades_signal_confirmation ON closed_trades(entry_signal, was_watchlisted);
             """)
 
-            # Position metadata table - UPDATED SCHEMA
+            # Position metadata table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS position_metadata (
                     ticker VARCHAR(10) PRIMARY KEY,
@@ -129,6 +128,24 @@ class Database:
                 INSERT INTO bot_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
             """)
 
+            # NEW: Rotation state table (stores per-ticker tier info)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS rotation_state (
+                    ticker VARCHAR(10) PRIMARY KEY,
+                    tier VARCHAR(20) NOT NULL DEFAULT 'active',
+                    consecutive_wins INTEGER DEFAULT 0,
+                    consecutive_losses INTEGER DEFAULT 0,
+                    total_trades INTEGER DEFAULT 0,
+                    total_wins INTEGER DEFAULT 0,
+                    total_pnl DECIMAL(12, 2) DEFAULT 0,
+                    total_win_pnl DECIMAL(12, 2) DEFAULT 0,
+                    total_loss_pnl DECIMAL(12, 2) DEFAULT 0,
+                    last_tier_change TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_rotation_tier ON rotation_state(tier);
+            """)
+
             # Cooldowns table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS cooldowns (
@@ -152,42 +169,6 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_blacklist_strategy ON blacklist(strategy);
                 CREATE INDEX IF NOT EXISTS idx_blacklist_type ON blacklist(blacklist_type);
-            """)
-
-            # Watchlist entries table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS watchlist_entries (
-                    ticker VARCHAR(10) PRIMARY KEY,
-                    signal_type VARCHAR(50) NOT NULL,
-                    signal_data JSONB NOT NULL,
-                    date_added TIMESTAMP NOT NULL,
-                    entry_price_at_signal DECIMAL(10, 2),
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-                CREATE INDEX IF NOT EXISTS idx_watchlist_signal_type ON watchlist_entries(signal_type);
-                CREATE INDEX IF NOT EXISTS idx_watchlist_date_added ON watchlist_entries(date_added);
-            """)
-
-            # Watchlist history table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS watchlist_history (
-                    id SERIAL PRIMARY KEY,
-                    ticker VARCHAR(10) NOT NULL,
-                    signal_type VARCHAR(50) NOT NULL,
-                    date_added TIMESTAMP NOT NULL,
-                    date_removed TIMESTAMP,
-                    removal_reason VARCHAR(50),
-                    was_confirmed BOOLEAN DEFAULT FALSE,
-                    days_on_watchlist INTEGER,
-                    entry_price_at_signal DECIMAL(10, 2),
-                    price_at_confirmation DECIMAL(10, 2),
-                    price_change_pct DECIMAL(10, 2),
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-                CREATE INDEX IF NOT EXISTS idx_watchlist_history_ticker ON watchlist_history(ticker);
-                CREATE INDEX IF NOT EXISTS idx_watchlist_history_signal ON watchlist_history(signal_type);
-                CREATE INDEX IF NOT EXISTS idx_watchlist_history_confirmed ON watchlist_history(was_confirmed);
-                CREATE INDEX IF NOT EXISTS idx_watchlist_history_removal ON watchlist_history(removal_reason);
             """)
 
             # Order log table
@@ -256,74 +237,103 @@ class Database:
             cursor.close()
             self.return_connection(conn)
 
-    def save_watchlist_entry(self, conn, ticker, signal_type, signal_data, date_added, entry_price_at_signal):
-        """Save single watchlist entry"""
-        cursor = conn.cursor()
+    # =========================================================================
+    # ROTATION STATE METHODS (NEW)
+    # =========================================================================
+
+    def save_rotation_state(self, ticker_states):
+        """
+        Save all rotation states to database
+
+        Args:
+            ticker_states: Dict of {ticker: state_dict} from StockRotator
+        """
+        conn = self.get_connection()
         try:
-            cursor.execute("""
-                INSERT INTO watchlist_entries 
-                (ticker, signal_type, signal_data, date_added, entry_price_at_signal)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (ticker) DO UPDATE
-                SET signal_type = EXCLUDED.signal_type,
-                    signal_data = EXCLUDED.signal_data,
-                    date_added = EXCLUDED.date_added,
-                    entry_price_at_signal = EXCLUDED.entry_price_at_signal,
-                    created_at = CURRENT_TIMESTAMP
-            """, (ticker, signal_type, json.dumps(signal_data), date_added, entry_price_at_signal))
+            cursor = conn.cursor()
+
+            for ticker, state in ticker_states.items():
+                cursor.execute("""
+                    INSERT INTO rotation_state 
+                    (ticker, tier, consecutive_wins, consecutive_losses, total_trades,
+                     total_wins, total_pnl, total_win_pnl, total_loss_pnl, last_tier_change)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (ticker) DO UPDATE SET
+                        tier = EXCLUDED.tier,
+                        consecutive_wins = EXCLUDED.consecutive_wins,
+                        consecutive_losses = EXCLUDED.consecutive_losses,
+                        total_trades = EXCLUDED.total_trades,
+                        total_wins = EXCLUDED.total_wins,
+                        total_pnl = EXCLUDED.total_pnl,
+                        total_win_pnl = EXCLUDED.total_win_pnl,
+                        total_loss_pnl = EXCLUDED.total_loss_pnl,
+                        last_tier_change = EXCLUDED.last_tier_change,
+                        updated_at = CURRENT_TIMESTAMP
+                """, (
+                    ticker,
+                    state.get('tier', 'active'),
+                    state.get('consecutive_wins', 0),
+                    state.get('consecutive_losses', 0),
+                    state.get('total_trades', 0),
+                    state.get('total_wins', 0),
+                    state.get('total_pnl', 0),
+                    state.get('total_win_pnl', 0),
+                    state.get('total_loss_pnl', 0),
+                    state.get('last_tier_change')
+                ))
+
+            conn.commit()
+            print(f"[DATABASE] Saved rotation state for {len(ticker_states)} tickers")
+
+        except Exception as e:
+            conn.rollback()
+            print(f"[DATABASE] Error saving rotation state: {e}")
+            raise
         finally:
             cursor.close()
+            self.return_connection(conn)
 
-    def load_all_watchlist_entries(self, conn):
-        """Load all watchlist entries"""
-        cursor = conn.cursor()
+    def load_rotation_state(self):
+        """
+        Load all rotation states from database
+
+        Returns:
+            Dict of {ticker: state_dict}
+        """
+        conn = self.get_connection()
         try:
+            cursor = conn.cursor()
+
             cursor.execute("""
-                SELECT ticker, signal_type, signal_data, date_added, entry_price_at_signal
-                FROM watchlist_entries
-                ORDER BY date_added
+                SELECT ticker, tier, consecutive_wins, consecutive_losses, total_trades,
+                       total_wins, total_pnl, total_win_pnl, total_loss_pnl, last_tier_change
+                FROM rotation_state
             """)
 
-            entries = {}
+            states = {}
             for row in cursor.fetchall():
-                entries[row[0]] = {
-                    'signal_type': row[1],
-                    'signal_data': json.loads(row[2]),
-                    'date_added': row[3],
-                    'entry_price_at_signal': float(row[4]) if row[4] else 0
+                states[row[0]] = {
+                    'ticker': row[0],
+                    'tier': row[1],
+                    'consecutive_wins': row[2],
+                    'consecutive_losses': row[3],
+                    'total_trades': row[4],
+                    'total_wins': row[5],
+                    'total_pnl': float(row[6]) if row[6] else 0,
+                    'total_win_pnl': float(row[7]) if row[7] else 0,
+                    'total_loss_pnl': float(row[8]) if row[8] else 0,
+                    'last_tier_change': row[9].isoformat() if row[9] else None
                 }
-            return entries
+
+            print(f"[DATABASE] Loaded rotation state for {len(states)} tickers")
+            return states
+
+        except Exception as e:
+            print(f"[DATABASE] Error loading rotation state: {e}")
+            return {}
         finally:
             cursor.close()
-
-    def delete_watchlist_entry(self, conn, ticker):
-        """Delete single watchlist entry"""
-        cursor = conn.cursor()
-        try:
-            cursor.execute("DELETE FROM watchlist_entries WHERE ticker = %s", (ticker,))
-        finally:
-            cursor.close()
-
-    def log_watchlist_removal(self, conn, ticker, signal_type, date_added, removal_reason,
-                              was_confirmed, entry_price, current_price):
-        """Log watchlist removal to history"""
-        cursor = conn.cursor()
-        try:
-            days_on_watchlist = (datetime.now() - date_added).days
-            price_change_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
-
-            cursor.execute("""
-                INSERT INTO watchlist_history
-                (ticker, signal_type, date_added, date_removed, removal_reason, 
-                 was_confirmed, days_on_watchlist, entry_price_at_signal, 
-                 price_at_confirmation, price_change_pct)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (
-                ticker, signal_type, date_added, datetime.now(), removal_reason,
-                was_confirmed, days_on_watchlist, entry_price, current_price, price_change_pct
-            ))
-        finally:
-            cursor.close()
+            self.return_connection(conn)
 
     def close_pool(self):
         """Close all connections in pool"""
@@ -362,6 +372,7 @@ class InMemoryDatabase:
 
         # Keep dicts for other data
         self.position_metadata = {}
+        self.rotation_state = {}  # NEW: Rotation state storage
         self.bot_state = {
             'portfolio_peak': None,
             'drawdown_protection_active': False,
@@ -373,8 +384,6 @@ class InMemoryDatabase:
         }
         self.cooldowns = {}
         self.blacklist = {}
-        self.watchlist_entries = {}
-        self.watchlist_history = []
 
         print("[MEMORY DB] DataFrame-based in-memory database initialized")
 
@@ -386,6 +395,18 @@ class InMemoryDatabase:
 
     def close_pool(self):
         pass
+
+    # =========================================================================
+    # ROTATION STATE METHODS (NEW)
+    # =========================================================================
+
+    def save_rotation_state(self, ticker_states):
+        """Save rotation states to memory"""
+        self.rotation_state = ticker_states.copy()
+
+    def load_rotation_state(self):
+        """Load rotation states from memory"""
+        return self.rotation_state.copy()
 
     # Trade operations
     def insert_trade(self, ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct,
@@ -591,7 +612,7 @@ class InMemoryDatabase:
                                 'is_blacklisted': row['is_blacklisted']}
                 for _, row in self.tickers_df.iterrows()}
 
-    # Position metadata operations - UPDATED SIGNATURE
+    # Position metadata operations
     def upsert_position_metadata(self, ticker, entry_date, entry_signal, entry_score,
                                  highest_price, profit_level=0,
                                  level_1_lock_price=None, level_2_lock_price=None,
@@ -603,8 +624,8 @@ class InMemoryDatabase:
             'entry_signal': entry_signal,
             'entry_score': entry_score,
             'highest_price': float(highest_price) if highest_price else 0,
-            'local_max': float(highest_price) if highest_price else 0,  # Alias
-            'profit_level': profit_level,  # INTEGER: 0, 1, 2, 3
+            'local_max': float(highest_price) if highest_price else 0,
+            'profit_level': profit_level,
             'level_1_lock_price': float(level_1_lock_price) if level_1_lock_price else None,
             'level_2_lock_price': float(level_2_lock_price) if level_2_lock_price else None,
             'was_watchlisted': was_watchlisted,
@@ -679,43 +700,6 @@ class InMemoryDatabase:
 
     def clear_all_blacklist(self):
         self.blacklist = {}
-
-    # Watchlist operations
-    def upsert_watchlist_entry(self, ticker, signal_type, signal_data, date_added, entry_price_at_signal):
-        self.watchlist_entries[ticker] = {
-            'signal_type': signal_type,
-            'signal_data': signal_data,
-            'date_added': date_added,
-            'entry_price_at_signal': entry_price_at_signal
-        }
-
-    def get_all_watchlist_entries(self):
-        return self.watchlist_entries.copy()
-
-    def delete_watchlist_entry(self, ticker):
-        if ticker in self.watchlist_entries:
-            del self.watchlist_entries[ticker]
-
-    def clear_all_watchlist_entries(self):
-        self.watchlist_entries = {}
-
-    def log_watchlist_removal(self, ticker, signal_type, date_added, removal_reason,
-                              was_confirmed, entry_price, current_price):
-        days_on_watchlist = (datetime.now() - date_added).days
-        price_change_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
-
-        self.watchlist_history.append({
-            'ticker': ticker,
-            'signal_type': signal_type,
-            'date_added': date_added,
-            'date_removed': datetime.now(),
-            'removal_reason': removal_reason,
-            'was_confirmed': was_confirmed,
-            'days_on_watchlist': days_on_watchlist,
-            'entry_price_at_signal': entry_price,
-            'price_at_confirmation': current_price,
-            'price_change_pct': price_change_pct
-        })
 
 
 # Global database instance

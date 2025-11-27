@@ -1,6 +1,9 @@
 """
-Profit Tracking System - WITH ENHANCED RECOVERY MODE LOGGING
-MODIFICATIONS: Added detailed recovery mode display in daily summaries
+Profit Tracking System - WITH ROTATION INTEGRATION
+
+MODIFICATIONS:
+- record_trade() now notifies stock_rotator of trade results
+- This enables real-time tier updates based on actual performance
 """
 
 from datetime import datetime
@@ -19,7 +22,6 @@ class DailySummary:
         self.regime_status = None
         self.regime_reason = None
         self.regime_multiplier = 1.0
-        # NEW: Recovery mode tracking
         self.recovery_mode_active = False
         self.recovery_max_positions = None
         self.recovery_profit_target = None
@@ -29,6 +31,7 @@ class DailySummary:
         self.profit_takes = []
         self.signals_found = []
         self.signals_skipped = []
+        self.tier_changes = []  # NEW: Track tier changes
         self.warnings = []
         self.errors = []
 
@@ -38,26 +41,10 @@ class DailySummary:
         self.cash_balance = cash_balance
 
     def set_regime(self, status, reason, multiplier, recovery_details=None):
-        """
-        Set regime status with optional recovery mode details
-
-        Args:
-            status: Regime status string
-            reason: Reason for regime
-            multiplier: Position size multiplier
-            recovery_details: Dict with recovery mode info (optional)
-                {
-                    'active': bool,
-                    'max_positions': int,
-                    'profit_target': float,
-                    'signals': dict
-                }
-        """
         self.regime_status = status
         self.regime_reason = reason
         self.regime_multiplier = multiplier
 
-        # NEW: Track recovery mode details
         if recovery_details:
             self.recovery_mode_active = recovery_details.get('active', False)
             self.recovery_max_positions = recovery_details.get('max_positions')
@@ -80,6 +67,15 @@ class DailySummary:
     def add_skip(self, ticker, reason):
         self.signals_skipped.append({'ticker': ticker, 'reason': reason})
 
+    def add_tier_change(self, ticker, old_tier, new_tier, reason):
+        """NEW: Track tier changes"""
+        self.tier_changes.append({
+            'ticker': ticker,
+            'old_tier': old_tier,
+            'new_tier': new_tier,
+            'reason': reason
+        })
+
     def add_warning(self, msg):
         self.warnings.append(msg)
 
@@ -97,22 +93,21 @@ class DailySummary:
             print(
                 f"   {regime_icon} Regime: {self.regime_status.upper()} ({self.regime_multiplier:.0%}) - {self.regime_reason}")
 
-            # NEW: Enhanced recovery mode display
             if self.recovery_mode_active or self.regime_status == 'recovery_mode':
                 print(f"   {'─' * 76}")
                 print(f"   🔓 RECOVERY MODE ACTIVE")
                 if self.recovery_max_positions:
-                    current_positions = len([e for e in self.entries])  # Rough count
-                    print(f"      • Position Limit: {current_positions}/{self.recovery_max_positions} positions")
+                    print(f"      • Position Limit: {self.recovery_max_positions} positions")
                 if self.recovery_profit_target:
-                    print(f"      • Profit Target: {self.recovery_profit_target:.1f}% (aggressive exits)")
-                if self.recovery_signals:
-                    total_signals = self.recovery_signals.get('total', 0)
-                    print(f"      • Recovery Signals: {total_signals}/3 active")
-                    active = [k for k, v in self.recovery_signals.items() if k != 'total' and v]
-                    if active:
-                        print(f"      • Active: {', '.join(active[:3])}")
+                    print(f"      • Profit Target: {self.recovery_profit_target:.1f}%")
                 print(f"   {'─' * 76}")
+
+        # NEW: Show tier changes
+        for tc in self.tier_changes:
+            emoji_map = {'premium': '🥇', 'active': '🥈', 'probation': '⚠️', 'rehabilitation': '🔄', 'frozen': '❄️'}
+            old_emoji = emoji_map.get(tc['old_tier'], '❓')
+            new_emoji = emoji_map.get(tc['new_tier'], '❓')
+            print(f"   {old_emoji}→{new_emoji} TIER: {tc['ticker']} {tc['old_tier']} → {tc['new_tier']}")
 
         for pt in self.profit_takes:
             print(
@@ -136,7 +131,7 @@ class DailySummary:
         for e in self.errors[:3]:
             print(f"   ❌ {e}")
 
-        if not any([self.profit_takes, self.exits, self.entries, self.warnings, self.errors]):
+        if not any([self.profit_takes, self.exits, self.entries, self.tier_changes, self.warnings, self.errors]):
             if self.regime_status not in ['stop_buying', 'exit_all', 'recovery_mode']:
                 print(f"   (No activity)")
             elif self.regime_status == 'recovery_mode':
@@ -164,18 +159,36 @@ def reset_summary():
     return _summary
 
 
-# [Rest of ProfitTracker class remains unchanged - keeping original implementation]
 class ProfitTracker:
-    def __init__(self, strategy):
+    def __init__(self, strategy, stock_rotator=None):
+        """
+        Initialize profit tracker
+
+        Args:
+            strategy: Lumibot Strategy instance
+            stock_rotator: StockRotator instance (optional, for real-time tier updates)
+        """
         self.strategy = strategy
         self.db = get_database()
+        self.stock_rotator = stock_rotator  # NEW: Reference to rotator
+
+    def set_stock_rotator(self, stock_rotator):
+        """Set stock rotator reference (can be set after initialization)"""
+        self.stock_rotator = stock_rotator
 
     def record_trade(self, ticker, quantity_sold, entry_price, exit_price, exit_date, entry_signal, exit_signal,
                      entry_score=0):
+        """
+        Record a closed trade and notify rotation system
+
+        Returns:
+            dict: Trade record with tier change info if applicable
+        """
         pnl_per_share = exit_price - entry_price
         total_pnl = pnl_per_share * quantity_sold
         pnl_pct = (pnl_per_share / entry_price * 100) if entry_price > 0 else 0
 
+        # Save to database
         conn = self.db.get_connection()
         try:
             if Config.BACKTESTING:
@@ -200,6 +213,18 @@ class ProfitTracker:
             raise
         finally:
             self.db.return_connection(conn)
+
+        # NEW: Notify rotation system of trade result
+        tier_change = None
+        if self.stock_rotator:
+            tier_change = self.stock_rotator.record_trade_result(ticker, total_pnl, exit_date)
+
+        return {
+            'ticker': ticker,
+            'pnl_dollars': total_pnl,
+            'pnl_pct': pnl_pct,
+            'tier_change': tier_change
+        }
 
     def get_closed_trades(self, limit=None):
         if Config.BACKTESTING:
@@ -296,7 +321,7 @@ class ProfitTracker:
             avg_win = (stats['win_pnl'] / wins) if wins > 0 else 0
             avg_loss = (stats['loss_pnl'] / losses) if losses > 0 else 0
             print(
-                f"{signal[:25]:<25} {trades:>7} {wr:>7.1f}% {f'${avg_win:,.2f}':>12} {f'${avg_loss:,.2f}':>12} {f'${stats["total_pnl"]:+,.2f}':>14}")
+                f"{signal[:25]:<25} {trades:>7} {wr:>7.1f}% {f'${avg_win:,.2f}':>12} {f'${avg_loss:,.2f}':>12} {f'${stats['total_pnl']:+,.2f}':>14}")
 
     def _display_exit_breakdown(self, closed_trades):
         from collections import defaultdict
@@ -320,7 +345,7 @@ class ProfitTracker:
             count = stats['count']
             freq_pct = (count / total_trades * 100) if total_trades > 0 else 0
             wr = (stats['wins'] / count * 100) if count > 0 else 0
-            print(f"{exit_type[:30]:<30} {count:>7} {freq_pct:>6.1f}% {wr:>7.1f}% {f'${stats["total_pnl"]:+,.2f}':>14}")
+            print(f"{exit_type[:30]:<30} {count:>7} {freq_pct:>6.1f}% {wr:>7.1f}% {f'${stats['total_pnl']:+,.2f}':>14}")
 
     def _display_ticker_summary(self, closed_trades, stock_rotator=None):
         from collections import defaultdict
@@ -336,15 +361,15 @@ class ProfitTracker:
         print(f"\n{'─' * 100}")
         print(f"📊 PERFORMANCE BY TICKER")
         print(f"{'─' * 100}")
-        print(f"{'Ticker':<8} {'Tier':<10} {'Trades':>7} {'WR%':>8} {'Total P&L':>14}")
+        print(f"{'Ticker':<8} {'Tier':<12} {'Trades':>7} {'WR%':>8} {'Total P&L':>14}")
         print(f"{'─' * 100}")
 
         for ticker, stats in sorted(ticker_stats.items(), key=lambda x: x[1]['total_pnl'], reverse=True):
             trades = stats['trades']
             wr = (stats['wins'] / trades * 100) if trades > 0 else 0
-            tier = stock_rotator.get_award(ticker) if stock_rotator else 'standard'
-            tier_icon = {'premium': '🥇', 'standard': '🥈', 'frozen': '❄️'}.get(tier, '🥈')
-            print(f"{ticker:<8} {tier_icon}{tier[:7]:<9} {trades:>7} {wr:>7.1f}% {f'${stats["total_pnl"]:+,.2f}':>14}")
+            tier = stock_rotator.get_tier(ticker) if stock_rotator else 'active'
+            tier_icon = {'premium': '🥇', 'active': '🥈', 'probation': '⚠️', 'rehabilitation': '🔄', 'frozen': '❄️'}.get(tier, '🥈')
+            print(f"{ticker:<8} {tier_icon}{tier[:10]:<11} {trades:>7} {wr:>7.1f}% {f'${stats['total_pnl']:+,.2f}':>14}")
 
     def _display_last_100_trades(self, closed_trades):
         print(f"\n{'─' * 100}")
@@ -357,7 +382,7 @@ class ProfitTracker:
             pnl = trade['pnl_dollars']
             emoji = '✅' if pnl > 0 else '❌' if pnl < 0 else '➖'
             print(
-                f"{i:<4} {emoji}{trade['ticker']:<7} {f'${pnl:+,.2f}':>12} {f'{trade["pnl_pct"]:+.1f}%':>8} {trade['entry_signal'][:25]:<25} {trade.get('exit_signal', 'unknown')[:25]:<25}")
+                f"{i:<4} {emoji}{trade['ticker']:<7} {f'${pnl:+,.2f}':>12} {f'{trade['pnl_pct']:+.1f}%':>8} {trade['entry_signal'][:25]:<25} {trade.get('exit_signal', 'unknown')[:25]:<25}")
 
     def _display_rotation_summary(self, stock_rotator):
         print(f"\n{'─' * 100}")
@@ -367,10 +392,18 @@ class ProfitTracker:
             print("   Not available")
             return
         stats = stock_rotator.get_statistics()
-        dist = stats['award_distribution']
-        print(f"{'Total Rotations':<30} {stats['rotation_count']:>20}")
-        print(
-            f"   🥇 Premium: {dist.get('premium', 0)} | 🥈 Standard: {dist.get('standard', 0)} | ❄️ Frozen: {dist.get('frozen', 0)}")
+        dist = stats['tier_distribution']
+        print(f"{'Total Evaluations':<30} {stats['rotation_count']:>20}")
+        print(f"   🥇 Premium: {dist.get('premium', 0)} | "
+              f"🥈 Active: {dist.get('active', 0)} | "
+              f"⚠️ Probation: {dist.get('probation', 0)} | "
+              f"🔄 Rehab: {dist.get('rehabilitation', 0)} | "
+              f"❄️ Frozen: {dist.get('frozen', 0)}")
+
+        if stats.get('premium_stocks'):
+            print(f"   Premium: {', '.join(stats['premium_stocks'])}")
+        if stats.get('frozen_stocks'):
+            print(f"   Frozen: {', '.join(stats['frozen_stocks'])}")
 
     def _display_safeguard_summary(self, regime_detector):
         print(f"\n{'─' * 100}")
@@ -406,6 +439,19 @@ class ProfitTracker:
 
         recovery_count = recovery_manager.get_statistics().get('activation_count', 0) if recovery_manager else 0
 
+        # Tier distribution
+        tier_html = ""
+        if stock_rotator:
+            stats = stock_rotator.get_statistics()
+            dist = stats['tier_distribution']
+            tier_html = f"""
+            <tr><td>🥇 Premium:</td><td>{dist.get('premium', 0)}</td></tr>
+            <tr><td>🥈 Active:</td><td>{dist.get('active', 0)}</td></tr>
+            <tr><td>⚠️ Probation:</td><td>{dist.get('probation', 0)}</td></tr>
+            <tr><td>🔄 Rehabilitation:</td><td>{dist.get('rehabilitation', 0)}</td></tr>
+            <tr><td>❄️ Frozen:</td><td>{dist.get('frozen', 0)}</td></tr>
+            """
+
         return f"""
         <h3>📈 Performance Summary</h3>
         <table>
@@ -413,6 +459,10 @@ class ProfitTracker:
             <tr><td>Win Rate:</td><td>{win_rate:.1f}%</td></tr>
             <tr><td>Total P&L:</td><td style="color:{pnl_color};font-weight:bold;">${total_realized:+,.2f}</td></tr>
             <tr><td>Recovery Mode Activations:</td><td>{recovery_count}</td></tr>
+        </table>
+        <h3>🏆 Tier Distribution</h3>
+        <table>
+            {tier_html}
         </table>
         """
 
