@@ -1,5 +1,5 @@
 """
-SwingTradeStrategy - WITH RECOVERY MODE INTEGRATION
+SwingTradeStrategy - WITH SIMPLIFIED SAFEGUARD SYSTEM
 """
 
 from lumibot.strategies import Strategy
@@ -13,7 +13,7 @@ import stock_position_monitoring
 from stock_rotation import StockRotator, should_rotate
 
 from server_recovery import save_state_safe, load_state_safe
-from account_drawdown_protection import MarketRegimeDetector, SafeguardConfig
+from account_drawdown_protection import MarketRegimeDetector
 from account_recovery_mode import RecoveryModeManager
 import account_broker_data
 from account_profit_tracking import get_summary, reset_summary
@@ -79,7 +79,6 @@ class SwingTradeStrategy(Strategy):
                 self.last_trade_date = current_date.date()
 
             summary.set_context(current_date, self.portfolio_value, self.get_cash())
-            self.regime_detector.update_portfolio_value(current_date, self.portfolio_value)
 
             # Fetch data
             try:
@@ -91,16 +90,34 @@ class SwingTradeStrategy(Strategy):
                     spy_raw = all_stock_data['SPY'].get('raw')
 
                     spy_close = spy_ind['close']
-                    spy_50_sma = spy_ind['ema50']
+                    spy_20_ema = spy_ind.get('ema20', 0)
+                    spy_50_sma = spy_ind.get('sma50', spy_ind.get('ema50', 0))
                     spy_200_sma = spy_ind['sma200']
-                    spy_prev_close = spy_raw['close'].iloc[-2] if spy_raw is not None and len(spy_raw) >= 2 else None
-                    spy_volume = spy_raw['volume'].iloc[-1] if spy_raw is not None and len(spy_raw) >= 2 else None
-                    spy_prev_volume = spy_raw['volume'].iloc[-2] if spy_raw is not None and len(spy_raw) >= 2 else None
 
-                    self.regime_detector.update_spy(current_date, spy_close, spy_50_sma, spy_200_sma, spy_prev_close, spy_volume, spy_prev_volume)
+                    # Get volume data
+                    spy_volume = None
+                    spy_avg_volume = None
+                    if spy_raw is not None and len(spy_raw) >= 2:
+                        spy_volume = spy_raw['volume'].iloc[-1]
+                        spy_avg_volume = spy_ind.get('avg_volume', spy_raw['volume'].iloc[-20:].mean() if len(spy_raw) >= 20 else None)
+                        spy_prev_close = spy_raw['close'].iloc[-2]
+                    else:
+                        spy_prev_close = None
+
+                    # Update regime detector with new simplified interface
+                    self.regime_detector.update_spy(
+                        date=current_date,
+                        spy_close=spy_close,
+                        spy_20_ema=spy_20_ema,
+                        spy_50_sma=spy_50_sma,
+                        spy_200_sma=spy_200_sma,
+                        spy_volume=spy_volume,
+                        spy_avg_volume=spy_avg_volume
+                    )
+
+                    # Update recovery manager
                     self.recovery_manager.update_spy_data(current_date, spy_close, spy_prev_close)
                     self.recovery_manager.update_breadth(all_stock_data)
-                    self.recovery_manager.update_accum_dist(len(self.regime_detector.accumulation_days), len(self.regime_detector.distribution_days))
 
             except Exception as e:
                 summary.add_error(f"Data fetch failed: {e}")
@@ -109,54 +126,126 @@ class SwingTradeStrategy(Strategy):
                 summary.print_summary()
                 return
 
-            # Regime detection
+            # Regime detection with simplified system
             try:
-                num_positions = len(self.get_positions())
-                regime_result = self.regime_detector.detect_regime(num_positions, current_date)
-
+                # Check if recovery mode is active
                 spy_below_200 = self.regime_detector._is_spy_below_200()
                 recovery_result = self.recovery_manager.evaluate(current_date, spy_below_200)
+                recovery_mode_active = recovery_result.get('recovery_mode_active', False)
 
-                if spy_below_200 and recovery_result['recovery_mode_active']:
-                    regime_result['action'] = 'recovery_mode'
+                # Get regime result (pass recovery mode status)
+                regime_result = self.regime_detector.detect_regime(
+                    current_date=current_date,
+                    recovery_mode_active=recovery_mode_active
+                )
+
+                # Handle recovery mode override for display
+                if regime_result['action'] == 'recovery_override':
                     regime_result['position_size_multiplier'] = recovery_result['position_multiplier']
-                    regime_result['allow_new_entries'] = True
-                    regime_result['reason'] = recovery_result['reason']
                     regime_result['max_positions'] = recovery_result['max_positions']
                     regime_result['recovery_profit_target'] = recovery_result['profit_target']
 
-                summary.set_regime(regime_result['action'], regime_result['reason'], regime_result['position_size_multiplier'])
+                summary.set_regime(
+                    regime_result['action'],
+                    regime_result['reason'],
+                    regime_result['position_size_multiplier']
+                )
 
-                if regime_result['action'] == 'exit_all':
+                # =============================================================
+                # HANDLE CRISIS EXIT - Exit ALL positions
+                # =============================================================
+                '''
+                if regime_result.get('exit_all', False):
                     positions = self.get_positions()
+                    exit_count = 0
+
                     for position in positions:
                         ticker = position.symbol
                         qty = int(position.quantity)
                         if qty > 0:
-                            summary.add_exit(ticker, qty, 0, 0, 'safeguard_exit')
-                            sell_order = self.create_order(ticker, qty, 'sell')
-                            self.submit_order(sell_order)
-                            self.position_monitor.clean_position_metadata(ticker)
+                            try:
+                                entry_price = account_broker_data.get_broker_entry_price(position, self, ticker)
+                                current_price = self.get_last_price(ticker)
+                                pnl_dollars = (current_price - entry_price) * qty if entry_price > 0 else 0
+                                pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
 
-                    execution_tracker.record_action('exits', count=num_positions)
-                    execution_tracker.record_action('drawdown_protection')
+                                summary.add_exit(ticker, qty, pnl_dollars, pnl_pct, 'crisis_exit')
+
+                                # Record trade
+                                metadata = self.position_monitor.get_position_metadata(ticker)
+                                entry_signal = metadata.get('entry_signal', 'unknown') if metadata else 'unknown'
+                                entry_score = metadata.get('entry_score', 0) if metadata else 0
+
+                                self.profit_tracker.record_trade(
+                                    ticker=ticker,
+                                    quantity_sold=qty,
+                                    entry_price=entry_price,
+                                    exit_price=current_price,
+                                    exit_date=current_date,
+                                    entry_signal=entry_signal,
+                                    exit_signal={'reason': 'crisis_exit'},
+                                    entry_score=entry_score
+                                )
+
+                                self.position_monitor.clean_position_metadata(ticker)
+                                sell_order = self.create_order(ticker, qty, 'sell')
+                                self.submit_order(sell_order)
+                                exit_count += 1
+
+                            except Exception as e:
+                                summary.add_error(f"Crisis exit {ticker} failed: {e}")
+
+                    execution_tracker.record_action('exits', count=exit_count)
                     execution_tracker.complete('SUCCESS')
                     summary.print_summary()
+
+                    if not Config.BACKTESTING:
+                        account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
+
+                    save_state_safe(self)
+                    return
+                '''
+                # =============================================================
+                # HANDLE LOCKOUT/BLOCK - No new entries
+                # =============================================================
+                if not regime_result['allow_new_entries']:
+                    execution_tracker.complete('SUCCESS')
+                    summary.print_summary()
+
+                    if not Config.BACKTESTING:
+                        account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
+
                     save_state_safe(self)
                     return
 
             except Exception as e:
                 summary.add_error(f"Regime detection failed: {e}")
-                regime_result = {'action': 'caution', 'position_size_multiplier': 0.75, 'allow_new_entries': True, 'reason': 'Safeguard error'}
+                regime_result = {
+                    'action': 'error_fallback',
+                    'position_size_multiplier': 0.5,
+                    'allow_new_entries': True,
+                    'exit_all': False,
+                    'reason': f'Safeguard error: {e}'
+                }
 
-            # Check exits
+            # Check exits (normal position monitoring)
             try:
                 exit_orders = stock_position_monitoring.check_positions_for_exits(
-                    strategy=self, current_date=current_date, all_stock_data=all_stock_data, position_monitor=self.position_monitor)
+                    strategy=self,
+                    current_date=current_date,
+                    all_stock_data=all_stock_data,
+                    position_monitor=self.position_monitor
+                )
 
                 stock_position_monitoring.execute_exit_orders(
-                    strategy=self, exit_orders=exit_orders, current_date=current_date, position_monitor=self.position_monitor,
-                    profit_tracker=self.profit_tracker, summary=summary, recovery_manager=self.recovery_manager)
+                    strategy=self,
+                    exit_orders=exit_orders,
+                    current_date=current_date,
+                    position_monitor=self.position_monitor,
+                    profit_tracker=self.profit_tracker,
+                    summary=summary,
+                    recovery_manager=self.recovery_manager
+                )
 
                 if exit_orders:
                     execution_tracker.record_action('exits', count=len(exit_orders))
@@ -164,55 +253,9 @@ class SwingTradeStrategy(Strategy):
             except Exception as e:
                 summary.add_error(f"Exit processing failed: {e}")
 
-            # Caution profit taking
-            already_exited = {order['ticker'] for order in exit_orders} if exit_orders else set()
-
-            if regime_result['action'] == 'caution':
-                positions = self.get_positions()
-                for position in positions:
-                    try:
-                        ticker = position.symbol
-                        qty = int(position.quantity)
-                        if qty <= 0 or ticker in already_exited:
-                            continue
-
-                        entry_price = account_broker_data.get_broker_entry_price(position, self, ticker)
-                        if entry_price <= 0:
-                            continue
-
-                        current_price = self.get_last_price(ticker)
-                        pnl_pct = ((current_price - entry_price) / entry_price * 100)
-                        pnl_dollars = (current_price - entry_price) * qty
-
-                        if pnl_pct >= CAUTION_MIN_PROFIT_PCT:
-                            summary.add_exit(ticker, qty, pnl_dollars, pnl_pct, 'caution_profit_take')
-
-                            metadata = self.position_monitor.get_position_metadata(ticker)
-                            entry_signal = metadata.get('entry_signal', 'unknown') if metadata else 'unknown'
-                            entry_score = metadata.get('entry_score', 0) if metadata else 0
-
-                            self.profit_tracker.record_trade(ticker=ticker, quantity_sold=qty, entry_price=entry_price,
-                                exit_price=current_price, exit_date=current_date, entry_signal=entry_signal,
-                                exit_signal={'reason': 'caution_profit_take'}, entry_score=entry_score)
-
-                            self.position_monitor.clean_position_metadata(ticker)
-                            sell_order = self.create_order(ticker, qty, 'sell')
-                            self.submit_order(sell_order)
-                            execution_tracker.record_action('exits', count=1)
-                    except Exception as e:
-                        continue
-
-            # Skip if blocked
-            if not regime_result['allow_new_entries']:
-                execution_tracker.complete('SUCCESS')
-                summary.print_summary()
-                if not Config.BACKTESTING:
-                    account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
-                save_state_safe(self)
-                return
-
-            # Recovery position limit
-            if regime_result['action'] == 'recovery_mode':
+            # Recovery position limit check
+            num_positions = len(self.get_positions())
+            if regime_result['action'] == 'recovery_override':
                 max_positions = regime_result.get('max_positions', 5)
                 if num_positions >= max_positions:
                     summary.add_warning(f"Recovery mode: at max {max_positions} positions")
@@ -244,9 +287,10 @@ class SwingTradeStrategy(Strategy):
                     if not vol_metrics.get('allow_trading', True):
                         continue
 
-                    if hasattr(self, 'regime_detector') and len(data.get('raw', [])) >= 20:
+                    # Relative strength filter
+                    raw_df = data.get('raw')
+                    if raw_df is not None and len(raw_df) >= 20:
                         try:
-                            raw_df = data.get('raw')
                             stock_current = data['close']
                             stock_past = float(raw_df['close'].iloc[-21]) if len(raw_df) >= 21 else float(raw_df['close'].iloc[0])
                             rs_result = self.regime_detector.check_relative_strength(stock_current, stock_past)
@@ -261,11 +305,16 @@ class SwingTradeStrategy(Strategy):
                     if signal_result['action'] == 'buy':
                         summary.add_signal(ticker, signal_result['signal_type'], signal_result['score'])
                         all_opportunities.append({
-                            'ticker': ticker, 'signal_type': signal_result['signal_type'],
-                            'signal_data': signal_result['signal_data'], 'score': signal_result['score'],
-                            'all_scores': signal_result['all_scores'], 'data': data, 'vol_metrics': vol_metrics,
+                            'ticker': ticker,
+                            'signal_type': signal_result['signal_type'],
+                            'signal_data': signal_result['signal_data'],
+                            'score': signal_result['score'],
+                            'all_scores': signal_result['all_scores'],
+                            'data': data,
+                            'vol_metrics': vol_metrics,
                             'rotation_mult': self.stock_rotator.get_multiplier(ticker),
-                            'rotation_award': self.stock_rotator.get_award(ticker), 'source': 'scored'
+                            'rotation_award': self.stock_rotator.get_award(ticker),
+                            'source': 'scored'
                         })
                 except:
                     continue
@@ -296,12 +345,25 @@ class SwingTradeStrategy(Strategy):
                     save_state_safe(self)
                     return
 
-                sizing_opportunities = [{'ticker': opp['ticker'], 'data': opp['data'], 'score': opp['score'],
-                    'signal_type': opp['signal_type'], 'vol_metrics': opp['vol_metrics'], 'rotation_mult': opp['rotation_mult']}
-                    for opp in all_opportunities if opp['score'] >= 60]
+                sizing_opportunities = [
+                    {
+                        'ticker': opp['ticker'],
+                        'data': opp['data'],
+                        'score': opp['score'],
+                        'signal_type': opp['signal_type'],
+                        'vol_metrics': opp['vol_metrics'],
+                        'rotation_mult': opp['rotation_mult']
+                    }
+                    for opp in all_opportunities if opp['score'] >= 60
+                ]
 
                 regime_multiplier = regime_result['position_size_multiplier']
-                allocations = stock_position_sizing.calculate_position_sizes(sizing_opportunities, portfolio_context, regime_multiplier, verbose=False)
+                allocations = stock_position_sizing.calculate_position_sizes(
+                    sizing_opportunities,
+                    portfolio_context,
+                    regime_multiplier,
+                    verbose=False
+                )
 
                 if not allocations:
                     summary.add_warning("No positions met size requirements")
@@ -333,7 +395,14 @@ class SwingTradeStrategy(Strategy):
                     self.submit_order(order)
 
                     if hasattr(self, 'order_logger'):
-                        self.order_logger.log_order(ticker=ticker, side='buy', quantity=quantity, signal_type=signal_type, award='standard', quality_score=signal_score)
+                        self.order_logger.log_order(
+                            ticker=ticker,
+                            side='buy',
+                            quantity=quantity,
+                            signal_type=signal_type,
+                            award='standard',
+                            quality_score=signal_score
+                        )
 
                     execution_tracker.record_action('entries', count=1)
                 except Exception as e:
