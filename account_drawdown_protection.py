@@ -29,10 +29,10 @@ class SafeguardConfig:
     VOLUME_SURGE_THRESHOLD = 1.0  # Volume must be above 20-day average (1.0 = 100%)
 
     # NEW: Crisis trigger threshold - SPY must be this % below 20-day low
-    CRISIS_20DAY_LOW_THRESHOLD = 1.0  # Was 0% (any touch), now requires 1% below
+    CRISIS_20DAY_LOW_THRESHOLD = 0.0  # Was 0% (any touch), now requires 1% below
 
     # NEW: Cooldown period after lockout lifts - prevents back-to-back crises
-    CRISIS_COOLDOWN_DAYS = 5  # Cannot trigger new crisis for 5 days after lift
+    CRISIS_COOLDOWN_DAYS = 3  # Cannot trigger new crisis for 5 days after lift
 
     # Recovery requirement after lockout
     # SPY must close above 20 EMA to resume trading
