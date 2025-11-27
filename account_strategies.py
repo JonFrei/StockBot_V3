@@ -22,7 +22,7 @@ from lumibot.brokers import Alpaca
 
 broker = Alpaca(Config.get_alpaca_config())
 
-CAUTION_MIN_PROFIT_PCT = 3.0
+CAUTION_MIN_PROFIT_PCT = 0.0
 
 
 class SwingTradeStrategy(Strategy):

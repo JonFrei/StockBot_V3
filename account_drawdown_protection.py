@@ -64,16 +64,16 @@ class SafeguardConfig:
 
     # Portfolio Peak Drawdown Circuit Breaker
     PEAK_DRAWDOWN_ENABLED = True
-    PEAK_DRAWDOWN_THRESHOLD = 6.0  # Trigger if portfolio drops 5% from 30-day peak
-    PEAK_DRAWDOWN_LOOKBACK_DAYS = 30  # Rolling window for peak calculation
+    PEAK_DRAWDOWN_THRESHOLD = 4.5  # Trigger if portfolio drops 5% from 30-day peak
+    PEAK_DRAWDOWN_LOOKBACK_DAYS = 15  # Rolling window for peak calculation
     PEAK_DRAWDOWN_LOCKOUT_DAYS = 7  # Trading days to stay in STOP_BUYING
     PEAK_DRAWDOWN_RECOVERY_PCT = 97.0  # Must recover to 97% of peak to reset
 
     # Scaled Stop Loss Counter
     STOP_LOSS_COUNTER_ENABLED = True
     STOP_LOSS_LOOKBACK_DAYS = 10  # Rolling window for counting stop losses
-    STOP_LOSS_RATE_THRESHOLD = 35.0  # Trigger if 30%+ of positions stopped out
-    STOP_LOSS_MIN_COUNT = 3  # Minimum stop losses before rate applies
+    STOP_LOSS_RATE_THRESHOLD = 30.0  # Trigger if 30%+ of positions stopped out
+    STOP_LOSS_MIN_COUNT = 2  # Minimum stop losses before rate applies
     STOP_LOSS_LOCKOUT_DAYS = 5  # Trading days to stay in CAUTION
 
     # Relative Strength Filter

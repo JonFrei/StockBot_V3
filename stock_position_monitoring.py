@@ -19,7 +19,7 @@ class ExitConfig:
     """Tiered exit configuration"""
 
     # Initial stop loss (Level 0)
-    INITIAL_STOP_ATR_MULT = 2.25
+    INITIAL_STOP_ATR_MULT = 2.75
 
     # Tier 1: First profit target
     TIER1_TARGET_PCT = 10.0  # +10% from entry
