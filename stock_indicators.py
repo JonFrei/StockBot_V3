@@ -585,3 +585,223 @@ def calculate_volatility_score(data, df):
         'atr_pct': round(atr_pct, 2),
         'hist_vol': hist_vol
     }
+
+
+def get_rsi_fast(df, period=5):
+    """
+    Calculate fast RSI for momentum fade detection
+
+    Args:
+        df: DataFrame with 'close' column
+        period: RSI period (default 5 for quick momentum)
+
+    Returns:
+        pd.Series: RSI values
+    """
+    if len(df) < period + 1:
+        return pd.Series([50] * len(df), index=df.index)
+
+    delta = df['close'].diff()
+
+    up = delta.clip(lower=0)
+    down = delta.clip(upper=0).abs()
+
+    # Use EMA for fast RSI
+    roll_up = up.ewm(span=period, adjust=False).mean()
+    roll_down = down.ewm(span=period, adjust=False).mean()
+
+    rs = roll_up / roll_down
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+
+    rsi = pd.Series(numpy.select([roll_down == 0, roll_up == 0, True], [100, 0, rsi]), index=df.index)
+
+    return rsi
+
+
+def get_ema_fast(df, period=5):
+    """
+    Calculate fast EMA for momentum fade detection
+
+    Args:
+        df: DataFrame with 'close' column
+        period: EMA period (default 5)
+
+    Returns:
+        pd.Series: EMA values
+    """
+    if len(df) < period:
+        return pd.Series([df['close'].iloc[-1]] * len(df), index=df.index)
+
+    return df['close'].ewm(span=period, adjust=False).mean()
+
+
+def detect_momentum_fade(df, indicators):
+    """
+    Detect momentum fade signals
+
+    Triggers if ANY of:
+    1. MACD histogram lower high while price makes higher high
+    2. RSI(5) makes higher high then breaks prior swing low
+    3. EMA(5) and EMA(8) slope flattens then turns down
+    4. ATR contracts 3+ bars AND volume drops 3+ bars
+
+    Args:
+        df: DataFrame with OHLC and volume
+        indicators: Dict with current indicators
+
+    Returns:
+        dict: {
+            'fade_detected': bool,
+            'signals': list of triggered signals
+        }
+    """
+    if len(df) < 10:
+        return {'fade_detected': False, 'signals': []}
+
+    signals = []
+
+    # Signal 1: MACD histogram divergence
+    try:
+        # Recalculate MACD for recent bars
+        close = df['close']
+        ema_fast = close.ewm(span=12, adjust=False).mean()
+        ema_slow = close.ewm(span=26, adjust=False).mean()
+        macd_line = ema_fast - ema_slow
+        signal_line = macd_line.ewm(span=9, adjust=False).mean()
+        histogram = macd_line - signal_line
+
+        if len(df) >= 5:
+            price_high_prev = df['high'].iloc[-3]
+            price_high_curr = df['high'].iloc[-1]
+            hist_prev = histogram.iloc[-3]
+            hist_curr = histogram.iloc[-1]
+
+            if price_high_curr > price_high_prev and hist_curr < hist_prev:
+                signals.append('macd_divergence')
+    except:
+        pass
+
+    # Signal 2: RSI(5) higher high then breaks swing low
+    try:
+        rsi5 = get_rsi_fast(df, period=5)
+
+        if len(rsi5) >= 5:
+            rsi_high_prev = rsi5.iloc[-3]
+            rsi_high_curr = rsi5.iloc[-1]
+            rsi_swing_low = rsi5.iloc[-5:-1].min()
+
+            # Check if RSI made higher high then broke below prior swing
+            if rsi_high_curr > rsi_high_prev and rsi5.iloc[-1] < rsi_swing_low:
+                signals.append('rsi5_break')
+    except:
+        pass
+
+    # Signal 3: EMA(5) and EMA(8) slope flattens/turns down
+    try:
+        ema5 = get_ema_fast(df, period=5)
+        ema8_series = df['close'].ewm(span=8, adjust=False).mean()
+
+        if len(ema5) >= 4 and len(ema8_series) >= 4:
+            # Calculate slopes (last 3 bars)
+            ema5_slope_prev = ema5.iloc[-3] - ema5.iloc[-4]
+            ema5_slope_curr = ema5.iloc[-1] - ema5.iloc[-2]
+            ema8_slope_prev = ema8_series.iloc[-3] - ema8_series.iloc[-4]
+            ema8_slope_curr = ema8_series.iloc[-1] - ema8_series.iloc[-2]
+
+            # Both EMAs flattening or turning down
+            if (ema5_slope_curr < ema5_slope_prev * 0.5 and
+                    ema8_slope_curr < ema8_slope_prev * 0.5):
+                signals.append('ema_flatten')
+    except:
+        pass
+
+    # Signal 4: ATR contracts 3+ bars AND volume drops 3+ bars
+    try:
+        if len(df) >= 4:
+            # ATR contraction check
+            high = df['high']
+            low = df['low']
+            close = df['close']
+            prev_close = close.shift(1)
+
+            tr1 = high - low
+            tr2 = (high - prev_close).abs()
+            tr3 = (low - prev_close).abs()
+            true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+            atr_series = true_range.ewm(span=14, adjust=False).mean()
+
+            atr_contracting = all(
+                atr_series.iloc[-i] < atr_series.iloc[-i - 1]
+                for i in range(1, 4)
+            )
+
+            # Volume drop check
+            volume_dropping = all(
+                df['volume'].iloc[-i] < df['volume'].iloc[-i - 1]
+                for i in range(1, 4)
+            )
+
+            if atr_contracting and volume_dropping:
+                signals.append('atr_volume_contraction')
+    except:
+        pass
+
+    return {
+        'fade_detected': len(signals) > 0,
+        'signals': signals
+    }
+
+
+def detect_price_confirmation(df, indicators):
+    """
+    Detect price confirmation for exit
+
+    Triggers if ANY of:
+    1. Price closes below EMA(8) or EMA(10)
+    2. Price breaks previous 2-bar swing low
+
+    Args:
+        df: DataFrame with OHLC
+        indicators: Dict with current indicators
+
+    Returns:
+        dict: {
+            'confirmed': bool,
+            'reason': str
+        }
+    """
+    if len(df) < 3:
+        return {'confirmed': False, 'reason': None}
+
+    current_close = df['close'].iloc[-1]
+
+    # Check 1: Below EMA(8) or EMA(10)
+    try:
+        ema8 = indicators.get('ema8', 0)
+
+        # Calculate EMA(10) on the fly
+        ema10 = df['close'].ewm(span=10, adjust=False).mean().iloc[-1]
+
+        if current_close < ema8 or current_close < ema10:
+            return {
+                'confirmed': True,
+                'reason': f'close_below_ema (EMA8: ${ema8:.2f}, EMA10: ${ema10:.2f})'
+            }
+    except:
+        pass
+
+    # Check 2: Breaks previous 2-bar swing low
+    try:
+        if len(df) >= 3:
+            swing_low = min(df['low'].iloc[-3], df['low'].iloc[-2])
+            current_low = df['low'].iloc[-1]
+
+            if current_low < swing_low:
+                return {
+                    'confirmed': True,
+                    'reason': f'break_swing_low (low ${current_low:.2f} < swing ${swing_low:.2f})'
+                }
+    except:
+        pass
+
+    return {'confirmed': False, 'reason': None}
