@@ -1,5 +1,10 @@
 """
 SwingTradeStrategy - WITH SIMPLIFIED SAFEGUARD SYSTEM
+
+Changes:
+- ProfitTracker now notifies StockRotator of trade results
+- Rotation multipliers applied to position sizing
+- All tiers trade (including frozen at 0.1x)
 """
 
 from lumibot.strategies import Strategy
@@ -36,17 +41,27 @@ class SwingTradeStrategy(Strategy):
         self.tickers = self.parameters.get("tickers", [])
         self.last_trade_date = None
 
-        self.profit_tracker = account_profit_tracking.ProfitTracker(self)
-        self.order_logger = account_profit_tracking.OrderLogger(self)
+        # Initialize components
         self.position_monitor = stock_position_monitoring.PositionMonitor(self)
         self.regime_detector = MarketRegimeDetector()
         self.recovery_manager = RecoveryModeManager()
         self.signal_processor = stock_signals.SignalProcessor()
-        self.stock_rotator = StockRotator(profit_tracker=self.profit_tracker)
+
+        # Initialize rotation system FIRST (before profit tracker)
+        self.stock_rotator = StockRotator(profit_tracker=None)
+
+        # Initialize profit tracker WITH rotation reference
+        self.profit_tracker = account_profit_tracking.ProfitTracker(self, stock_rotator=self.stock_rotator)
+
+        # Now set the profit_tracker reference in rotator
+        self.stock_rotator.profit_tracker = self.profit_tracker
+
+        self.order_logger = account_profit_tracking.OrderLogger(self)
 
         print(f"\n{'=' * 60}")
         print(f"🤖 SwingTradeStrategy Initialized")
         print(f"   Tickers: {len(self.tickers)} | Mode: {'BACKTEST' if Config.BACKTESTING else 'LIVE'}")
+        print(f"   Rotation: 5-tier streak-based system")
         print(f"{'=' * 60}\n")
 
     def before_starting_trading(self):
@@ -80,7 +95,9 @@ class SwingTradeStrategy(Strategy):
 
             summary.set_context(current_date, self.portfolio_value, self.get_cash())
 
-            # Fetch data
+            # =============================================================
+            # FETCH DATA
+            # =============================================================
             try:
                 all_tickers = list(set(self.tickers + ['SPY'] + [p.symbol for p in self.get_positions()]))
                 all_stock_data = stock_data.process_data(all_tickers, current_date)
@@ -126,7 +143,9 @@ class SwingTradeStrategy(Strategy):
                 summary.print_summary()
                 return
 
-            # Regime detection with simplified system
+            # =============================================================
+            # REGIME DETECTION
+            # =============================================================
             try:
                 # Check if recovery mode is active
                 spy_below_200 = self.regime_detector._is_spy_below_200()
@@ -228,7 +247,9 @@ class SwingTradeStrategy(Strategy):
                     'reason': f'Safeguard error: {e}'
                 }
 
-            # Check exits (normal position monitoring)
+            # =============================================================
+            # CHECK EXITS (normal position monitoring)
+            # =============================================================
             try:
                 exit_orders = stock_position_monitoring.check_positions_for_exits(
                     strategy=self,
@@ -253,7 +274,9 @@ class SwingTradeStrategy(Strategy):
             except Exception as e:
                 summary.add_error(f"Exit processing failed: {e}")
 
-            # Recovery position limit check
+            # =============================================================
+            # RECOVERY POSITION LIMIT CHECK
+            # =============================================================
             num_positions = len(self.get_positions())
             if regime_result['action'] == 'recovery_override':
                 max_positions = regime_result.get('max_positions', 5)
@@ -266,21 +289,28 @@ class SwingTradeStrategy(Strategy):
                     save_state_safe(self)
                     return
 
-            # Rotation
+            # =============================================================
+            # WEEKLY ROTATION EVALUATION
+            # =============================================================
             if should_rotate(self.stock_rotator, current_date, frequency='weekly'):
                 self.stock_rotator.evaluate_stocks(self.tickers, current_date)
+                execution_tracker.record_action('rotation', count=1)
 
-            # Scan signals
+            # =============================================================
+            # SCAN SIGNALS - ALL tickers can trade (frozen gets 0.1x)
+            # =============================================================
             all_opportunities = []
 
             for ticker in all_tickers:
                 try:
                     if ticker in self.positions:
                         continue
-                    if not self.stock_rotator.is_tradeable(ticker):
-                        continue
                     if ticker not in all_stock_data:
                         continue
+
+                    # Get rotation tier and multiplier
+                    tier = self.stock_rotator.get_tier(ticker)
+                    rotation_mult = self.stock_rotator.get_multiplier(ticker)
 
                     data = all_stock_data[ticker]['indicators']
                     vol_metrics = data.get('volatility_metrics', {})
@@ -312,14 +342,16 @@ class SwingTradeStrategy(Strategy):
                             'all_scores': signal_result['all_scores'],
                             'data': data,
                             'vol_metrics': vol_metrics,
-                            'rotation_mult': self.stock_rotator.get_multiplier(ticker),
-                            'rotation_award': self.stock_rotator.get_award(ticker),
+                            'rotation_mult': rotation_mult,
+                            'rotation_tier': tier,
                             'source': 'scored'
                         })
                 except:
                     continue
 
-            # Position sizing
+            # =============================================================
+            # POSITION SIZING
+            # =============================================================
             if not all_opportunities:
                 execution_tracker.complete('SUCCESS')
                 summary.print_summary()
@@ -378,7 +410,9 @@ class SwingTradeStrategy(Strategy):
                 summary.print_summary()
                 return
 
-            # Execute buys
+            # =============================================================
+            # EXECUTE BUYS
+            # =============================================================
             for alloc in allocations:
                 try:
                     ticker = alloc['ticker']
@@ -387,8 +421,14 @@ class SwingTradeStrategy(Strategy):
                     price = alloc['price']
                     signal_type = alloc['signal_type']
                     signal_score = alloc['signal_score']
+                    rotation_mult = alloc.get('rotation_mult', 1.0)
 
-                    summary.add_entry(ticker, quantity, price, cost, signal_type, signal_score)
+                    # Get tier for logging
+                    tier = self.stock_rotator.get_tier(ticker)
+                    tier_emoji = {'premium': '🥇', 'active': '🥈', 'probation': '⚠️',
+                                 'rehabilitation': '🔄', 'frozen': '❄️'}.get(tier, '❓')
+
+                    summary.add_entry(ticker, quantity, price, cost, f"{signal_type} {tier_emoji}", signal_score)
                     self.position_monitor.track_position(ticker, current_date, signal_type, entry_score=signal_score)
 
                     order = self.create_order(ticker, quantity, 'buy')
@@ -400,7 +440,7 @@ class SwingTradeStrategy(Strategy):
                             side='buy',
                             quantity=quantity,
                             signal_type=signal_type,
-                            award='standard',
+                            award=tier,
                             quality_score=signal_score
                         )
 
