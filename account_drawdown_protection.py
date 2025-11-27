@@ -33,7 +33,7 @@ class SafeguardConfig:
     # Relative Strength Filter
     RELATIVE_STRENGTH_ENABLED = True
     RELATIVE_STRENGTH_LOOKBACK = 20  # Days to measure performance
-    RELATIVE_STRENGTH_MIN_OUTPERFORM = 0.0  # Stock must outperform SPY by this % (0 = match, 1.0 = beat by 1%)
+    RELATIVE_STRENGTH_MIN_OUTPERFORM = 2.0  # Stock must outperform SPY by this % (0 = match, 1.0 = beat by 1%)
 
 
 class MarketRegimeDetector:

@@ -19,17 +19,17 @@ class ExitConfig:
     """Tiered exit configuration"""
 
     # Initial stop loss (Level 0)
-    INITIAL_STOP_ATR_MULT = 2.75
+    INITIAL_STOP_ATR_MULT = 3.0
 
     # Tier 1: First profit target
     TIER1_TARGET_PCT = 12.0  # +10% from entry
     TIER1_SELL_PCT = 33.0  # Sell 33% of position
-    TIER1_EMERGENCY_ATR_MULT = 2.5  # Emergency stop = Tier1_Lock - (2 × ATR)
+    TIER1_EMERGENCY_ATR_MULT = 3.0  # Emergency stop = Tier1_Lock - (2 × ATR)
 
     # Tier 2: Second profit target
-    TIER2_TARGET_PCT = 25.0  # +20% from entry
+    TIER2_TARGET_PCT = 22.0  # +20% from entry
     TIER2_SELL_PCT = 66.0  # Sell 66% of REMAINING position (44.22% of original)
-    TIER2_TRAILING_ATR_MULT = 3.5 # Trailing stop = Peak - (3 × ATR)
+    TIER2_TRAILING_ATR_MULT = 4.0 # Trailing stop = Peak - (3 × ATR)
 
     # Kill Switch (active after Tier 1)
     KILL_SWITCH_ACTIVE_AFTER_TIER1 = True
