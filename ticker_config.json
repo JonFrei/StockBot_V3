@@ -17,14 +17,16 @@
     "ORCL", "AAPL", "MSFT", "AMZN", "META", "GOOGL",
     "MU", "PLTR", "NVDA", "AMD", "TSLA",
     "AMAT", "LRCX", "KLAC", "DDOG", "NET", "CRWD", "SNOW",
-    "SHOP", "V", "NFLX", "CRM", "PYPL", "NKE",
-
+    "SHOP", "V", "NFLX", "CRM", "PYPL", "NKE", "QCOM","COST", "HD", "COIN",
+    "ADBE", "QCOM", "NOW", "PANW", "UBER", "MRVL",
+    "JPM", "GS", "MA",
+    "UNH", "LLY"
+  ],
+  "watch_list": [
     "ADBE", "QCOM", "NOW", "PANW", "UBER", "MRVL",
     "JPM", "GS", "MA",
     "UNH", "LLY",
-    "COST", "HD"
-  ],
-  "watch_list": [
+
     "SSO",
     "UPRO",
     "COIN",
