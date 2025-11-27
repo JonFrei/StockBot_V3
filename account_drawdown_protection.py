@@ -8,11 +8,10 @@ Layer 1: Market Trend Gate (Soft Block)
 - Recovery Mode can override this
 
 Layer 2: Sentiment Crisis (Hard Exit)
-- SPY closes below 20-day low by CRISIS_20DAY_LOW_THRESHOLD% OR
+- SPY closes below 20-day low OR
 - Technical breakdown (SPY < 50 SMA + < 20 EMA + high volume)
 - Action: Exit ALL positions, lockout 5 days + wait for 20 EMA reclaim
 - Recovery Mode CANNOT override this
-- COOLDOWN: Cannot trigger new crisis for CRISIS_COOLDOWN_DAYS after lockout lifts
 """
 
 from datetime import timedelta
@@ -27,12 +26,6 @@ class SafeguardConfig:
     # Layer 2: Sentiment Crisis
     CRISIS_LOCKOUT_DAYS = 5  # Minimum days before re-entry
     VOLUME_SURGE_THRESHOLD = 1.0  # Volume must be above 20-day average (1.0 = 100%)
-
-    # NEW: Crisis trigger threshold - SPY must be this % below 20-day low
-    CRISIS_20DAY_LOW_THRESHOLD = 0.0  # Was 0% (any touch), now requires 1% below
-
-    # NEW: Cooldown period after lockout lifts - prevents back-to-back crises
-    CRISIS_COOLDOWN_DAYS = 3  # Cannot trigger new crisis for 5 days after lift
 
     # Recovery requirement after lockout
     # SPY must close above 20 EMA to resume trading
@@ -69,9 +62,6 @@ class MarketRegimeDetector:
         self.crisis_trigger_date = None
         self.crisis_trigger_reason = None
         self.lockout_end_date = None
-
-        # NEW: Cooldown tracking
-        self.last_lockout_lift_date = None  # Track when lockout was lifted
 
     def update_spy(self, date, spy_close, spy_20_ema, spy_50_sma, spy_200_sma,
                    spy_volume=None, spy_avg_volume=None):
@@ -135,22 +125,6 @@ class MarketRegimeDetector:
         last_20 = past_prices[-20:]
         return min(p['close'] for p in last_20)
 
-    def _is_in_cooldown(self, current_date):
-        """Check if we're in cooldown period after lockout lift"""
-        if self.last_lockout_lift_date is None:
-            return False
-
-        # Normalize dates for comparison
-        if hasattr(current_date, 'tzinfo') and current_date.tzinfo is not None:
-            current_date = current_date.replace(tzinfo=None)
-
-        lift_date = self.last_lockout_lift_date
-        if hasattr(lift_date, 'tzinfo') and lift_date.tzinfo is not None:
-            lift_date = lift_date.replace(tzinfo=None)
-
-        days_since_lift = (current_date - lift_date).days
-        return days_since_lift < SafeguardConfig.CRISIS_COOLDOWN_DAYS
-
     def _check_sentiment_crisis(self, current_date):
         """
         Check for sentiment crisis conditions
@@ -158,20 +132,13 @@ class MarketRegimeDetector:
         Returns:
             dict with 'triggered' and 'reason' if crisis detected, None otherwise
         """
-        # NEW: Check cooldown period first
-        if self._is_in_cooldown(current_date):
-            return None  # Cannot trigger during cooldown
-
-        # Condition A: SPY closes below 20-day low by threshold amount
+        # Condition A: SPY closes below 20-day low
         twenty_day_low = self._get_20_day_low()
-        if twenty_day_low is not None and twenty_day_low > 0:
-            pct_below = ((twenty_day_low - self.spy_close) / twenty_day_low) * 100
-
-            if pct_below >= SafeguardConfig.CRISIS_20DAY_LOW_THRESHOLD:
-                return {
-                    'triggered': True,
-                    'reason': f"SPY ${self.spy_close:.2f} is {pct_below:.1f}% below 20-day low ${twenty_day_low:.2f}"
-                }
+        if twenty_day_low is not None and self.spy_close < twenty_day_low:
+            return {
+                'triggered': True,
+                'reason': f"SPY ${self.spy_close:.2f} below 20-day low ${twenty_day_low:.2f}"
+            }
 
         # Condition B: Technical breakdown
         # SPY below 50 SMA + below 20 EMA + volume above average
@@ -184,12 +151,10 @@ class MarketRegimeDetector:
             )
 
             if below_50_sma and below_20_ema and high_volume:
-                # Also check cooldown for technical breakdown
-                if not self._is_in_cooldown(current_date):
-                    return {
-                        'triggered': True,
-                        'reason': f"Technical breakdown: SPY ${self.spy_close:.2f} < 50 SMA ${self.spy_50_sma:.2f} & 20 EMA ${self.spy_20_ema:.2f} on high volume"
-                    }
+                return {
+                    'triggered': True,
+                    'reason': f"Technical breakdown: SPY ${self.spy_close:.2f} < 50 SMA ${self.spy_50_sma:.2f} & 20 EMA ${self.spy_20_ema:.2f} on high volume"
+                }
 
         return None
 
@@ -235,7 +200,6 @@ class MarketRegimeDetector:
             'twenty_day_low': self._get_20_day_low(),
             'crisis_active': self.crisis_active,
             'lockout_end_date': self.lockout_end_date,
-            'in_cooldown': self._is_in_cooldown(current_date) if current_date else False,
         }
 
         # =================================================================
@@ -245,14 +209,12 @@ class MarketRegimeDetector:
         # Check if in active crisis lockout
         if self.crisis_active:
             if self._check_crisis_recovery(current_date):
-                # Crisis over - clear state and record lift date for cooldown
+                # Crisis over - clear state
                 self.crisis_active = False
                 self.crisis_trigger_date = None
                 self.crisis_trigger_reason = None
                 self.lockout_end_date = None
-                self.last_lockout_lift_date = current_date  # NEW: Track for cooldown
                 print(f"✅ CRISIS LOCKOUT LIFTED: SPY ${self.spy_close:.2f} above 20 EMA ${self.spy_20_ema:.2f}")
-                print(f"   ⏳ Cooldown active for {SafeguardConfig.CRISIS_COOLDOWN_DAYS} days - no new crisis can trigger")
             else:
                 # Still in lockout
                 days_remaining = (
@@ -272,7 +234,7 @@ class MarketRegimeDetector:
                     'details': details
                 }
 
-        # Check for new crisis (respects cooldown internally)
+        # Check for new crisis
         crisis_check = self._check_sentiment_crisis(current_date)
         if crisis_check and crisis_check['triggered']:
             # Trigger crisis
@@ -441,7 +403,6 @@ class MarketRegimeDetector:
             'crisis_trigger_date': self.crisis_trigger_date,
             'crisis_trigger_reason': self.crisis_trigger_reason,
             'lockout_end_date': self.lockout_end_date,
-            'last_lockout_lift_date': self.last_lockout_lift_date,
             # Compatibility keys for account_profit_tracking.py
             'distribution_days': 0,
             'accumulation_days': 0,
