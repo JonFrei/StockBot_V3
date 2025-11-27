@@ -32,9 +32,9 @@ class SafeguardConfig:
     """Enhanced safeguard configuration"""
 
     # Distribution/Accumulation Day Thresholds (tightened from original)
-    DISTRIBUTION_DAY_PRICE_THRESHOLD = -0.4  # Was -0.2%
+    DISTRIBUTION_DAY_PRICE_THRESHOLD = -0.25  # Was -0.2%
     ACCUMULATION_DAY_PRICE_THRESHOLD = 0.4  # NEW: +0.4% for accumulation
-    VOLUME_THRESHOLD = 25.0  # Was 20%, now 25%
+    VOLUME_THRESHOLD = 15.0  # Was 20%, now 25%
 
     # Lookback period
     DISTRIBUTION_LOOKBACK_DAYS = 25
@@ -64,17 +64,17 @@ class SafeguardConfig:
 
     # Portfolio Peak Drawdown Circuit Breaker
     PEAK_DRAWDOWN_ENABLED = True
-    PEAK_DRAWDOWN_THRESHOLD = 8.0  # Trigger if portfolio drops 5% from 30-day peak
+    PEAK_DRAWDOWN_THRESHOLD = 6.0  # Trigger if portfolio drops 5% from 30-day peak
     PEAK_DRAWDOWN_LOOKBACK_DAYS = 30  # Rolling window for peak calculation
-    PEAK_DRAWDOWN_LOCKOUT_DAYS = 3  # Trading days to stay in STOP_BUYING
+    PEAK_DRAWDOWN_LOCKOUT_DAYS = 7  # Trading days to stay in STOP_BUYING
     PEAK_DRAWDOWN_RECOVERY_PCT = 97.0  # Must recover to 97% of peak to reset
 
     # Scaled Stop Loss Counter
     STOP_LOSS_COUNTER_ENABLED = True
     STOP_LOSS_LOOKBACK_DAYS = 10  # Rolling window for counting stop losses
-    STOP_LOSS_RATE_THRESHOLD = 50.0  # Trigger if 30%+ of positions stopped out
-    STOP_LOSS_MIN_COUNT = 4  # Minimum stop losses before rate applies
-    STOP_LOSS_LOCKOUT_DAYS = 3  # Trading days to stay in CAUTION
+    STOP_LOSS_RATE_THRESHOLD = 35.0  # Trigger if 30%+ of positions stopped out
+    STOP_LOSS_MIN_COUNT = 3  # Minimum stop losses before rate applies
+    STOP_LOSS_LOCKOUT_DAYS = 5  # Trading days to stay in CAUTION
 
     # Relative Strength Filter
     RELATIVE_STRENGTH_ENABLED = True
@@ -215,9 +215,9 @@ class MarketRegimeDetector:
             if stop_loss_result:
                 details['stop_loss_rate'] = stop_loss_result.get('rate', 0)
                 return {
-                    'action': 'caution',
+                    'action': 'stop_buying',
                     'position_size_multiplier': SafeguardConfig.CAUTION_SIZE_MULTIPLIER,
-                    'allow_new_entries': True,
+                    'allow_new_entries': False,
                     'reason': stop_loss_result['reason'],
                     'details': details
                 }
@@ -281,9 +281,9 @@ class MarketRegimeDetector:
         # =================================================================
         if SafeguardConfig.EARLY_WARNING_ENABLED and spy_below_50:
             return {
-                'action': 'caution',
+                'action': 'stop_buying',
                 'position_size_multiplier': SafeguardConfig.CAUTION_SIZE_MULTIPLIER,
-                'allow_new_entries': True,  # Changed from True
+                'allow_new_entries': False,  # Changed from True
                 'reason': f"SPY ${self.spy_close:.2f} below 50 SMA ${self.spy_50_sma:.2f} (early warning)",
                 'details': details
             }

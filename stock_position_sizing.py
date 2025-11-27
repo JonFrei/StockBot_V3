@@ -9,7 +9,7 @@ Now applies rotation_mult from stock rotation system
 class SimplifiedSizingConfig:
     """Position sizing configuration"""
     BASE_POSITION_PCT = 10.0
-    MIN_SHARES = 10
+    MIN_SHARES = 5
     MAX_POSITION_PCT = 15.0
     MAX_TOTAL_POSITIONS = 25
     MIN_CASH_RESERVE_PCT = 10.0
