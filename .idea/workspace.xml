@@ -5,7 +5,6 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="d6df019d-759f-4aef-8455-f63cac562958" name="Changes" comment="com">
-      <change afterPath="$PROJECT_DIR$/diagnose_positions.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/account_broker_data.py" beforeDir="false" afterPath="$PROJECT_DIR$/account_broker_data.py" afterDir="false" />
     </list>
@@ -95,7 +94,7 @@
       <recent name="C:\Users\freie\PycharmProjects\StockBot_V3" />
     </key>
   </component>
-  <component name="RunManager" selected="Python.diagnose_positions">
+  <component name="RunManager" selected="Python.main">
     <configuration name="diagnose_entry_price" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
       <module name="StockBot_V3" />
       <option name="ENV_FILES" value="" />
@@ -208,9 +207,9 @@
     </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="Python.main" />
         <item itemvalue="Python.diagnose_positions" />
         <item itemvalue="Python.diagnose_entry_price" />
-        <item itemvalue="Python.main" />
         <item itemvalue="Python.sync_tickers" />
         <item itemvalue="Python.text_vix" />
       </list>
@@ -231,14 +230,6 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1762775089088</updated>
-    </task>
-    <task id="LOCAL-00117" summary="com">
-      <option name="closed" value="true" />
-      <created>1764084084454</created>
-      <option name="number" value="00117" />
-      <option name="presentableId" value="LOCAL-00117" />
-      <option name="project" value="LOCAL" />
-      <updated>1764084084454</updated>
     </task>
     <task id="LOCAL-00118" summary="com">
       <option name="closed" value="true" />
@@ -624,7 +615,15 @@
       <option name="project" value="LOCAL" />
       <updated>1764348317649</updated>
     </task>
-    <option name="localTasksCounter" value="166" />
+    <task id="LOCAL-00166" summary="com">
+      <option name="closed" value="true" />
+      <created>1764349777096</created>
+      <option name="number" value="00166" />
+      <option name="presentableId" value="LOCAL-00166" />
+      <option name="project" value="LOCAL" />
+      <updated>1764349777096</updated>
+    </task>
+    <option name="localTasksCounter" value="167" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
