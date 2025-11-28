@@ -6,6 +6,7 @@ Sends:
 2. Detailed Trading Summary (BEST EFFORT) - positions, trades, performance
 3. Crash notification emails (when bot encounters fatal errors)
 4. Database failure alerts (when PostgreSQL unavailable)
+5. Position alert emails (when positions need manual review)
 
 Only sends emails during live trading (not backtesting)
 
@@ -446,7 +447,8 @@ def generate_detailed_summary_html(strategy, current_date):
 
     # Use comprehensive summary from ProfitTracker if available
     try:
-        if hasattr(strategy, 'profit_tracker') and hasattr(strategy, 'stock_rotator') and hasattr(strategy, 'regime_detector'):
+        if hasattr(strategy, 'profit_tracker') and hasattr(strategy, 'stock_rotator') and hasattr(strategy,
+                                                                                                  'regime_detector'):
             comprehensive_html = strategy.profit_tracker.generate_final_summary_html(
                 stock_rotator=strategy.stock_rotator,
                 regime_detector=strategy.regime_detector
@@ -564,9 +566,9 @@ def safe_generate_positions_section(strategy):
                         <tr>
                             <td><strong>{ticker}</strong></td>
                             <td>{qty:,}</td>
-                            <td>N/A</td>
+                            <td style="color: #e74c3c;">⚠️ N/A</td>
                             <td>${current_price:.2f}</td>
-                            <td colspan="3">Entry price unavailable</td>
+                            <td colspan="3" style="color: #e74c3c;">Entry price unavailable - needs manual review</td>
                         </tr>
                         """
                         continue
@@ -630,7 +632,8 @@ def safe_generate_trades_section(strategy, current_date):
         if hasattr(strategy, 'profit_tracker'):
             all_trades = strategy.profit_tracker.get_closed_trades()
             today_trades = [t for t in all_trades
-                           if t.get('exit_date') and hasattr(t['exit_date'], 'date') and t['exit_date'].date() == current_date.date()]
+                            if t.get('exit_date') and hasattr(t['exit_date'], 'date') and t[
+                                'exit_date'].date() == current_date.date()]
 
         html = f"""
         <h3>🔄 Today's Closed Trades ({len(today_trades)})</h3>
@@ -955,3 +958,95 @@ def generate_crash_notification_html(error_message, error_traceback=None):
     """
 
     return html
+
+
+# =============================================================================
+# POSITION ALERT EMAIL
+# =============================================================================
+
+def send_position_alert_email(positions_needing_review, current_date):
+    """
+    Send email alert for positions requiring manual review
+
+    Args:
+        positions_needing_review: List of dicts with position details
+        current_date: Current datetime
+    """
+    if Config.BACKTESTING:
+        return
+
+    if not positions_needing_review:
+        return
+
+    print(f"\n[EMAIL] Sending position alert for {len(positions_needing_review)} position(s)...")
+
+    try:
+        # Build position table rows
+        position_rows = ""
+        for pos in positions_needing_review:
+            position_rows += f"""
+            <tr>
+                <td><strong>{pos['ticker']}</strong></td>
+                <td>{pos['quantity']}</td>
+                <td>${pos['current_price']:.2f}</td>
+                <td>${pos['market_value']:.2f}</td>
+                <td style="color: #e74c3c;">{pos['issue']}</td>
+            </tr>
+            """
+
+        html_body = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                h2 {{ color: #e74c3c; border-bottom: 2px solid #c0392b; padding-bottom: 10px; }}
+                .alert-box {{ background-color: #fadbd8; padding: 15px; border-left: 5px solid #e74c3c; margin: 10px 0; }}
+                table {{ border-collapse: collapse; width: 100%; margin: 10px 0; }}
+                th {{ background-color: #e74c3c; color: white; padding: 10px; text-align: left; }}
+                td {{ padding: 8px; border-bottom: 1px solid #ddd; }}
+                .timestamp {{ color: #7f8c8d; font-style: italic; }}
+            </style>
+        </head>
+        <body>
+            <h2>⚠️ Positions Requiring Manual Review</h2>
+
+            <p class="timestamp">Generated: {current_date.strftime('%Y-%m-%d %I:%M:%S %p EST')}</p>
+
+            <div class="alert-box">
+                <p><strong>{len(positions_needing_review)} position(s)</strong> have issues that require your attention.</p>
+                <p>These positions are being <strong>skipped</strong> by the bot until resolved.</p>
+            </div>
+
+            <h3>Affected Positions</h3>
+            <table>
+                <tr>
+                    <th>Ticker</th>
+                    <th>Quantity</th>
+                    <th>Current Price</th>
+                    <th>Market Value</th>
+                    <th>Issue</th>
+                </tr>
+                {position_rows}
+            </table>
+
+            <h3>Required Actions</h3>
+            <ul>
+                <li>Log into your Alpaca dashboard to verify these positions</li>
+                <li>Check if entry prices are available in the broker interface</li>
+                <li>Consider manually setting stop losses for these positions</li>
+                <li>If positions are orphaned/stale, consider closing them manually</li>
+            </ul>
+
+            <hr>
+            <p style="color: #7f8c8d; font-size: 0.9em;">
+                <em>Automated alert from SwingTradeStrategy Bot</em>
+            </p>
+        </body>
+        </html>
+        """
+
+        subject = f"⚠️ {len(positions_needing_review)} Position(s) Need Manual Review - {current_date.strftime('%Y-%m-%d')}"
+        send_email(subject, html_body)
+
+    except Exception as e:
+        print(f"[EMAIL] Failed to send position alert: {e}")

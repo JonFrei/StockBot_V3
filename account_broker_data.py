@@ -164,13 +164,12 @@ def get_broker_entry_price(position: Any, strategy: Any = None, ticker: str = ""
     Tries multiple attributes in order of preference:
     1. avg_entry_price (most reliable)
     2. cost_basis / quantity (alpaca-trade-api format)
-    3. avg_fill_price
-    4. fill_avg_price (alternative naming)
-    5. current_price (last resort for pre-existing positions)
+
+    Returns 0.0 if no valid entry price found - position will be flagged for manual review.
 
     Args:
         position: Broker position object
-        strategy: Strategy instance (optional, for getting current price as fallback)
+        strategy: Strategy instance (optional, not used for price fallback)
         ticker: Ticker symbol (optional, for logging)
 
     Returns:
@@ -216,26 +215,9 @@ def get_broker_entry_price(position: Any, strategy: Any = None, ticker: str = ""
         except (ValueError, TypeError):
             pass
 
-    # Last resort: use current_price for pre-existing positions
-    if strategy and ticker:
-        try:
-            current_price = strategy.get_last_price(ticker)
-            if current_price > 0:
-                print(f"[WARN] {ticker} - Using current price ${current_price:.2f} as entry (pre-existing position)")
-                return current_price
-        except Exception as e:
-            print(f"[ERROR] {ticker} - Could not get current price: {e}")
-
-    # Try current_price attribute as absolute fallback
-    if hasattr(position, 'current_price') and position.current_price:
-        try:
-            price = float(position.current_price)
-            if price > 0:
-                if ticker:
-                    print(f"[INFO] {ticker} - Using position.current_price ${price:.2f} as entry")
-                return price
-        except (ValueError, TypeError):
-            pass
+    # No valid entry price found - return 0.0 for manual review
+    if ticker:
+        print(f"[ERROR] {ticker} - Could not determine entry price, flagging for manual review")
 
     return 0.0
 

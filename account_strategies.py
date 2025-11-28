@@ -6,6 +6,7 @@ Changes:
 - Rotation multipliers applied to position sizing
 - All tiers trade (including frozen at 0.1x)
 - Portfolio drawdown tracking added (15% from 30-day peak → exit all)
+- Position verification at start of each iteration
 """
 
 from lumibot.strategies import Strategy
@@ -29,6 +30,65 @@ from lumibot.brokers import Alpaca
 broker = Alpaca(Config.get_alpaca_config())
 
 CAUTION_MIN_PROFIT_PCT = 0.0
+
+
+def verify_broker_positions(strategy, current_date):
+    """
+    Verify all broker positions have valid data
+
+    Returns:
+        dict: {
+            'valid_positions': list of tickers with valid data,
+            'positions_needing_review': list of position dicts with issues
+        }
+    """
+    import account_email_notifications
+
+    positions = strategy.get_positions()
+    valid_positions = []
+    positions_needing_review = []
+
+    for position in positions:
+        ticker = position.symbol
+        quantity = account_broker_data.get_position_quantity(position, ticker)
+
+        if quantity <= 0:
+            continue
+
+        entry_price = account_broker_data.get_broker_entry_price(position, strategy, ticker)
+
+        try:
+            current_price = strategy.get_last_price(ticker)
+        except:
+            current_price = 0
+
+        market_value = quantity * current_price if current_price > 0 else 0
+
+        if entry_price <= 0:
+            positions_needing_review.append({
+                'ticker': ticker,
+                'quantity': quantity,
+                'current_price': current_price,
+                'market_value': market_value,
+                'issue': 'Missing entry price'
+            })
+        else:
+            valid_positions.append(ticker)
+
+    # Send alert email if issues found
+    if positions_needing_review:
+        print(f"\n{'=' * 60}")
+        print(f"⚠️ POSITION VERIFICATION: {len(positions_needing_review)} position(s) need review")
+        for pos in positions_needing_review:
+            print(f"   • {pos['ticker']}: {pos['issue']}")
+        print(f"{'=' * 60}\n")
+
+        account_email_notifications.send_position_alert_email(positions_needing_review, current_date)
+
+    return {
+        'valid_positions': valid_positions,
+        'positions_needing_review': positions_needing_review
+    }
 
 
 class SwingTradeStrategy(Strategy):
@@ -96,6 +156,15 @@ class SwingTradeStrategy(Strategy):
                 self.last_trade_date = current_date.date()
 
             summary.set_context(current_date, self.portfolio_value, self.get_cash())
+
+            # =============================================================
+            # VERIFY BROKER POSITIONS
+            # =============================================================
+            if not Config.BACKTESTING:
+                verification_result = verify_broker_positions(self, current_date)
+                if verification_result['positions_needing_review']:
+                    for pos in verification_result['positions_needing_review']:
+                        summary.add_warning(f"{pos['ticker']}: {pos['issue']} - skipping")
 
             # =============================================================
             # UPDATE PORTFOLIO VALUE FOR DRAWDOWN TRACKING
@@ -320,8 +389,8 @@ class SwingTradeStrategy(Strategy):
 
             for ticker in all_tickers:
                 try:
-                    if ticker in current_holdings:
-                        continue
+                    # if ticker in current_holdings:
+                    #     continue
                     if ticker not in all_stock_data:
                         continue
 
