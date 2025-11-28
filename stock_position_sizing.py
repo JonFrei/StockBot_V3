@@ -1,10 +1,13 @@
 """
-Position Sizing - STREAMLINED VERSION (No MIN_SHARES Enforcement)
+Position Sizing - WITH CONCENTRATION LIMITS FOR ADD-ONS
 
 Changes from previous version:
 - Removed MIN_SHARES enforcement (was 5)
 - Let stock_position_monitoring.py handle small positions via remnant cleanup
 - Applies rotation multiplier from stock rotation system
+- NEW: Added MAX_SINGLE_POSITION_PCT to prevent over-concentration
+- NEW: Added get_current_position_exposure() for add-on sizing
+- NEW: Returns is_addon flag and existing position details
 """
 
 
@@ -17,19 +20,72 @@ class SimplifiedSizingConfig:
     MAX_CASH_DEPLOYMENT_PCT = 85.0
     MAX_DAILY_DEPLOYMENT_PCT = 50.0
 
+    # NEW: Concentration limit - max exposure to single stock (including add-ons)
+    MAX_SINGLE_POSITION_PCT = 18.0  # Can't exceed 18% of portfolio in one stock
 
-def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier=1.0, verbose=True):
+
+def get_current_position_exposure(strategy, ticker):
     """
-    Position sizing with rotation multiplier support
+    Get current exposure to a ticker as percentage of portfolio
+
+    Args:
+        strategy: Lumibot Strategy instance
+        ticker: Stock symbol
+
+    Returns:
+        dict: {
+            'has_position': bool,
+            'quantity': int,
+            'market_value': float,
+            'exposure_pct': float
+        }
+    """
+    positions = strategy.get_positions()
+    portfolio_value = strategy.portfolio_value
+
+    for position in positions:
+        if position.symbol == ticker:
+            try:
+                quantity = int(position.quantity)
+                current_price = strategy.get_last_price(ticker)
+                market_value = quantity * current_price
+                exposure_pct = (market_value / portfolio_value * 100) if portfolio_value > 0 else 0
+
+                return {
+                    'has_position': True,
+                    'quantity': quantity,
+                    'market_value': market_value,
+                    'exposure_pct': exposure_pct
+                }
+            except:
+                return {
+                    'has_position': True,
+                    'quantity': 0,
+                    'market_value': 0,
+                    'exposure_pct': 0
+                }
+
+    return {
+        'has_position': False,
+        'quantity': 0,
+        'market_value': 0,
+        'exposure_pct': 0
+    }
+
+
+def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier=1.0, verbose=True, strategy=None):
+    """
+    Position sizing with rotation multiplier support and concentration limits
 
     Args:
         opportunities: List of opportunity dicts
         portfolio_context: Portfolio state dict
         regime_multiplier: From safeguard system (0.0 to 1.0)
         verbose: If False, suppress detailed logging
+        strategy: Lumibot Strategy instance (optional, required for concentration check)
 
     Returns:
-        List of allocation dicts with quantity, price, cost, etc.
+        List of allocation dicts with quantity, price, cost, is_addon flag, etc.
     """
     if not opportunities:
         return []
@@ -50,9 +106,33 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
         vol_mult = opp['vol_metrics'].get('position_multiplier', 1.0)
         rotation_mult = opp.get('rotation_mult', 1.0)
 
+        # Check current exposure if strategy provided
+        current_exposure = {'has_position': False, 'exposure_pct': 0, 'quantity': 0, 'market_value': 0}
+        is_addon = False
+
+        if strategy is not None:
+            current_exposure = get_current_position_exposure(strategy, ticker)
+            is_addon = current_exposure['has_position']
+
+            # Check concentration limit
+            if current_exposure['exposure_pct'] >= SimplifiedSizingConfig.MAX_SINGLE_POSITION_PCT:
+                if verbose:
+                    print(f"   ⚠️ {ticker}: At max concentration ({current_exposure['exposure_pct']:.1f}% >= {SimplifiedSizingConfig.MAX_SINGLE_POSITION_PCT}%)")
+                continue
+
         # Apply all multipliers: regime, volatility, and rotation
         position_pct = SimplifiedSizingConfig.BASE_POSITION_PCT * regime_multiplier * vol_mult * rotation_mult
         position_pct = max(0.5, min(position_pct, SimplifiedSizingConfig.MAX_POSITION_PCT))
+
+        # For add-ons, calculate remaining room under concentration limit
+        if is_addon:
+            remaining_room_pct = SimplifiedSizingConfig.MAX_SINGLE_POSITION_PCT - current_exposure['exposure_pct']
+            position_pct = min(position_pct, remaining_room_pct)
+
+            if position_pct <= 0.5:  # Not enough room for meaningful add
+                if verbose:
+                    print(f"   ⚠️ {ticker}: Insufficient room for add-on ({remaining_room_pct:.1f}% remaining)")
+                continue
 
         position_dollars = portfolio_value * (position_pct / 100)
         current_price = data['close']
@@ -77,7 +157,11 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
             'signal_type': opp['signal_type'],
             'regime_mult': regime_multiplier,
             'vol_mult': vol_mult,
-            'rotation_mult': rotation_mult
+            'rotation_mult': rotation_mult,
+            # NEW: Add-on tracking fields
+            'is_addon': is_addon,
+            'existing_exposure_pct': current_exposure['exposure_pct'],
+            'existing_quantity': current_exposure['quantity']
         })
 
     if not allocations:

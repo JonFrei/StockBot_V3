@@ -8,14 +8,14 @@ class ExitConfig:
     INITIAL_STOP_ATR_MULT = 2.75
 
     # Tier 1: First profit target
-    TIER1_TARGET_PCT = 12.0  # +10% from entry
+    TIER1_TARGET_PCT = 12.0  # +12% from entry
     TIER1_SELL_PCT = 33.0  # Sell 33% of position
-    TIER1_EMERGENCY_ATR_MULT = 2.5  # Emergency stop = Tier1_Lock - (2 × ATR)
+    TIER1_EMERGENCY_ATR_MULT = 2.5  # Emergency stop = Tier1_Lock - (2.5 × ATR)
 
     # Tier 2: Second profit target
-    TIER2_TARGET_PCT = 25.0  # +20% from entry
+    TIER2_TARGET_PCT = 25.0  # +25% from entry
     TIER2_SELL_PCT = 66.0  # Sell 66% of REMAINING position (44.22% of original)
-    TIER2_TRAILING_ATR_MULT = 3.5  # Trailing stop = Peak - (3 × ATR)
+    TIER2_TRAILING_ATR_MULT = 3.5  # Trailing stop = Peak - (3.5 × ATR)
 
     # Kill Switch (active after Tier 1 OR min hold days)
     KILL_SWITCH_ACTIVE_AFTER_TIER1 = True
@@ -44,29 +44,40 @@ class PositionMonitor:
         self.strategy = strategy
         self.positions_metadata = {}
 
-    def track_position(self, ticker, entry_date, entry_signal='unknown', entry_score=0):
+    def track_position(self, ticker, entry_date, entry_signal='unknown', entry_score=0, is_addon=False):
         """
-        Initialize position tracking with Level 0 state
+        Initialize or update position tracking
+
+        For new positions: Creates Level 0 state
+        For add-ons: Preserves existing tier state (no reset)
 
         Args:
             ticker: Stock symbol
             entry_date: Entry datetime
             entry_signal: Entry signal name
             entry_score: Entry quality score
+            is_addon: True if adding to existing position (NEW)
         """
         if ticker not in self.positions_metadata:
+            # New position - initialize tracking
             current_price = self._get_current_price(ticker)
 
             self.positions_metadata[ticker] = {
                 'entry_date': entry_date,
                 'entry_signal': entry_signal,
                 'entry_score': entry_score,
-                'entry_price': current_price,  # For profit calculations
+                'entry_price': current_price,  # For profit calculations (will be overwritten by broker avg)
                 'profit_level': 0,  # 0=Entry, 1=Tier1, 2=Tier2
                 'tier1_lock_price': None,  # Price at Tier 1 execution
                 'peak_price': None,  # Peak after Tier 2
-                'kill_switch_active': False  # Activated after Tier 1
+                'kill_switch_active': False,  # Activated after Tier 1
+                'add_count': 0  # NEW: Track number of add-ons
             }
+        elif is_addon:
+            # NEW: Add-on to existing position - preserve tier state, increment add count
+            self.positions_metadata[ticker]['add_count'] = self.positions_metadata[ticker].get('add_count', 0) + 1
+            # NOTE: Tier state, kill_switch, lock prices all preserved - no reset
+            # Entry price will be updated by broker's avg_entry_price automatically
 
     def advance_to_tier1(self, ticker, tier1_price):
         """
@@ -161,7 +172,7 @@ def check_initial_stop(entry_price, current_close, atr):
 
 def check_tier1_target(pnl_pct):
     """
-    Check if Tier 1 profit target reached (+10%)
+    Check if Tier 1 profit target reached (+12%)
 
     Args:
         pnl_pct: Current P&L percentage
@@ -214,7 +225,7 @@ def check_emergency_stop(tier1_lock_price, current_close, atr):
 
 def check_tier2_target(pnl_pct, current_profit_level):
     """
-    Check if Tier 2 profit target reached (+20%)
+    Check if Tier 2 profit target reached (+25%)
 
     Args:
         pnl_pct: Current P&L percentage
@@ -382,7 +393,7 @@ def check_max_loss_stop(entry_price, current_price, volatility_metrics):
 
 def check_stagnant_position(entry_date, current_date, pnl_pct):
     """
-    Check for stagnant position (30 days, <3% gain)
+    Check for stagnant position (90 days, <5% gain)
 
     Args:
         entry_date: Entry datetime
@@ -481,7 +492,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
     for position in positions:
         ticker = position.symbol
 
-        # Get broker data
+        # Get broker data - ALWAYS use broker's avg_entry_price for P&L calculations
         broker_entry_price = account_broker_data.get_broker_entry_price(position, strategy, ticker)
         if not account_broker_data.validate_entry_price(broker_entry_price, ticker):
             continue
@@ -506,11 +517,12 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
             position_monitor.track_position(ticker, current_date, 'pre_existing', entry_score=0)
             metadata = position_monitor.get_position_metadata(ticker)
 
-        # Use metadata entry_price for calculations (more accurate than broker for pre-existing)
-        entry_price = metadata.get('entry_price', broker_entry_price)
+        # IMPORTANT: Use broker's avg_entry_price for P&L calculations
+        # This handles add-ons correctly since broker averages automatically
+        entry_price = broker_entry_price
         entry_date = metadata.get('entry_date')
 
-        # Calculate P&L
+        # Calculate P&L using broker's averaged entry price
         pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
         pnl_dollars = (current_price - entry_price) * broker_quantity
 

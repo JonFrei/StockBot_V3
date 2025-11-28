@@ -1,9 +1,11 @@
 """
-Profit Tracking System - WITH ROTATION INTEGRATION
+Profit Tracking System - WITH ROTATION INTEGRATION AND ADD-ON SUPPORT
 
 MODIFICATIONS:
 - record_trade() now notifies stock_rotator of trade results
 - This enables real-time tier updates based on actual performance
+- NEW: DailySummary now tracks add-ons separately from new entries
+- NEW: OrderLogger supports is_addon flag
 """
 
 from datetime import datetime
@@ -28,10 +30,11 @@ class DailySummary:
         self.recovery_signals = None
         self.exits = []
         self.entries = []
+        self.addons = []  # NEW: Track add-ons separately
         self.profit_takes = []
         self.signals_found = []
         self.signals_skipped = []
-        self.tier_changes = []  # NEW: Track tier changes
+        self.tier_changes = []
         self.warnings = []
         self.errors = []
 
@@ -58,6 +61,19 @@ class DailySummary:
         self.entries.append(
             {'ticker': ticker, 'qty': qty, 'price': price, 'cost': cost, 'signal': signal, 'score': score})
 
+    def add_addon(self, ticker, qty, price, cost, signal, score, existing_qty, new_total_exposure_pct):
+        """NEW: Track add-on to existing position"""
+        self.addons.append({
+            'ticker': ticker,
+            'qty': qty,
+            'price': price,
+            'cost': cost,
+            'signal': signal,
+            'score': score,
+            'existing_qty': existing_qty,
+            'new_total_exposure_pct': new_total_exposure_pct
+        })
+
     def add_profit_take(self, ticker, level, qty, pnl, pnl_pct):
         self.profit_takes.append({'ticker': ticker, 'level': level, 'qty': qty, 'pnl': pnl, 'pnl_pct': pnl_pct})
 
@@ -68,7 +84,7 @@ class DailySummary:
         self.signals_skipped.append({'ticker': ticker, 'reason': reason})
 
     def add_tier_change(self, ticker, old_tier, new_tier, reason):
-        """NEW: Track tier changes"""
+        """Track tier changes"""
         self.tier_changes.append({
             'ticker': ticker,
             'old_tier': old_tier,
@@ -102,7 +118,7 @@ class DailySummary:
                     print(f"      • Profit Target: {self.recovery_profit_target:.1f}%")
                 print(f"   {'─' * 76}")
 
-        # NEW: Show tier changes
+        # Show tier changes
         for tc in self.tier_changes:
             emoji_map = {'premium': '🥇', 'active': '🥈', 'probation': '⚠️', 'rehabilitation': '🔄', 'frozen': '❄️'}
             old_emoji = emoji_map.get(tc['old_tier'], '❓')
@@ -118,11 +134,17 @@ class DailySummary:
             print(
                 f"   {emoji} EXIT: {ex['ticker']} x{ex['qty']} | ${ex['pnl']:+,.2f} ({ex['pnl_pct']:+.1f}%) - {ex['reason']}")
 
+        # Show new entries
         for en in self.entries:
             print(
                 f"   🟢 BUY: {en['ticker']} x{en['qty']} @ ${en['price']:.2f} (${en['cost']:,.0f}) | {en['signal']} [{en['score']}]")
 
-        if self.signals_found and not self.entries:
+        # NEW: Show add-ons
+        for ad in self.addons:
+            print(
+                f"   🔵 ADD: {ad['ticker']} +{ad['qty']} @ ${ad['price']:.2f} (${ad['cost']:,.0f}) | {ad['signal']} [{ad['score']}] | Now {ad['existing_qty']+ad['qty']} shares ({ad['new_total_exposure_pct']:.1f}%)")
+
+        if self.signals_found and not self.entries and not self.addons:
             tickers = [f"{s['ticker']}[{s['score']}]" for s in self.signals_found[:5]]
             print(f"   📊 Signals: {', '.join(tickers)}" + (" ..." if len(self.signals_found) > 5 else ""))
 
@@ -131,7 +153,7 @@ class DailySummary:
         for e in self.errors[:3]:
             print(f"   ❌ {e}")
 
-        if not any([self.profit_takes, self.exits, self.entries, self.tier_changes, self.warnings, self.errors]):
+        if not any([self.profit_takes, self.exits, self.entries, self.addons, self.tier_changes, self.warnings, self.errors]):
             if self.regime_status not in ['stop_buying', 'exit_all', 'recovery_mode']:
                 print(f"   (No activity)")
             elif self.regime_status == 'recovery_mode':
@@ -170,7 +192,7 @@ class ProfitTracker:
         """
         self.strategy = strategy
         self.db = get_database()
-        self.stock_rotator = stock_rotator  # NEW: Reference to rotator
+        self.stock_rotator = stock_rotator
 
     def set_stock_rotator(self, stock_rotator):
         """Set stock rotator reference (can be set after initialization)"""
@@ -214,7 +236,7 @@ class ProfitTracker:
         finally:
             self.db.return_connection(conn)
 
-        # NEW: Notify rotation system of trade result
+        # Notify rotation system of trade result
         tier_change = None
         if self.stock_rotator:
             tier_change = self.stock_rotator.record_trade_result(ticker, total_pnl, exit_date)
@@ -473,12 +495,31 @@ class OrderLogger:
         self.db = get_database()
 
     def log_order(self, ticker, side, quantity, signal_type='unknown', award='none', quality_score=0, limit_price=None,
-                  was_watchlisted=False, days_on_watchlist=0):
+                  was_watchlisted=False, days_on_watchlist=0, is_addon=False):
+        """
+        Log an order with add-on tracking
+
+        Args:
+            ticker: Stock symbol
+            side: 'buy' or 'sell'
+            quantity: Number of shares
+            signal_type: Entry signal name
+            award: Tier level
+            quality_score: Signal score
+            limit_price: Limit price if applicable
+            was_watchlisted: Whether came from watchlist
+            days_on_watchlist: Days on watchlist before entry
+            is_addon: True if this is an add to existing position (NEW)
+        """
         try:
             filled_price = self.strategy.get_last_price(ticker) if limit_price is None else limit_price
             portfolio_value = self.strategy.portfolio_value
             cash_before = self.strategy.get_cash()
             submitted_at = self.strategy.get_datetime()
+
+            # NEW: Modify signal_type to indicate add-on
+            if is_addon:
+                signal_type = f"addon_{signal_type}"
 
             if Config.BACKTESTING:
                 self.db.insert_order_log(ticker=ticker, side=side, quantity=quantity, order_type='market',
