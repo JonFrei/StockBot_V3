@@ -389,6 +389,12 @@ class SwingTradeStrategy(Strategy):
             summary.set_context(current_date, self.portfolio_value, self.get_cash())
 
             # =============================================================
+            # REFRESH ALPACA POSITION CACHE (Direct API)
+            # =============================================================
+            if not Config.BACKTESTING:
+                account_broker_data.refresh_position_cache()
+
+            # =============================================================
             # DAILY POSITION SYNC (Broker is Source of Truth)
             # =============================================================
             if not Config.BACKTESTING:
