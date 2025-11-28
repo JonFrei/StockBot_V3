@@ -1,10 +1,11 @@
 """
-SwingTradeStrategy - WITH SIMPLIFIED SAFEGUARD SYSTEM
+SwingTradeStrategy - WITH SIMPLIFIED SAFEGUARD SYSTEM + PORTFOLIO DRAWDOWN PROTECTION
 
 Changes:
 - ProfitTracker now notifies StockRotator of trade results
 - Rotation multipliers applied to position sizing
 - All tiers trade (including frozen at 0.1x)
+- Portfolio drawdown tracking added (15% from 30-day peak → exit all)
 """
 
 from lumibot.strategies import Strategy
@@ -62,6 +63,7 @@ class SwingTradeStrategy(Strategy):
         print(f"🤖 SwingTradeStrategy Initialized")
         print(f"   Tickers: {len(self.tickers)} | Mode: {'BACKTEST' if Config.BACKTESTING else 'LIVE'}")
         print(f"   Rotation: 5-tier streak-based system")
+        print(f"   Safeguards: Portfolio DD (15%) + Market Crisis + SPY<200")
         print(f"{'=' * 60}\n")
 
     def before_starting_trading(self):
@@ -96,6 +98,11 @@ class SwingTradeStrategy(Strategy):
             summary.set_context(current_date, self.portfolio_value, self.get_cash())
 
             # =============================================================
+            # UPDATE PORTFOLIO VALUE FOR DRAWDOWN TRACKING
+            # =============================================================
+            self.regime_detector.update_portfolio_value(current_date, self.portfolio_value)
+
+            # =============================================================
             # FETCH DATA
             # =============================================================
             try:
@@ -116,7 +123,8 @@ class SwingTradeStrategy(Strategy):
                     spy_avg_volume = None
                     if spy_raw is not None and len(spy_raw) >= 2:
                         spy_volume = spy_raw['volume'].iloc[-1]
-                        spy_avg_volume = spy_ind.get('avg_volume', spy_raw['volume'].iloc[-20:].mean() if len(spy_raw) >= 20 else None)
+                        spy_avg_volume = spy_ind.get('avg_volume', spy_raw['volume'].iloc[-20:].mean() if len(
+                            spy_raw) >= 20 else None)
                         spy_prev_close = spy_raw['close'].iloc[-2]
                     else:
                         spy_prev_close = None
@@ -144,7 +152,7 @@ class SwingTradeStrategy(Strategy):
                 return
 
             # =============================================================
-            # REGIME DETECTION
+            # REGIME DETECTION (includes portfolio drawdown check)
             # =============================================================
             try:
                 # Check if recovery mode is active
@@ -171,12 +179,14 @@ class SwingTradeStrategy(Strategy):
                 )
 
                 # =============================================================
-                # HANDLE CRISIS EXIT - Exit ALL positions
+                # HANDLE EXIT ALL - Crisis or Portfolio Drawdown
                 # =============================================================
 
                 if regime_result.get('exit_all', False):
                     positions = self.get_positions()
                     exit_count = 0
+                    exit_reason = 'crisis_exit' if regime_result[
+                                                       'action'] == 'crisis_exit' else 'portfolio_drawdown_exit'
 
                     for position in positions:
                         ticker = position.symbol
@@ -188,7 +198,7 @@ class SwingTradeStrategy(Strategy):
                                 pnl_dollars = (current_price - entry_price) * qty if entry_price > 0 else 0
                                 pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
 
-                                summary.add_exit(ticker, qty, pnl_dollars, pnl_pct, 'crisis_exit')
+                                summary.add_exit(ticker, qty, pnl_dollars, pnl_pct, exit_reason)
 
                                 # Record trade
                                 metadata = self.position_monitor.get_position_metadata(ticker)
@@ -202,7 +212,7 @@ class SwingTradeStrategy(Strategy):
                                     exit_price=current_price,
                                     exit_date=current_date,
                                     entry_signal=entry_signal,
-                                    exit_signal={'reason': 'crisis_exit'},
+                                    exit_signal={'reason': exit_reason},
                                     entry_score=entry_score
                                 )
 
@@ -212,9 +222,13 @@ class SwingTradeStrategy(Strategy):
                                 exit_count += 1
 
                             except Exception as e:
-                                summary.add_error(f"Crisis exit {ticker} failed: {e}")
+                                summary.add_error(f"{exit_reason} {ticker} failed: {e}")
 
                     execution_tracker.record_action('exits', count=exit_count)
+
+                    if regime_result['action'] == 'portfolio_drawdown_exit':
+                        execution_tracker.record_action('drawdown_protection', count=1)
+
                     execution_tracker.complete('SUCCESS')
                     summary.print_summary()
 
@@ -322,7 +336,8 @@ class SwingTradeStrategy(Strategy):
                     if raw_df is not None and len(raw_df) >= 20:
                         try:
                             stock_current = data['close']
-                            stock_past = float(raw_df['close'].iloc[-21]) if len(raw_df) >= 21 else float(raw_df['close'].iloc[0])
+                            stock_past = float(raw_df['close'].iloc[-21]) if len(raw_df) >= 21 else float(
+                                raw_df['close'].iloc[0])
                             rs_result = self.regime_detector.check_relative_strength(stock_current, stock_past)
                             if not rs_result['passes']:
                                 summary.add_skip(ticker, f"Weak RS: {rs_result['relative_strength']:+.1f}%")
@@ -426,7 +441,7 @@ class SwingTradeStrategy(Strategy):
                     # Get tier for logging
                     tier = self.stock_rotator.get_tier(ticker)
                     tier_emoji = {'premium': '🥇', 'active': '🥈', 'probation': '⚠️',
-                                 'rehabilitation': '🔄', 'frozen': '❄️'}.get(tier, '❓')
+                                  'rehabilitation': '🔄', 'frozen': '❄️'}.get(tier, '❓')
 
                     summary.add_entry(ticker, quantity, price, cost, f"{signal_type} {tier_emoji}", signal_score)
                     self.position_monitor.track_position(ticker, current_date, signal_type, entry_score=signal_score)

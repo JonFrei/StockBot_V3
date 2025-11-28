@@ -1,17 +1,3 @@
-"""
-Position Monitoring - TIERED EXIT SYSTEM WITH KILL SWITCH
-
-NEW SYSTEM:
-✅ Level 0 (Entry): Initial ATR stop = Entry - (2 × ATR)
-✅ Level 1 (+10%): Sell 33% → Emergency stop = Tier1_Lock - (2 × ATR)
-                    → Kill Switch ACTIVE
-✅ Level 2 (+20%): Sell 66% of remaining → Peak trailing = Peak - (3 × ATR)
-                    → 22.78% position remains
-
-KILL SWITCH (Active after Tier 1):
-- Momentum Fade + Price Confirmation → Exit 100% immediately
-"""
-
 import stock_indicators
 
 
@@ -19,24 +5,31 @@ class ExitConfig:
     """Tiered exit configuration"""
 
     # Initial stop loss (Level 0)
-    INITIAL_STOP_ATR_MULT = 3.0
+    INITIAL_STOP_ATR_MULT = 2.75
 
     # Tier 1: First profit target
     TIER1_TARGET_PCT = 12.0  # +10% from entry
     TIER1_SELL_PCT = 33.0  # Sell 33% of position
-    TIER1_EMERGENCY_ATR_MULT = 3.0  # Emergency stop = Tier1_Lock - (2 × ATR)
+    TIER1_EMERGENCY_ATR_MULT = 2.5  # Emergency stop = Tier1_Lock - (2 × ATR)
 
     # Tier 2: Second profit target
-    TIER2_TARGET_PCT = 22.0  # +20% from entry
+    TIER2_TARGET_PCT = 25.0  # +20% from entry
     TIER2_SELL_PCT = 66.0  # Sell 66% of REMAINING position (44.22% of original)
-    TIER2_TRAILING_ATR_MULT = 4.0 # Trailing stop = Peak - (3 × ATR)
+    TIER2_TRAILING_ATR_MULT = 3.5  # Trailing stop = Peak - (3 × ATR)
 
-    # Kill Switch (active after Tier 1)
+    # Kill Switch (active after Tier 1 OR min hold days)
     KILL_SWITCH_ACTIVE_AFTER_TIER1 = True
+    KILL_SWITCH_MIN_HOLD_DAYS = 10  # Kill switch activates after this many days
+
+    # Maximum Loss Hard Stop (by volatility) - Emergency backstop
+    MAX_LOSS_LOW_VOL = 15.0  # Low volatility stocks
+    MAX_LOSS_MEDIUM_VOL = 18.0  # Medium volatility
+    MAX_LOSS_HIGH_VOL = 22.0  # High volatility
+    MAX_LOSS_VERY_HIGH_VOL = 25.0  # Very high volatility
 
     # Stagnant position check
     STAGNANT_MAX_DAYS = 90
-    STAGNANT_MIN_GAIN_PCT = 20
+    STAGNANT_MIN_GAIN_PCT = 5
     STAGNANT_ENABLED = True
 
     # Remnant cleanup
@@ -135,16 +128,16 @@ class PositionMonitor:
 # EXIT CONDITION CHECKS
 # =============================================================================
 
-def check_initial_stop(entry_price, prev_low, atr):
+def check_initial_stop(entry_price, current_close, atr):
     """
     Check Level 0 initial ATR stop
 
-    Stop = Entry - (2 × ATR)
-    Checked using prev_low as intraday proxy
+    Stop = Entry - (2.75 × ATR)
+    Requires CLOSE below stop (not intraday breach) to filter noise
 
     Args:
         entry_price: Original entry price
-        prev_low: Previous bar's low (intraday proxy)
+        current_close: Current bar's close price
         atr: ATR(14) value
 
     Returns:
@@ -155,12 +148,12 @@ def check_initial_stop(entry_price, prev_low, atr):
 
     stop_price = entry_price - (ExitConfig.INITIAL_STOP_ATR_MULT * atr)
 
-    if prev_low <= stop_price:
+    if current_close <= stop_price:
         return {
             'type': 'full_exit',
             'reason': 'initial_atr_stop',
             'sell_pct': 100.0,
-            'message': f'Initial stop @ ${stop_price:.2f} (Entry: ${entry_price:.2f}, ATR: ${atr:.2f})'
+            'message': f'Initial stop @ ${stop_price:.2f} (Entry: ${entry_price:.2f}, Close: ${current_close:.2f})'
         }
 
     return None
@@ -188,15 +181,16 @@ def check_tier1_target(pnl_pct):
     return None
 
 
-def check_emergency_stop(tier1_lock_price, prev_low, atr):
+def check_emergency_stop(tier1_lock_price, current_close, atr):
     """
     Check Level 1 emergency stop after Tier 1
 
-    Stop = Tier1_Lock - (2 × ATR)
+    Stop = Tier1_Lock - (2.5 × ATR)
+    Requires CLOSE below stop (not intraday breach) to filter noise
 
     Args:
         tier1_lock_price: Price at which Tier 1 executed
-        prev_low: Previous bar's low
+        current_close: Current bar's close price
         atr: ATR(14) value
 
     Returns:
@@ -207,12 +201,12 @@ def check_emergency_stop(tier1_lock_price, prev_low, atr):
 
     emergency_stop = tier1_lock_price - (ExitConfig.TIER1_EMERGENCY_ATR_MULT * atr)
 
-    if prev_low <= emergency_stop:
+    if current_close <= emergency_stop:
         return {
             'type': 'full_exit',
             'reason': 'emergency_stop_tier1',
             'sell_pct': 100.0,
-            'message': f'Emergency stop @ ${emergency_stop:.2f} (Lock: ${tier1_lock_price:.2f}, ATR: ${atr:.2f})'
+            'message': f'Emergency stop @ ${emergency_stop:.2f} (Lock: ${tier1_lock_price:.2f}, Close: ${current_close:.2f})'
         }
 
     return None
@@ -244,15 +238,16 @@ def check_tier2_target(pnl_pct, current_profit_level):
     return None
 
 
-def check_trailing_stop(peak_price, prev_low, atr):
+def check_trailing_stop(peak_price, current_close, atr):
     """
     Check Level 2 trailing stop after Tier 2
 
-    Stop = Peak - (3 × ATR)
+    Stop = Peak - (3.5 × ATR)
+    Requires CLOSE below stop (not intraday breach) to filter noise
 
     Args:
         peak_price: Highest price since Tier 2
-        prev_low: Previous bar's low
+        current_close: Current bar's close price
         atr: ATR(14) value
 
     Returns:
@@ -263,33 +258,57 @@ def check_trailing_stop(peak_price, prev_low, atr):
 
     trailing_stop = peak_price - (ExitConfig.TIER2_TRAILING_ATR_MULT * atr)
 
-    if prev_low <= trailing_stop:
+    if current_close <= trailing_stop:
         return {
             'type': 'full_exit',
             'reason': 'trailing_stop_tier2',
             'sell_pct': 100.0,
-            'message': f'Trailing stop @ ${trailing_stop:.2f} (Peak: ${peak_price:.2f}, ATR: ${atr:.2f})'
+            'message': f'Trailing stop @ ${trailing_stop:.2f} (Peak: ${peak_price:.2f}, Close: ${current_close:.2f})'
         }
 
     return None
 
 
-def check_kill_switch(raw_df, indicators, kill_switch_active):
+def check_kill_switch(raw_df, indicators, kill_switch_active, entry_date=None, current_date=None, profit_level=0):
     """
     Check Kill Switch: Momentum Fade + Price Confirmation
 
-    Only active after Tier 1 executes
+    Active after Tier 1 OR after minimum hold days (whichever comes first)
     Overrides all other exits
 
     Args:
         raw_df: DataFrame with OHLC data
         indicators: Dict with current indicators
-        kill_switch_active: Bool - is kill switch armed?
+        kill_switch_active: Bool - is kill switch armed via Tier 1?
+        entry_date: Position entry date (optional)
+        current_date: Current date (optional)
+        profit_level: Current profit level (0, 1, or 2)
 
     Returns:
         dict or None: Kill switch exit signal
     """
-    if not kill_switch_active:
+    # Determine if kill switch should be active
+    is_active = False
+
+    # Method 1: Active after Tier 1
+    if kill_switch_active or profit_level >= 1:
+        is_active = True
+
+    # Method 2: Active after minimum hold days
+    if not is_active and entry_date is not None and current_date is not None:
+        try:
+            entry = entry_date.replace(tzinfo=None) if hasattr(entry_date,
+                                                               'tzinfo') and entry_date.tzinfo else entry_date
+            current = current_date.replace(tzinfo=None) if hasattr(current_date,
+                                                                   'tzinfo') and current_date.tzinfo else current_date
+            days_held = (current - entry).days
+
+            if days_held >= ExitConfig.KILL_SWITCH_MIN_HOLD_DAYS:
+                is_active = True
+        except:
+            pass
+
+    if not is_active:
         return None
 
     if raw_df is None or len(raw_df) < 10:
@@ -312,6 +331,50 @@ def check_kill_switch(raw_df, indicators, kill_switch_active):
             'reason': 'kill_switch',
             'sell_pct': 100.0,
             'message': f'KILL SWITCH: Fade [{fade_signals}] + Confirmation [{confirm_result["reason"]}]'
+        }
+
+    return None
+
+
+def check_max_loss_stop(entry_price, current_price, volatility_metrics):
+    """
+    Check maximum loss hard stop (emergency backstop)
+
+    Triggers on gap-downs that skip ATR stops.
+    Thresholds vary by volatility tier.
+
+    Args:
+        entry_price: Original entry price
+        current_price: Current price
+        volatility_metrics: Dict with 'risk_class' key
+
+    Returns:
+        dict or None: Exit signal if triggered
+    """
+    if entry_price <= 0 or current_price <= 0:
+        return None
+
+    pnl_pct = ((current_price - entry_price) / entry_price) * 100
+
+    # Get threshold based on volatility
+    risk_class = volatility_metrics.get('risk_class', 'medium') if volatility_metrics else 'medium'
+
+    thresholds = {
+        'low': ExitConfig.MAX_LOSS_LOW_VOL,
+        'medium': ExitConfig.MAX_LOSS_MEDIUM_VOL,
+        'high': ExitConfig.MAX_LOSS_HIGH_VOL,
+        'very_high': ExitConfig.MAX_LOSS_VERY_HIGH_VOL,
+        'extreme': ExitConfig.MAX_LOSS_VERY_HIGH_VOL
+    }
+
+    max_loss_threshold = thresholds.get(risk_class, ExitConfig.MAX_LOSS_MEDIUM_VOL)
+
+    if pnl_pct <= -max_loss_threshold:
+        return {
+            'type': 'full_exit',
+            'reason': 'max_loss_stop',
+            'sell_pct': 100.0,
+            'message': f'Max loss stop @ {pnl_pct:.1f}% (threshold: -{max_loss_threshold}% for {risk_class} vol)'
         }
 
     return None
@@ -392,6 +455,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
 
     Priority order:
     1. Kill Switch (if active)
+    1.5. Max Loss Hard Stop (emergency backstop)
     2. Tier 1 target
     3. Tier 2 target
     4. Stops (initial, emergency, or trailing based on level)
@@ -431,7 +495,6 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         raw_df = all_stock_data[ticker].get('raw')
 
         current_price = data.get('close', 0)
-        prev_low = data.get('prev_low', current_price)
         atr = data.get('atr_14', None)
 
         if current_price <= 0:
@@ -445,6 +508,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
 
         # Use metadata entry_price for calculations (more accurate than broker for pre-existing)
         entry_price = metadata.get('entry_price', broker_entry_price)
+        entry_date = metadata.get('entry_date')
 
         # Calculate P&L
         pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
@@ -459,10 +523,22 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         exit_signal = None
 
         # =====================================================================
-        # PRIORITY 1: KILL SWITCH (after Tier 1 only)
+        # PRIORITY 1: KILL SWITCH (after Tier 1 OR after 5 days)
         # =====================================================================
-        if profit_level >= 1 and ExitConfig.KILL_SWITCH_ACTIVE_AFTER_TIER1:
-            exit_signal = check_kill_switch(raw_df, data, kill_switch_active)
+        if ExitConfig.KILL_SWITCH_ACTIVE_AFTER_TIER1:
+            exit_signal = check_kill_switch(
+                raw_df, data, kill_switch_active,
+                entry_date=entry_date,
+                current_date=current_date,
+                profit_level=profit_level
+            )
+
+        # =====================================================================
+        # PRIORITY 1.5: MAX LOSS HARD STOP (emergency backstop)
+        # =====================================================================
+        if not exit_signal:
+            vol_metrics = data.get('volatility_metrics', {})
+            exit_signal = check_max_loss_stop(entry_price, current_price, vol_metrics)
 
         # =====================================================================
         # PRIORITY 2: TIER PROFIT TARGETS
@@ -474,20 +550,20 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
                 exit_signal = check_tier2_target(pnl_pct, profit_level)
 
         # =====================================================================
-        # PRIORITY 3: STOPS (based on current level)
+        # PRIORITY 3: STOPS (based on current level) - Uses CLOSE not intraday low
         # =====================================================================
         if not exit_signal:
             if profit_level == 0:
                 # Level 0: Initial ATR stop
-                exit_signal = check_initial_stop(entry_price, prev_low, atr)
+                exit_signal = check_initial_stop(entry_price, current_price, atr)
 
             elif profit_level == 1:
                 # Level 1: Emergency stop
-                exit_signal = check_emergency_stop(tier1_lock_price, prev_low, atr)
+                exit_signal = check_emergency_stop(tier1_lock_price, current_price, atr)
 
             elif profit_level == 2:
                 # Level 2: Trailing stop
-                exit_signal = check_trailing_stop(peak_price, prev_low, atr)
+                exit_signal = check_trailing_stop(peak_price, current_price, atr)
 
         # =====================================================================
         # PRIORITY 4: STAGNANT POSITION
@@ -699,7 +775,7 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
             position_monitor.clean_position_metadata(ticker)
 
             # Record stop loss to regime detector
-            is_stop_loss = any(kw in reason for kw in ['stop', 'emergency', 'trailing', 'kill_switch'])
+            is_stop_loss = any(kw in reason for kw in ['stop', 'emergency', 'trailing', 'kill_switch', 'max_loss'])
             if is_stop_loss and hasattr(strategy, 'regime_detector'):
                 strategy.regime_detector.record_stop_loss(current_date, ticker, pnl_pct)
 

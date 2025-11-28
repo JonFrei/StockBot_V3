@@ -1,7 +1,12 @@
 """
-Market Safeguard System - SIMPLIFIED
+Market Safeguard System - WITH PORTFOLIO DRAWDOWN PROTECTION
 
-Two-Layer Protection:
+Three-Layer Protection:
+
+Layer 0: Portfolio Drawdown (Highest Priority)
+- Portfolio drops 15% from 30-day rolling peak → Exit ALL positions
+- 5-day cooldown lockout
+- Cannot be overridden by Recovery Mode
 
 Layer 1: Market Trend Gate (Soft Block)
 - SPY below 200 SMA → Block new entries (keep positions)
@@ -20,6 +25,11 @@ from datetime import timedelta
 class SafeguardConfig:
     """Safeguard configuration"""
 
+    # Layer 0: Portfolio Drawdown Protection
+    PORTFOLIO_DRAWDOWN_THRESHOLD = 15.0  # Exit all at 15% drawdown
+    PORTFOLIO_DRAWDOWN_LOOKBACK = 30  # Rolling 30-day peak
+    PORTFOLIO_DRAWDOWN_COOLDOWN_DAYS = 5  # Lockout after trigger
+
     # Layer 1: Market Trend Gate
     # (SPY below 200 SMA - soft block, recovery can override)
 
@@ -33,14 +43,15 @@ class SafeguardConfig:
     # Relative Strength Filter
     RELATIVE_STRENGTH_ENABLED = True
     RELATIVE_STRENGTH_LOOKBACK = 20  # Days to measure performance
-    RELATIVE_STRENGTH_MIN_OUTPERFORM = 2.0  # Stock must outperform SPY by this %
+    RELATIVE_STRENGTH_MIN_OUTPERFORM = 0.0  # Stock must outperform SPY by this % (0 = match, 1.0 = beat by 1%)
 
 
 class MarketRegimeDetector:
     """
-    Simplified market regime detection
+    Market regime detection with portfolio drawdown protection
 
-    Two layers:
+    Three layers:
+    0. Portfolio drawdown 15% from 30-day peak → Hard exit + lockout (highest priority)
     1. SPY < 200 SMA → Soft block (recovery can override)
     2. Sentiment Crisis → Hard exit + lockout (no override)
     """
@@ -57,11 +68,17 @@ class MarketRegimeDetector:
         # Price history for 20-day low
         self.spy_price_history = []  # [{'date': date, 'close': float}]
 
-        # Crisis state
+        # Crisis state (Layer 2)
         self.crisis_active = False
         self.crisis_trigger_date = None
         self.crisis_trigger_reason = None
         self.lockout_end_date = None
+
+        # Portfolio drawdown tracking (Layer 0)
+        self.portfolio_value_history = []  # [{'date': date, 'value': float}]
+        self.portfolio_drawdown_active = False
+        self.portfolio_drawdown_trigger_date = None
+        self.portfolio_drawdown_lockout_end = None
 
     def update_spy(self, date, spy_close, spy_20_ema, spy_50_sma, spy_200_sma,
                    spy_volume=None, spy_avg_volume=None):
@@ -179,9 +196,82 @@ class MarketRegimeDetector:
 
         return False
 
+    # =========================================================================
+    # PORTFOLIO DRAWDOWN METHODS (Layer 0)
+    # =========================================================================
+
+    def update_portfolio_value(self, date, portfolio_value):
+        """Track portfolio value for drawdown calculation"""
+        if hasattr(date, 'tzinfo') and date.tzinfo is not None:
+            date = date.replace(tzinfo=None)
+
+        # Avoid duplicates
+        self.portfolio_value_history = [
+            p for p in self.portfolio_value_history
+            if p['date'].date() != date.date()
+        ]
+
+        self.portfolio_value_history.append({'date': date, 'value': portfolio_value})
+
+        # Keep only last 35 days (buffer for 30-day calculation)
+        if len(self.portfolio_value_history) > 35:
+            self.portfolio_value_history = sorted(
+                self.portfolio_value_history,
+                key=lambda x: x['date']
+            )[-35:]
+
+    def _get_rolling_peak(self):
+        """Get portfolio peak over last 30 days"""
+        if len(self.portfolio_value_history) < 2:
+            return None
+
+        sorted_history = sorted(self.portfolio_value_history, key=lambda x: x['date'])
+        lookback = min(len(sorted_history), SafeguardConfig.PORTFOLIO_DRAWDOWN_LOOKBACK)
+        recent = sorted_history[-lookback:]
+
+        return max(p['value'] for p in recent)
+
+    def _check_portfolio_drawdown(self, current_value, current_date):
+        """
+        Check for portfolio drawdown crisis
+
+        Returns:
+            dict with 'triggered' and 'reason' if crisis, None otherwise
+        """
+        rolling_peak = self._get_rolling_peak()
+
+        if rolling_peak is None or rolling_peak <= 0:
+            return None
+
+        drawdown_pct = ((rolling_peak - current_value) / rolling_peak) * 100
+
+        if drawdown_pct >= SafeguardConfig.PORTFOLIO_DRAWDOWN_THRESHOLD:
+            return {
+                'triggered': True,
+                'reason': f"Portfolio down {drawdown_pct:.1f}% from 30-day peak ${rolling_peak:,.0f}",
+                'drawdown_pct': drawdown_pct,
+                'peak': rolling_peak
+            }
+
+        return None
+
+    def _check_portfolio_drawdown_recovery(self, current_date):
+        """Check if portfolio drawdown lockout can be lifted"""
+        if not self.portfolio_drawdown_active:
+            return False
+
+        if self.portfolio_drawdown_lockout_end and current_date >= self.portfolio_drawdown_lockout_end:
+            return True
+
+        return False
+
+    # =========================================================================
+    # MAIN REGIME DETECTION
+    # =========================================================================
+
     def detect_regime(self, current_date=None, recovery_mode_active=False):
         """
-        Main regime detection - two layer system
+        Main regime detection - three layer system
 
         Args:
             current_date: Current datetime
@@ -200,10 +290,62 @@ class MarketRegimeDetector:
             'twenty_day_low': self._get_20_day_low(),
             'crisis_active': self.crisis_active,
             'lockout_end_date': self.lockout_end_date,
+            'portfolio_drawdown_active': self.portfolio_drawdown_active,
+            'portfolio_rolling_peak': self._get_rolling_peak(),
         }
 
         # =================================================================
-        # LAYER 2: SENTIMENT CRISIS (Highest Priority - No Override)
+        # LAYER 0: PORTFOLIO DRAWDOWN (Highest Priority - No Override)
+        # =================================================================
+
+        # Check if in active portfolio drawdown lockout
+        if self.portfolio_drawdown_active:
+            if self._check_portfolio_drawdown_recovery(current_date):
+                self.portfolio_drawdown_active = False
+                self.portfolio_drawdown_trigger_date = None
+                self.portfolio_drawdown_lockout_end = None
+                print(f"✅ PORTFOLIO DRAWDOWN LOCKOUT LIFTED")
+            else:
+                days_remaining = (
+                            self.portfolio_drawdown_lockout_end - current_date).days if self.portfolio_drawdown_lockout_end else 0
+                return {
+                    'action': 'portfolio_drawdown_lockout',
+                    'position_size_multiplier': 0.0,
+                    'allow_new_entries': False,
+                    'exit_all': False,
+                    'reason': f"Portfolio drawdown lockout ({days_remaining}d remaining)",
+                    'details': details
+                }
+
+        # Check for new portfolio drawdown crisis
+        if self.portfolio_value_history:
+            current_value = self.portfolio_value_history[-1]['value']
+            drawdown_check = self._check_portfolio_drawdown(current_value, current_date)
+
+            if drawdown_check and drawdown_check['triggered']:
+                self.portfolio_drawdown_active = True
+                self.portfolio_drawdown_trigger_date = current_date
+                self.portfolio_drawdown_lockout_end = current_date + timedelta(
+                    days=SafeguardConfig.PORTFOLIO_DRAWDOWN_COOLDOWN_DAYS + 2)
+
+                print(f"\n{'=' * 60}")
+                print(f"🚨 PORTFOLIO DRAWDOWN TRIGGERED")
+                print(f"   {drawdown_check['reason']}")
+                print(f"   Action: EXIT ALL POSITIONS")
+                print(f"   Lockout until: {self.portfolio_drawdown_lockout_end.strftime('%Y-%m-%d')}")
+                print(f"{'=' * 60}\n")
+
+                return {
+                    'action': 'portfolio_drawdown_exit',
+                    'position_size_multiplier': 0.0,
+                    'allow_new_entries': False,
+                    'exit_all': True,
+                    'reason': f"PORTFOLIO DRAWDOWN: {drawdown_check['reason']}",
+                    'details': details
+                }
+
+        # =================================================================
+        # LAYER 2: SENTIMENT CRISIS (High Priority - No Override)
         # =================================================================
 
         # Check if in active crisis lockout
@@ -218,7 +360,7 @@ class MarketRegimeDetector:
             else:
                 # Still in lockout
                 days_remaining = (
-                            self.lockout_end_date - current_date).days if self.lockout_end_date and current_date else 0
+                        self.lockout_end_date - current_date).days if self.lockout_end_date and current_date else 0
                 reason = f"CRISIS LOCKOUT: {self.crisis_trigger_reason}"
                 if days_remaining > 0:
                     reason += f" ({days_remaining}d until eligible)"
@@ -403,6 +545,10 @@ class MarketRegimeDetector:
             'crisis_trigger_date': self.crisis_trigger_date,
             'crisis_trigger_reason': self.crisis_trigger_reason,
             'lockout_end_date': self.lockout_end_date,
+            # Portfolio drawdown stats
+            'portfolio_drawdown_active': self.portfolio_drawdown_active,
+            'portfolio_rolling_peak': self._get_rolling_peak(),
+            'portfolio_drawdown_lockout_end': self.portfolio_drawdown_lockout_end,
             # Compatibility keys for account_profit_tracking.py
             'distribution_days': 0,
             'accumulation_days': 0,

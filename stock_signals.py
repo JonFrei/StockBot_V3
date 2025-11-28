@@ -42,18 +42,14 @@ class SignalConfig:
     GC_REQUIRE_RISING_EMA50 = True
     GC_MIN_EMA50_SLOPE = 0.01
 
-    # PULLBACK_IN_LEADERS (NEW - pairs with RS filter)
-    PL_EMA20_DISTANCE_MIN = -4.0  # Price can be up to 4% below EMA20
-    PL_EMA20_DISTANCE_MAX = 1.5  # Not too far above (still in pullback zone)
-    PL_RSI_MIN = 35  # Mild oversold
-    PL_RSI_MAX = 52  # Not overbought
-    PL_VOLUME_RATIO_MAX = 1.1  # Low/normal volume on pullback (healthy)
-    PL_ADX_MIN = 18  # Existing trend to bounce from
-    PL_MACD_POSITIVE = True  # Still in uptrend (MACD > 0)
-    PL_ABOVE_SMA50 = True  # Intermediate uptrend intact
-    PL_ABOVE_SMA200 = True  # Long-term uptrend intact
-    PL_STOCH_MIN = 15  # Some oversold condition
-    PL_STOCH_MAX = 50  # Not overbought
+    # MOMENTUM_THRUST (loosened for more volume)
+    MT_CLOSE_POSITION_MIN = 0.60  # Was 0.75
+    MT_VOLUME_RATIO_MIN = 1.2  # Was 1.5
+    MT_RSI_MIN = 50  # Was 55
+    MT_RSI_MAX = 80  # Was 78
+    MT_ADX_MIN = 18  # Was 22
+    MT_ROC_MIN = 1.5  # Was 3.0
+    MT_MACD_HIST_MIN = 0.0
 
 
 IndicatorData = Dict[str, Any]
@@ -373,8 +369,119 @@ def golden_cross(data: IndicatorData) -> SignalResult:
     return _create_signal_result(score, 'buy', f'golden_cross [{score:.0f}]', 'golden_cross', close)
 
 
+def momentum_thrust(data: IndicatorData) -> SignalResult:
+    """Momentum Thrust - Strong momentum or reversal in medium/large caps"""
+    score = 0
+
+    close = data.get('close', 0)
+    high = data.get('high', 0)
+    low = data.get('low', 0)
+    ema20 = data.get('ema20', 0)
+    ema50 = data.get('ema50', 0)
+    sma200 = data.get('sma200', 0)
+    rsi = data.get('rsi', 50)
+    volume_ratio = data.get('volume_ratio', 0)
+    adx = data.get('adx', 0)
+    macd_hist = data.get('macd_histogram', 0)
+    macd_hist_prev = data.get('macd_hist_prev', 0)
+    roc_12 = data.get('roc_12', 0)
+
+    # Calculate close position in daily range
+    daily_range = high - low
+    if daily_range <= 0:
+        return _no_signal('No daily range')
+    close_position = (close - low) / daily_range
+
+    # FILTERS (loosened)
+    if close_position < SignalConfig.MT_CLOSE_POSITION_MIN:
+        return _no_signal('Close not in upper range')
+    if volume_ratio < SignalConfig.MT_VOLUME_RATIO_MIN:
+        return _no_signal('Insufficient volume')
+    if not (SignalConfig.MT_RSI_MIN <= rsi <= SignalConfig.MT_RSI_MAX):
+        return _no_signal('RSI out of range')
+    if adx < SignalConfig.MT_ADX_MIN:
+        return _no_signal('ADX too weak')
+    if macd_hist <= SignalConfig.MT_MACD_HIST_MIN:
+        return _no_signal('MACD histogram not positive')
+    if roc_12 < SignalConfig.MT_ROC_MIN:
+        return _no_signal('Insufficient momentum')
+    if not (close > ema20 > ema50):
+        return _no_signal('Trend not aligned')
+
+    # SCORING
+
+    # Close position (0-20 points)
+    if close_position >= 0.90:
+        score += 20
+    elif close_position >= 0.80:
+        score += 16
+    elif close_position >= 0.70:
+        score += 12
+    else:
+        score += 8
+
+    # Volume (0-25 points)
+    if volume_ratio >= 2.5:
+        score += 25
+    elif volume_ratio >= 2.0:
+        score += 20
+    elif volume_ratio >= 1.5:
+        score += 15
+    elif volume_ratio >= 1.3:
+        score += 11
+    else:
+        score += 7
+
+    # RSI positioning (0-15 points)
+    if 58 <= rsi <= 68:
+        score += 15
+    elif 53 <= rsi < 58 or 68 < rsi <= 73:
+        score += 12
+    elif 50 <= rsi < 53 or 73 < rsi <= 80:
+        score += 8
+
+    # ADX trend strength (0-15 points)
+    if 25 <= adx <= 35:
+        score += 15
+    elif 22 <= adx < 25 or 35 < adx <= 40:
+        score += 12
+    elif adx >= 18:
+        score += 8
+
+    # MACD acceleration (0-15 points) - NOW BONUS, NOT FILTER
+    if macd_hist > macd_hist_prev:
+        macd_accel = macd_hist - macd_hist_prev
+        if macd_accel > 0.08:
+            score += 15
+        elif macd_accel > 0.04:
+            score += 12
+        elif macd_accel > 0:
+            score += 8
+    else:
+        # Not accelerating but still positive - small points
+        score += 4
+
+    # ROC momentum (0-10 points)
+    if roc_12 >= 6.0:
+        score += 10
+    elif roc_12 >= 4.0:
+        score += 8
+    elif roc_12 >= 2.5:
+        score += 6
+    else:
+        score += 4
+
+    # Bonus: Above 200 SMA (long-term trend)
+    if sma200 > 0 and close > sma200:
+        score += 5
+
+    return _create_signal_result(score, 'buy', f'momentum_thrust [{score:.0f}]', 'momentum_thrust', close)
+
+
 BUY_STRATEGIES: Dict[str, Any] = {
     'swing_trade_1': swing_trade_1,
     'consolidation_breakout': consolidation_breakout,
     'golden_cross': golden_cross,
+    'momentum_thrust': momentum_thrust,
+
 }
