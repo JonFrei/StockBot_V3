@@ -721,9 +721,21 @@ def safe_generate_portfolio_section(strategy):
         return generate_error_section_html("Portfolio Status", str(e), traceback.format_exc())
 
 
+# =============================================================================
+# REPLACEMENT CODE FOR account_email_notifications.py
+# =============================================================================
+# Replace the safe_generate_positions_section() function with this version
+# =============================================================================
+
 def safe_generate_positions_section(strategy):
-    """Safely generate positions section with error handling"""
+    """
+    Safely generate positions section with error handling.
+
+    Uses account_broker_data for reliable entry price retrieval.
+    """
     try:
+        import account_broker_data
+
         positions = strategy.get_positions()
 
         html = f"""
@@ -749,30 +761,20 @@ def safe_generate_positions_section(strategy):
             for position in positions:
                 try:
                     ticker = position.symbol
-                    qty = int(position.quantity)
 
-                    entry_price = None
-                    if hasattr(position, 'avg_entry_price') and position.avg_entry_price:
-                        try:
-                            entry_price = float(position.avg_entry_price)
-                        except (ValueError, TypeError):
-                            pass
+                    # Skip non-stock positions (USD, etc.)
+                    if not account_broker_data.is_valid_stock_position(position, ticker):
+                        continue
 
-                    if not entry_price and hasattr(position, 'cost_basis') and position.cost_basis:
-                        try:
-                            cost_basis = float(position.cost_basis)
-                            qty_float = float(position.quantity)
-                            entry_price = cost_basis / qty_float if qty_float > 0 else 0
-                        except (ValueError, TypeError, ZeroDivisionError):
-                            pass
+                    # Use the robust functions from account_broker_data
+                    qty = account_broker_data.get_position_quantity(position, ticker)
+                    entry_price = account_broker_data.get_broker_entry_price(position, strategy, ticker)
 
-                    if not entry_price and hasattr(position, 'fill_avg_price') and position.fill_avg_price:
-                        try:
-                            entry_price = float(position.fill_avg_price)
-                        except (ValueError, TypeError):
-                            pass
-
-                    current_price = strategy.get_last_price(ticker)
+                    # Get current price
+                    try:
+                        current_price = strategy.get_last_price(ticker)
+                    except:
+                        current_price = 0
 
                     if not entry_price or entry_price <= 0:
                         html += f"""
@@ -801,7 +803,9 @@ def safe_generate_positions_section(strategy):
                         'probation': '⚠️',
                         'rehabilitation': '🔄',
                         'frozen': '❄️'
-                    }.get(tier, '❓')
+                    }
+
+                    pnl_color = '#27ae60' if pnl_dollars >= 0 else '#e74c3c'
 
                     html += f"""
                     <tr>
@@ -809,23 +813,28 @@ def safe_generate_positions_section(strategy):
                         <td>{qty:,}</td>
                         <td>${entry_price:.2f}</td>
                         <td>${current_price:.2f}</td>
-                        <td style="color: {'#27ae60' if pnl_dollars > 0 else '#e74c3c'}; font-weight: bold;">${pnl_dollars:+,.2f}</td>
-                        <td style="color: {'#27ae60' if pnl_pct > 0 else '#e74c3c'}; font-weight: bold;">{pnl_pct:+.1f}%</td>
-                        <td>{tier_emoji} {tier}</td>
-                    </tr>
-                    """
-                except Exception as e:
-                    html += f"""
-                    <tr>
-                        <td><strong>{ticker}</strong></td>
-                        <td colspan="6">Error loading position data: {str(e)}</td>
+                        <td style="color: {pnl_color};">${pnl_dollars:+,.2f}</td>
+                        <td style="color: {pnl_color};">{pnl_pct:+.1f}%</td>
+                        <td>{tier_emoji.get(tier, '🥈')} {tier.title()}</td>
                     </tr>
                     """
 
+                except Exception as e:
+                    ticker_name = getattr(position, 'symbol', 'Unknown')
+                    html += f"""
+                    <tr>
+                        <td><strong>{ticker_name}</strong></td>
+                        <td colspan="6" style="color: #e74c3c;">Error: {str(e)}</td>
+                    </tr>
+                    """
+
+            # Total row
+            pnl_color = '#27ae60' if total_unrealized >= 0 else '#e74c3c'
             html += f"""
                 <tr style="background-color: #f8f9fa; font-weight: bold;">
                     <td colspan="4">TOTAL UNREALIZED P&L</td>
-                    <td style="color: {'#27ae60' if total_unrealized > 0 else '#e74c3c'};" colspan="3">${total_unrealized:+,.2f}</td>
+                    <td style="color: {pnl_color};">${total_unrealized:+,.2f}</td>
+                    <td colspan="2"></td>
                 </tr>
             </table>
             """
