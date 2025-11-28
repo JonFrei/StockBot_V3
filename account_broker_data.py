@@ -18,7 +18,7 @@ from config import Config
 # =============================================================================
 
 TRADING_START_TIME = time(10, 0)  # 10:00 AM EST
-TRADING_END_TIME = time(11, 0)    # 11:00 AM EST (changed from 4:00 PM)
+TRADING_END_TIME = time(14, 0)    # 11:00 AM EST (changed from 4:00 PM)
 
 # =============================================================================
 # US MARKET HOLIDAYS (2025)
