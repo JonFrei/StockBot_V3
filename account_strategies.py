@@ -315,9 +315,12 @@ class SwingTradeStrategy(Strategy):
             # =============================================================
             all_opportunities = []
 
+            # Get current holdings to avoid buying into existing positions
+            current_holdings = {p.symbol for p in self.get_positions()}
+
             for ticker in all_tickers:
                 try:
-                    if ticker in self.positions:
+                    if ticker in current_holdings:
                         continue
                     if ticker not in all_stock_data:
                         continue

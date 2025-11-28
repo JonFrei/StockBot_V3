@@ -19,7 +19,7 @@ class ExitConfig:
 
     # Kill Switch (active after Tier 1 OR min hold days)
     KILL_SWITCH_ACTIVE_AFTER_TIER1 = True
-    KILL_SWITCH_MIN_HOLD_DAYS = 10  # Kill switch activates after this many days
+    KILL_SWITCH_MIN_HOLD_DAYS = 5  # Kill switch activates after this many days
 
     # Maximum Loss Hard Stop (by volatility) - Emergency backstop
     MAX_LOSS_LOW_VOL = 15.0  # Low volatility stocks

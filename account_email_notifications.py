@@ -5,16 +5,9 @@ Sends:
 1. Execution Summary (ALWAYS SENT) - timestamp, status, errors
 2. Detailed Trading Summary (BEST EFFORT) - positions, trades, performance
 3. Crash notification emails (when bot encounters fatal errors)
+4. Database failure alerts (when PostgreSQL unavailable)
 
 Only sends emails during live trading (not backtesting)
-
-Key Features:
-- Guarantees daily email even if data collection fails
-- Tracks execution start/end times
-- Captures and reports all errors with full tracebacks
-- Separates execution status from trading details
-- Falls back to console logging when email fails
-- Uses Resend API (Railway-compatible, works everywhere)
 
 Email Configuration:
 ==========================================
@@ -24,17 +17,6 @@ Required:
 - RESEND_API_KEY: Get from https://resend.com/api-keys
 - EMAIL_SENDER: Your verified sender email
 - EMAIL_RECIPIENT: Where to send reports
-
-Setup:
-1. Sign up at https://resend.com (free tier: 100 emails/day)
-2. Add and verify your domain OR use onboarding@resend.dev
-3. Create API key
-4. Add RESEND_API_KEY to Railway environment variables
-
-Example:
-RESEND_API_KEY=re_123456789
-EMAIL_SENDER=bot@yourdomain.com
-EMAIL_RECIPIENT=you@email.com
 ==========================================
 """
 
@@ -108,7 +90,7 @@ def send_email(subject, body_html, body_text=None):
     """
     Send email with HTML content using Resend API
 
-    Falls back to console logging if email fails (e.g., no API key configured)
+    Falls back to console logging if email fails
 
     Args:
         subject: Email subject line
@@ -179,8 +161,6 @@ def send_email(subject, body_html, body_text=None):
 def _log_email_to_console(subject, body_html):
     """
     Log email content to console when email sending fails
-
-    Useful for Railway deployments where Resend API key not configured
     """
     print(f"\n{'=' * 80}")
     print(f"📧 EMAIL CONTENT (Console Log)")
@@ -192,11 +172,8 @@ def _log_email_to_console(subject, body_html):
     # Strip HTML tags for console readability
     try:
         import re
-        # Remove HTML tags
         text = re.sub('<[^<]+?>', '', body_html)
-        # Remove multiple newlines
         text = re.sub(r'\n\s*\n', '\n', text)
-        # Decode HTML entities
         text = text.replace('&nbsp;', ' ')
         text = text.replace('&amp;', '&')
         text = text.replace('&lt;', '<')
@@ -205,7 +182,6 @@ def _log_email_to_console(subject, body_html):
 
         print(text)
     except:
-        # Fallback: just print raw HTML
         print(body_html)
 
     print(f"{'=' * 80}\n")
@@ -549,7 +525,7 @@ def safe_generate_positions_section(strategy):
                     <th>Current</th>
                     <th>P&L</th>
                     <th>%</th>
-                    <th>Award</th>
+                    <th>Tier</th>
                 </tr>
             """
 
@@ -561,41 +537,29 @@ def safe_generate_positions_section(strategy):
                     qty = int(position.quantity)
 
                     entry_price = None
-                    # Try avg_entry_price first
                     if hasattr(position, 'avg_entry_price') and position.avg_entry_price:
                         try:
                             entry_price = float(position.avg_entry_price)
                         except (ValueError, TypeError):
                             pass
 
-                    # Try cost_basis / quantity (alpaca-trade-api stores this way)
                     if not entry_price and hasattr(position, 'cost_basis') and position.cost_basis:
                         try:
                             cost_basis = float(position.cost_basis)
-                            qty = int(position.quantity)
-                            entry_price = cost_basis / qty if qty > 0 else 0
+                            qty_float = float(position.quantity)
+                            entry_price = cost_basis / qty_float if qty_float > 0 else 0
                         except (ValueError, TypeError, ZeroDivisionError):
                             pass
 
-                    # Try fill_avg_price as backup
                     if not entry_price and hasattr(position, 'fill_avg_price') and position.fill_avg_price:
                         try:
                             entry_price = float(position.fill_avg_price)
                         except (ValueError, TypeError):
                             pass
 
-                    # Try avg_fill_price as backup
-                    if not entry_price and hasattr(position, 'avg_fill_price') and position.avg_fill_price:
-                        try:
-                            entry_price = float(position.avg_fill_price)
-                        except (ValueError, TypeError):
-                            pass
-
                     current_price = strategy.get_last_price(ticker)
 
-                    # Safety check:
-                    if entry_price <= 0:
-                        # Skip this position or use current price as fallback
+                    if not entry_price or entry_price <= 0:
                         html += f"""
                         <tr>
                             <td><strong>{ticker}</strong></td>
@@ -611,17 +575,18 @@ def safe_generate_positions_section(strategy):
                     pnl_pct = ((current_price - entry_price) / entry_price * 100)
                     total_unrealized += pnl_dollars
 
-                    # Get award from stock rotator
-                    award = 'standard'
+                    # Get tier from stock rotator
+                    tier = 'active'
                     if hasattr(strategy, 'stock_rotator'):
-                        award = strategy.stock_rotator.get_award(ticker)
-                    award_emoji = {
+                        tier = strategy.stock_rotator.get_tier(ticker)
+
+                    tier_emoji = {
                         'premium': '🥇',
-                        'standard': '🥈',
-                        'trial': '🔬',
-                        'none': '⚪',
+                        'active': '🥈',
+                        'probation': '⚠️',
+                        'rehabilitation': '🔄',
                         'frozen': '❄️'
-                    }.get(award, '❓')
+                    }.get(tier, '❓')
 
                     html += f"""
                     <tr>
@@ -631,7 +596,7 @@ def safe_generate_positions_section(strategy):
                         <td>${current_price:.2f}</td>
                         <td style="color: {'#27ae60' if pnl_dollars > 0 else '#e74c3c'}; font-weight: bold;">${pnl_dollars:+,.2f}</td>
                         <td style="color: {'#27ae60' if pnl_pct > 0 else '#e74c3c'}; font-weight: bold;">{pnl_pct:+.1f}%</td>
-                        <td>{award_emoji} {award}</td>
+                        <td>{tier_emoji} {tier}</td>
                     </tr>
                     """
                 except Exception as e:
@@ -747,37 +712,31 @@ def safe_generate_rotation_section(strategy):
         <h3>🏆 Stock Rotation Status</h3>
         <table>
             <tr>
-                <th>Award Type</th>
+                <th>Tier</th>
                 <th>Multiplier</th>
                 <th>Count</th>
             </tr>
         """
 
-        award_counts = {}
-        for award in strategy.stock_rotator.ticker_awards.values():
-            award_counts[award] = award_counts.get(award, 0) + 1
+        # Count tickers by tier
+        tier_counts = {}
+        for ticker, state in strategy.stock_rotator.ticker_states.items():
+            tier = state.tier if hasattr(state, 'tier') else 'active'
+            tier_counts[tier] = tier_counts.get(tier, 0) + 1
 
-        for award_type in ['premium', 'standard', 'trial', 'none', 'frozen']:
-            count = award_counts.get(award_type, 0)
-            emoji = {
-                'premium': '🥇',
-                'standard': '🥈',
-                'trial': '🔬',
-                'none': '⚪',
-                'frozen': '❄️'
-            }.get(award_type, '❓')
+        tier_config = [
+            ('premium', '🥇', '1.5x'),
+            ('active', '🥈', '1.0x'),
+            ('probation', '⚠️', '0.5x'),
+            ('rehabilitation', '🔄', '0.25x'),
+            ('frozen', '❄️', '0.1x')
+        ]
 
-            multiplier = {
-                'premium': '1.5x',
-                'standard': '1.0x',
-                'trial': '1.0x',
-                'none': '0.6x',
-                'frozen': '0.0x'
-            }.get(award_type, 'N/A')
-
+        for tier_name, emoji, multiplier in tier_config:
+            count = tier_counts.get(tier_name, 0)
             html += f"""
             <tr>
-                <td>{emoji} {award_type.title()}</td>
+                <td>{emoji} {tier_name.title()}</td>
                 <td>{multiplier}</td>
                 <td>{count}</td>
             </tr>
@@ -856,7 +815,7 @@ def safe_generate_top_performers_section(strategy):
                 <th>Trades</th>
                 <th>Win Rate</th>
                 <th>Total P&L</th>
-                <th>Award</th>
+                <th>Tier</th>
             </tr>
         """
 
@@ -866,16 +825,18 @@ def safe_generate_top_performers_section(strategy):
             wr = (wins / trades * 100) if trades > 0 else 0
             total_pnl = stats['total_pnl']
 
-            award = 'standard'
+            # Get tier
+            tier = 'active'
             if hasattr(strategy, 'stock_rotator'):
-                award = strategy.stock_rotator.get_award(ticker)
-            award_emoji = {
+                tier = strategy.stock_rotator.get_tier(ticker)
+
+            tier_emoji = {
                 'premium': '🥇',
-                'standard': '🥈',
-                'trial': '🔬',
-                'none': '⚪',
+                'active': '🥈',
+                'probation': '⚠️',
+                'rehabilitation': '🔄',
                 'frozen': '❄️'
-            }.get(award, '❓')
+            }.get(tier, '❓')
 
             emoji = "✅" if total_pnl > 0 else "❌"
 
@@ -885,7 +846,7 @@ def safe_generate_top_performers_section(strategy):
                 <td>{trades}</td>
                 <td style="color: {'#27ae60' if wr >= 50 else '#e74c3c'};">{wr:.1f}%</td>
                 <td style="color: {'#27ae60' if total_pnl > 0 else '#e74c3c'}; font-weight: bold;">${total_pnl:+,.2f}</td>
-                <td>{award_emoji}</td>
+                <td>{tier_emoji}</td>
             </tr>
             """
 
@@ -912,7 +873,7 @@ def generate_error_section_html(section_name, error, error_traceback):
 
 
 # =============================================================================
-# CRASH NOTIFICATION (UNCHANGED)
+# CRASH NOTIFICATION
 # =============================================================================
 
 def send_crash_notification(error_message, error_traceback=None):

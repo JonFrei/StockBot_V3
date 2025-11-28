@@ -1,13 +1,17 @@
 """
 PostgreSQL Database Connection and Schema
-Railway-optimized with connection pooling
+Railway-optimized with connection pooling and retry logic
 
 DUAL MODE: PostgreSQL for live, in-memory for backtesting
 
-UPDATED: Added rotation_state table for tier persistence
+Features:
+- Connection retry with exponential backoff
+- Health check endpoint
+- Rotation state persistence
 """
 
 import os
+import time
 import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import RealDictCursor
@@ -17,8 +21,13 @@ from config import Config
 import pandas as pd
 
 
+# Retry configuration
+DB_RETRY_ATTEMPTS = 3
+DB_RETRY_DELAY_SECONDS = 2
+
+
 class Database:
-    """PostgreSQL connection manager with pooling"""
+    """PostgreSQL connection manager with pooling and retry logic"""
 
     def __init__(self):
         self.connection_pool = None
@@ -40,9 +49,84 @@ class Database:
 
         print("[DATABASE] Connection pool initialized")
 
+    def _retry_operation(self, operation, *args, **kwargs):
+        """
+        Execute database operation with retry logic
+
+        Args:
+            operation: Callable to execute
+            *args, **kwargs: Arguments to pass to operation
+
+        Returns:
+            Result of operation
+
+        Raises:
+            Exception after all retries exhausted
+        """
+        last_exception = None
+
+        for attempt in range(1, DB_RETRY_ATTEMPTS + 1):
+            try:
+                return operation(*args, **kwargs)
+            except (psycopg2.OperationalError, psycopg2.InterfaceError, pool.PoolError) as e:
+                last_exception = e
+                if attempt < DB_RETRY_ATTEMPTS:
+                    print(f"[DATABASE] Connection attempt {attempt} failed: {e}")
+                    print(f"[DATABASE] Retrying in {DB_RETRY_DELAY_SECONDS}s...")
+                    time.sleep(DB_RETRY_DELAY_SECONDS)
+
+                    # Try to reinitialize pool on connection errors
+                    try:
+                        if self.connection_pool:
+                            self.connection_pool.closeall()
+                        self._init_pool()
+                    except:
+                        pass
+                else:
+                    print(f"[DATABASE] All {DB_RETRY_ATTEMPTS} attempts failed")
+                    raise last_exception
+            except Exception as e:
+                # Non-connection errors - don't retry
+                raise e
+
+        raise last_exception
+
+    def health_check(self):
+        """
+        Check database connectivity
+
+        Returns:
+            bool: True if healthy, False otherwise
+        """
+        try:
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1")
+                cursor.fetchone()
+                cursor.close()
+                return True
+            finally:
+                self.return_connection(conn)
+        except Exception as e:
+            print(f"[DATABASE] Health check failed: {e}")
+            return False
+
     def get_connection(self):
         """Get connection from pool"""
         return self.connection_pool.getconn()
+
+    def get_connection_safe(self):
+        """
+        Get connection with retry logic
+
+        Returns:
+            Connection object
+
+        Raises:
+            Exception if all retries fail
+        """
+        return self._retry_operation(self.connection_pool.getconn)
 
     def return_connection(self, conn):
         """Return connection to pool"""
@@ -93,7 +177,7 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_closed_trades_signal_confirmation ON closed_trades(entry_signal, was_watchlisted);
             """)
 
-            # Position metadata table
+            # Position metadata table with new columns
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS position_metadata (
                     ticker VARCHAR(10) PRIMARY KEY,
@@ -107,8 +191,12 @@ class Database:
                     was_watchlisted BOOLEAN DEFAULT FALSE,
                     confirmation_date TIMESTAMP,
                     days_to_confirmation INTEGER DEFAULT 0,
+                    entry_price DECIMAL(10, 2),
+                    kill_switch_active BOOLEAN DEFAULT FALSE,
+                    peak_price DECIMAL(10, 2),
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE INDEX IF NOT EXISTS idx_position_metadata_entry_date ON position_metadata(entry_date);
             """)
 
             # Bot state table
@@ -128,7 +216,7 @@ class Database:
                 INSERT INTO bot_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
             """)
 
-            # NEW: Rotation state table (stores per-ticker tier info)
+            # Rotation state table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS rotation_state (
                     ticker VARCHAR(10) PRIMARY KEY,
@@ -144,6 +232,7 @@ class Database:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE INDEX IF NOT EXISTS idx_rotation_tier ON rotation_state(tier);
+                CREATE INDEX IF NOT EXISTS idx_rotation_state_updated ON rotation_state(updated_at);
             """)
 
             # Cooldowns table
@@ -238,60 +327,63 @@ class Database:
             self.return_connection(conn)
 
     # =========================================================================
-    # ROTATION STATE METHODS (NEW)
+    # ROTATION STATE METHODS
     # =========================================================================
 
     def save_rotation_state(self, ticker_states):
         """
-        Save all rotation states to database
+        Save all rotation states to database with retry logic
 
         Args:
             ticker_states: Dict of {ticker: state_dict} from StockRotator
         """
-        conn = self.get_connection()
+        def _save():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+
+                for ticker, state in ticker_states.items():
+                    cursor.execute("""
+                        INSERT INTO rotation_state 
+                        (ticker, tier, consecutive_wins, consecutive_losses, total_trades,
+                         total_wins, total_pnl, total_win_pnl, total_loss_pnl, last_tier_change)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (ticker) DO UPDATE SET
+                            tier = EXCLUDED.tier,
+                            consecutive_wins = EXCLUDED.consecutive_wins,
+                            consecutive_losses = EXCLUDED.consecutive_losses,
+                            total_trades = EXCLUDED.total_trades,
+                            total_wins = EXCLUDED.total_wins,
+                            total_pnl = EXCLUDED.total_pnl,
+                            total_win_pnl = EXCLUDED.total_win_pnl,
+                            total_loss_pnl = EXCLUDED.total_loss_pnl,
+                            last_tier_change = EXCLUDED.last_tier_change,
+                            updated_at = CURRENT_TIMESTAMP
+                    """, (
+                        ticker,
+                        state.get('tier', 'active'),
+                        state.get('consecutive_wins', 0),
+                        state.get('consecutive_losses', 0),
+                        state.get('total_trades', 0),
+                        state.get('total_wins', 0),
+                        state.get('total_pnl', 0),
+                        state.get('total_win_pnl', 0),
+                        state.get('total_loss_pnl', 0),
+                        state.get('last_tier_change')
+                    ))
+
+                conn.commit()
+                print(f"[DATABASE] Saved rotation state for {len(ticker_states)} tickers")
+
+            finally:
+                cursor.close()
+                self.return_connection(conn)
+
         try:
-            cursor = conn.cursor()
-
-            for ticker, state in ticker_states.items():
-                cursor.execute("""
-                    INSERT INTO rotation_state 
-                    (ticker, tier, consecutive_wins, consecutive_losses, total_trades,
-                     total_wins, total_pnl, total_win_pnl, total_loss_pnl, last_tier_change)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (ticker) DO UPDATE SET
-                        tier = EXCLUDED.tier,
-                        consecutive_wins = EXCLUDED.consecutive_wins,
-                        consecutive_losses = EXCLUDED.consecutive_losses,
-                        total_trades = EXCLUDED.total_trades,
-                        total_wins = EXCLUDED.total_wins,
-                        total_pnl = EXCLUDED.total_pnl,
-                        total_win_pnl = EXCLUDED.total_win_pnl,
-                        total_loss_pnl = EXCLUDED.total_loss_pnl,
-                        last_tier_change = EXCLUDED.last_tier_change,
-                        updated_at = CURRENT_TIMESTAMP
-                """, (
-                    ticker,
-                    state.get('tier', 'active'),
-                    state.get('consecutive_wins', 0),
-                    state.get('consecutive_losses', 0),
-                    state.get('total_trades', 0),
-                    state.get('total_wins', 0),
-                    state.get('total_pnl', 0),
-                    state.get('total_win_pnl', 0),
-                    state.get('total_loss_pnl', 0),
-                    state.get('last_tier_change')
-                ))
-
-            conn.commit()
-            print(f"[DATABASE] Saved rotation state for {len(ticker_states)} tickers")
-
+            self._retry_operation(_save)
         except Exception as e:
-            conn.rollback()
-            print(f"[DATABASE] Error saving rotation state: {e}")
+            print(f"[DATABASE] Error saving rotation state after retries: {e}")
             raise
-        finally:
-            cursor.close()
-            self.return_connection(conn)
 
     def load_rotation_state(self):
         """
@@ -300,40 +392,44 @@ class Database:
         Returns:
             Dict of {ticker: state_dict}
         """
-        conn = self.get_connection()
+        def _load():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+
+                cursor.execute("""
+                    SELECT ticker, tier, consecutive_wins, consecutive_losses, total_trades,
+                           total_wins, total_pnl, total_win_pnl, total_loss_pnl, last_tier_change
+                    FROM rotation_state
+                """)
+
+                states = {}
+                for row in cursor.fetchall():
+                    states[row[0]] = {
+                        'ticker': row[0],
+                        'tier': row[1],
+                        'consecutive_wins': row[2],
+                        'consecutive_losses': row[3],
+                        'total_trades': row[4],
+                        'total_wins': row[5],
+                        'total_pnl': float(row[6]) if row[6] else 0,
+                        'total_win_pnl': float(row[7]) if row[7] else 0,
+                        'total_loss_pnl': float(row[8]) if row[8] else 0,
+                        'last_tier_change': row[9].isoformat() if row[9] else None
+                    }
+
+                print(f"[DATABASE] Loaded rotation state for {len(states)} tickers")
+                return states
+
+            finally:
+                cursor.close()
+                self.return_connection(conn)
+
         try:
-            cursor = conn.cursor()
-
-            cursor.execute("""
-                SELECT ticker, tier, consecutive_wins, consecutive_losses, total_trades,
-                       total_wins, total_pnl, total_win_pnl, total_loss_pnl, last_tier_change
-                FROM rotation_state
-            """)
-
-            states = {}
-            for row in cursor.fetchall():
-                states[row[0]] = {
-                    'ticker': row[0],
-                    'tier': row[1],
-                    'consecutive_wins': row[2],
-                    'consecutive_losses': row[3],
-                    'total_trades': row[4],
-                    'total_wins': row[5],
-                    'total_pnl': float(row[6]) if row[6] else 0,
-                    'total_win_pnl': float(row[7]) if row[7] else 0,
-                    'total_loss_pnl': float(row[8]) if row[8] else 0,
-                    'last_tier_change': row[9].isoformat() if row[9] else None
-                }
-
-            print(f"[DATABASE] Loaded rotation state for {len(states)} tickers")
-            return states
-
+            return self._retry_operation(_load)
         except Exception as e:
             print(f"[DATABASE] Error loading rotation state: {e}")
             return {}
-        finally:
-            cursor.close()
-            self.return_connection(conn)
 
     def close_pool(self):
         """Close all connections in pool"""
@@ -372,7 +468,7 @@ class InMemoryDatabase:
 
         # Keep dicts for other data
         self.position_metadata = {}
-        self.rotation_state = {}  # NEW: Rotation state storage
+        self.rotation_state = {}
         self.bot_state = {
             'portfolio_peak': None,
             'drawdown_protection_active': False,
@@ -396,8 +492,12 @@ class InMemoryDatabase:
     def close_pool(self):
         pass
 
+    def health_check(self):
+        """In-memory database is always healthy"""
+        return True
+
     # =========================================================================
-    # ROTATION STATE METHODS (NEW)
+    # ROTATION STATE METHODS
     # =========================================================================
 
     def save_rotation_state(self, ticker_states):
@@ -553,7 +653,7 @@ class InMemoryDatabase:
                                   total_pnl, avg_pnl):
         self.signal_performance_df = self.signal_performance_df[
             self.signal_performance_df['signal_name'] != signal_name
-            ]
+        ]
 
         new_row = pd.DataFrame([{
             'signal_name': signal_name,
@@ -591,7 +691,7 @@ class InMemoryDatabase:
         df = self.tickers_df[
             (self.tickers_df['strategies'].apply(lambda x: strategy_name in x if isinstance(x, list) else False)) &
             (self.tickers_df['is_blacklisted'] == False)
-            ]
+        ]
         return df['ticker'].tolist()
 
     def insert_ticker(self, ticker, name, strategies):
@@ -617,8 +717,9 @@ class InMemoryDatabase:
                                  highest_price, profit_level=0,
                                  level_1_lock_price=None, level_2_lock_price=None,
                                  was_watchlisted=False, confirmation_date=None,
-                                 days_to_confirmation=0):
-        """Save position metadata with profit_level as integer"""
+                                 days_to_confirmation=0, entry_price=None,
+                                 kill_switch_active=False, peak_price=None):
+        """Save position metadata with all fields"""
         self.position_metadata[ticker] = {
             'entry_date': entry_date,
             'entry_signal': entry_signal,
@@ -627,10 +728,14 @@ class InMemoryDatabase:
             'local_max': float(highest_price) if highest_price else 0,
             'profit_level': profit_level,
             'level_1_lock_price': float(level_1_lock_price) if level_1_lock_price else None,
+            'tier1_lock_price': float(level_1_lock_price) if level_1_lock_price else None,
             'level_2_lock_price': float(level_2_lock_price) if level_2_lock_price else None,
             'was_watchlisted': was_watchlisted,
             'confirmation_date': confirmation_date,
-            'days_to_confirmation': days_to_confirmation
+            'days_to_confirmation': days_to_confirmation,
+            'entry_price': float(entry_price) if entry_price else None,
+            'kill_switch_active': kill_switch_active,
+            'peak_price': float(peak_price) if peak_price else None
         }
 
     def get_all_position_metadata(self):
