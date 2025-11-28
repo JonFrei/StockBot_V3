@@ -7,6 +7,8 @@ Sends:
 3. Crash notification emails (when bot encounters fatal errors)
 4. Database failure alerts (when PostgreSQL unavailable)
 5. Position alert emails (when positions need manual review)
+6. Circuit breaker alerts (when consecutive failures trigger pause)
+7. Missing entry prices alerts (positions without entry price data)
 
 Only sends emails during live trading (not backtesting)
 
@@ -191,6 +193,217 @@ def _log_email_to_console(subject, body_html):
     print(f"[EMAIL]    2. Get API key from dashboard")
     print(f"[EMAIL]    3. Add RESEND_API_KEY to Railway environment variables")
     print(f"{'=' * 80}\n")
+
+
+# =============================================================================
+# CIRCUIT BREAKER ALERT EMAIL
+# =============================================================================
+
+def send_circuit_breaker_alert_email(failure_tracker, current_date):
+    """
+    Send alert email when circuit breaker triggers bot pause.
+
+    Args:
+        failure_tracker: ConsecutiveFailureTracker instance
+        current_date: Current datetime
+    """
+    if Config.BACKTESTING:
+        return
+
+    print("\n[EMAIL] Sending circuit breaker alert...")
+
+    recent_failures = failure_tracker.get_recent_failures()
+
+    # Build failure rows
+    failure_rows = ""
+    for i, f in enumerate(recent_failures, 1):
+        failure_rows += f"""
+        <tr>
+            <td>{i}</td>
+            <td>{f['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}</td>
+            <td><strong>{f['context']}</strong></td>
+            <td style="color: #e74c3c;">{f['error'][:200]}{'...' if len(f['error']) > 200 else ''}</td>
+        </tr>
+        """
+
+    html_body = f"""
+    <html>
+    <head>
+        <style>
+            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+            h2 {{ color: #e74c3c; border-bottom: 3px solid #c0392b; padding-bottom: 10px; }}
+            .alert-box {{ background-color: #fadbd8; padding: 20px; border-left: 5px solid #e74c3c; margin: 20px 0; }}
+            .status-box {{ background-color: #fdebd0; padding: 15px; border-left: 5px solid #f39c12; margin: 20px 0; }}
+            table {{ border-collapse: collapse; width: 100%; margin: 15px 0; }}
+            th {{ background-color: #e74c3c; color: white; padding: 12px; text-align: left; }}
+            td {{ padding: 10px; border-bottom: 1px solid #ddd; }}
+            .action-required {{ background-color: #d5f4e6; padding: 15px; border-left: 5px solid #27ae60; margin: 20px 0; }}
+            .timestamp {{ color: #7f8c8d; font-style: italic; }}
+        </style>
+    </head>
+    <body>
+        <h2>🚨 CIRCUIT BREAKER TRIGGERED - BOT PAUSED</h2>
+
+        <div class="alert-box">
+            <h3>⚠️ Trading Bot Has Been Paused</h3>
+            <p>The bot has encountered <strong>{failure_tracker.consecutive_failures} consecutive failures</strong> 
+               (threshold: {failure_tracker.threshold}) and has entered a <strong>PAUSED</strong> state.</p>
+            <p><strong>Paused at:</strong> {failure_tracker.paused_at.strftime('%Y-%m-%d %I:%M:%S %p EST') if failure_tracker.paused_at else 'Unknown'}</p>
+        </div>
+
+        <div class="status-box">
+            <h3>📊 Current Status</h3>
+            <ul>
+                <li><strong>State:</strong> PAUSED - Waiting for manual intervention</li>
+                <li><strong>Health Check:</strong> Still running (Railway won't kill the container)</li>
+                <li><strong>Trading:</strong> STOPPED - No orders will be placed</li>
+                <li><strong>Positions:</strong> Existing positions remain open at broker</li>
+            </ul>
+        </div>
+
+        <h3>❌ Recent Failures</h3>
+        <table>
+            <tr>
+                <th>#</th>
+                <th>Timestamp</th>
+                <th>Context</th>
+                <th>Error</th>
+            </tr>
+            {failure_rows}
+        </table>
+
+        <div class="action-required">
+            <h3>✅ Action Required</h3>
+            <ol>
+                <li><strong>Check Railway Logs</strong> - Review full error details and stack traces</li>
+                <li><strong>Diagnose Issue</strong> - Identify root cause (API issues, data problems, code bugs)</li>
+                <li><strong>Check Broker Dashboard</strong> - Verify position states at Alpaca</li>
+                <li><strong>Fix if Needed</strong> - Deploy code fixes if this is a bug</li>
+                <li><strong>Restart Bot</strong> - Use Railway dashboard to restart the service</li>
+            </ol>
+        </div>
+
+        <hr>
+        <p class="timestamp">
+            Alert generated: {datetime.now().strftime('%Y-%m-%d %I:%M:%S %p EST')}<br>
+            <em>Automated alert from SwingTradeStrategy Bot</em>
+        </p>
+    </body>
+    </html>
+    """
+
+    subject = f"🚨 CIRCUIT BREAKER - Bot Paused ({failure_tracker.consecutive_failures} failures)"
+    send_email(subject, html_body)
+
+
+# =============================================================================
+# MISSING ENTRY PRICES EMAIL
+# =============================================================================
+
+def send_missing_entry_prices_email(positions, current_date):
+    """
+    Send email listing positions with missing entry prices.
+
+    Args:
+        positions: List of dicts with position details
+        current_date: Current datetime
+    """
+    if Config.BACKTESTING:
+        return
+
+    if not positions:
+        return
+
+    print(f"\n[EMAIL] Sending missing entry prices alert for {len(positions)} position(s)...")
+
+    # Calculate total value of affected positions
+    total_value = sum(p.get('market_value', 0) for p in positions)
+
+    # Build position rows
+    position_rows = ""
+    for pos in positions:
+        position_rows += f"""
+        <tr>
+            <td><strong>{pos['ticker']}</strong></td>
+            <td>{pos['quantity']}</td>
+            <td>${pos['current_price']:.2f}</td>
+            <td>${pos['market_value']:,.2f}</td>
+            <td style="color: #e74c3c;">{pos['issue']}</td>
+        </tr>
+        """
+
+    html_body = f"""
+    <html>
+    <head>
+        <style>
+            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+            h2 {{ color: #f39c12; border-bottom: 2px solid #e67e22; padding-bottom: 10px; }}
+            .warning-box {{ background-color: #fdebd0; padding: 15px; border-left: 5px solid #f39c12; margin: 15px 0; }}
+            .info-box {{ background-color: #ebf5fb; padding: 15px; border-left: 5px solid #3498db; margin: 15px 0; }}
+            table {{ border-collapse: collapse; width: 100%; margin: 15px 0; }}
+            th {{ background-color: #f39c12; color: white; padding: 10px; text-align: left; }}
+            td {{ padding: 8px; border-bottom: 1px solid #ddd; }}
+            .timestamp {{ color: #7f8c8d; font-style: italic; }}
+            .total-row {{ background-color: #f8f9fa; font-weight: bold; }}
+        </style>
+    </head>
+    <body>
+        <h2>⚠️ Positions Missing Entry Prices</h2>
+
+        <p class="timestamp">Generated: {current_date.strftime('%Y-%m-%d %I:%M:%S %p EST')}</p>
+
+        <div class="warning-box">
+            <h3>Summary</h3>
+            <p><strong>{len(positions)} position(s)</strong> are missing entry price data.</p>
+            <p><strong>Total affected value:</strong> ${total_value:,.2f}</p>
+            <p>These positions will be <strong>skipped</strong> for stop-loss and profit-taking calculations until resolved.</p>
+        </div>
+
+        <h3>Affected Positions</h3>
+        <table>
+            <tr>
+                <th>Ticker</th>
+                <th>Quantity</th>
+                <th>Current Price</th>
+                <th>Market Value</th>
+                <th>Issue</th>
+            </tr>
+            {position_rows}
+            <tr class="total-row">
+                <td colspan="3">TOTAL</td>
+                <td>${total_value:,.2f}</td>
+                <td></td>
+            </tr>
+        </table>
+
+        <div class="info-box">
+            <h3>ℹ️ Why This Happens</h3>
+            <ul>
+                <li>Position was opened before bot started tracking</li>
+                <li>Broker API didn't return entry price data</li>
+                <li>Position was transferred from another account</li>
+                <li>Database state was lost/corrupted</li>
+            </ul>
+        </div>
+
+        <h3>What's Happening</h3>
+        <ul>
+            <li>Bot will <strong>NOT</strong> place stop-loss orders for these positions</li>
+            <li>Bot will <strong>NOT</strong> calculate profit targets for these positions</li>
+            <li>Positions remain <strong>OPEN</strong> at broker - no automatic exits</li>
+            <li>You should monitor these positions manually</li>
+        </ul>
+
+        <hr>
+        <p class="timestamp">
+            <em>Automated alert from SwingTradeStrategy Bot</em>
+        </p>
+    </body>
+    </html>
+    """
+
+    subject = f"⚠️ {len(positions)} Position(s) Missing Entry Prices - {current_date.strftime('%Y-%m-%d')}"
+    send_email(subject, html_body)
 
 
 # =============================================================================
@@ -961,92 +1174,19 @@ def generate_crash_notification_html(error_message, error_traceback=None):
 
 
 # =============================================================================
-# POSITION ALERT EMAIL
+# POSITION ALERT EMAIL (Legacy - kept for compatibility)
 # =============================================================================
 
 def send_position_alert_email(positions_needing_review, current_date):
     """
     Send email alert for positions requiring manual review
 
+    Note: This is the legacy function. For missing entry prices,
+    use send_missing_entry_prices_email() instead.
+
     Args:
         positions_needing_review: List of dicts with position details
         current_date: Current datetime
     """
-    if Config.BACKTESTING:
-        return
-
-    if not positions_needing_review:
-        return
-
-    print(f"\n[EMAIL] Sending position alert for {len(positions_needing_review)} position(s)...")
-
-    try:
-        # Build position table rows
-        position_rows = ""
-        for pos in positions_needing_review:
-            position_rows += f"""
-            <tr>
-                <td><strong>{pos['ticker']}</strong></td>
-                <td>{pos['quantity']}</td>
-                <td>${pos['current_price']:.2f}</td>
-                <td>${pos['market_value']:.2f}</td>
-                <td style="color: #e74c3c;">{pos['issue']}</td>
-            </tr>
-            """
-
-        html_body = f"""
-        <html>
-        <head>
-            <style>
-                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-                h2 {{ color: #e74c3c; border-bottom: 2px solid #c0392b; padding-bottom: 10px; }}
-                .alert-box {{ background-color: #fadbd8; padding: 15px; border-left: 5px solid #e74c3c; margin: 10px 0; }}
-                table {{ border-collapse: collapse; width: 100%; margin: 10px 0; }}
-                th {{ background-color: #e74c3c; color: white; padding: 10px; text-align: left; }}
-                td {{ padding: 8px; border-bottom: 1px solid #ddd; }}
-                .timestamp {{ color: #7f8c8d; font-style: italic; }}
-            </style>
-        </head>
-        <body>
-            <h2>⚠️ Positions Requiring Manual Review</h2>
-
-            <p class="timestamp">Generated: {current_date.strftime('%Y-%m-%d %I:%M:%S %p EST')}</p>
-
-            <div class="alert-box">
-                <p><strong>{len(positions_needing_review)} position(s)</strong> have issues that require your attention.</p>
-                <p>These positions are being <strong>skipped</strong> by the bot until resolved.</p>
-            </div>
-
-            <h3>Affected Positions</h3>
-            <table>
-                <tr>
-                    <th>Ticker</th>
-                    <th>Quantity</th>
-                    <th>Current Price</th>
-                    <th>Market Value</th>
-                    <th>Issue</th>
-                </tr>
-                {position_rows}
-            </table>
-
-            <h3>Required Actions</h3>
-            <ul>
-                <li>Log into your Alpaca dashboard to verify these positions</li>
-                <li>Check if entry prices are available in the broker interface</li>
-                <li>Consider manually setting stop losses for these positions</li>
-                <li>If positions are orphaned/stale, consider closing them manually</li>
-            </ul>
-
-            <hr>
-            <p style="color: #7f8c8d; font-size: 0.9em;">
-                <em>Automated alert from SwingTradeStrategy Bot</em>
-            </p>
-        </body>
-        </html>
-        """
-
-        subject = f"⚠️ {len(positions_needing_review)} Position(s) Need Manual Review - {current_date.strftime('%Y-%m-%d')}"
-        send_email(subject, html_body)
-
-    except Exception as e:
-        print(f"[EMAIL] Failed to send position alert: {e}")
+    # Redirect to new function
+    send_missing_entry_prices_email(positions_needing_review, current_date)

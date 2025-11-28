@@ -6,7 +6,10 @@ Features:
 - Retry logic on database operations
 - In-memory fallback window (30 min) before halt
 - Alert email on persistent database failure
-- Integrated position reconciliation and rotation state
+- Integrated rotation state persistence
+
+Note: Position reconciliation has been moved to account_strategies.py
+      and runs at the start of each trading iteration.
 """
 
 from datetime import datetime, timedelta
@@ -147,7 +150,7 @@ def _send_database_failure_alert(error, fallback_state):
 
 
 class StatePersistence:
-    """Dual-mode state persistence with broker reconciliation"""
+    """Dual-mode state persistence"""
 
     def __init__(self):
         self.db = get_database()
@@ -277,7 +280,7 @@ class StatePersistence:
             cursor = conn.cursor()
 
             print(f"\n{'=' * 80}")
-            print(f"🔄 RESTORING STATE FROM DATABASE")
+            print(f"🔄 LOADING STATE FROM DATABASE")
             print(f"{'=' * 80}")
 
             # Load position metadata with new columns
@@ -317,9 +320,6 @@ class StatePersistence:
             cursor.close()
             self.db.return_connection(conn)
 
-            # Reconcile with broker
-            self._reconcile_broker_positions(strategy)
-
             return True
 
         except Exception as e:
@@ -330,7 +330,7 @@ class StatePersistence:
     def _load_state_memory(self, strategy):
         """Load from in-memory database"""
         print(f"\n{'=' * 80}")
-        print(f"🔄 RESTORING STATE FROM MEMORY (Backtest)")
+        print(f"🔄 LOADING STATE FROM MEMORY (Backtest)")
         print(f"{'=' * 80}")
 
         positions = self.db.get_all_position_metadata()
@@ -345,104 +345,6 @@ class StatePersistence:
 
         print(f"{'=' * 80}\n")
         return True
-
-    def _reconcile_broker_positions(self, strategy):
-        """
-        Reconcile broker positions with database state
-        """
-        import account_broker_data
-
-        print(f"\n{'=' * 80}")
-        print(f"🔄 BROKER RECONCILIATION - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"{'=' * 80}")
-
-        try:
-            current_date = strategy.get_datetime()
-
-            broker_positions = strategy.get_positions()
-            broker_tickers = {p.symbol for p in broker_positions}
-            db_tickers = set(strategy.position_monitor.positions_metadata.keys())
-
-            print(f"📊 Broker: {len(broker_tickers)} position(s)")
-            print(f"📊 Database: {len(db_tickers)} position(s)")
-
-            orphaned_count = 0
-            cleaned_count = 0
-
-            # Orphaned positions (in broker, not in database)
-            orphaned = broker_tickers - db_tickers
-
-            if orphaned:
-                print(f"\n⚠️  ORPHANED POSITIONS: {len(orphaned)}")
-                print(f"{'─' * 80}")
-
-                for ticker in orphaned:
-                    position = next(p for p in broker_positions if p.symbol == ticker)
-                    quantity = account_broker_data.get_position_quantity(position, ticker)
-                    entry_price = account_broker_data.get_broker_entry_price(position, strategy, ticker)
-
-                    if not account_broker_data.validate_entry_price(entry_price, ticker):
-                        print(f"   ❌ {ticker}: Invalid entry price - SKIPPING")
-                        continue
-
-                    try:
-                        current_price = strategy.get_last_price(ticker)
-                        highest_price = max(entry_price, current_price)
-                    except:
-                        highest_price = entry_price
-
-                    strategy.position_monitor.positions_metadata[ticker] = {
-                        'entry_date': current_date,
-                        'entry_signal': 'recovered_orphan',
-                        'entry_score': 0,
-                        'entry_price': entry_price,
-                        'highest_price': highest_price,
-                        'local_max': highest_price,
-                        'profit_level': 0,
-                        'tier1_lock_price': None,
-                        'level_1_lock_price': None,
-                        'level_2_lock_price': None,
-                        'kill_switch_active': False,
-                        'peak_price': None
-                    }
-
-                    print(f"   ✅ {ticker}: ADOPTED - {quantity} shares @ ${entry_price:.2f}")
-                    orphaned_count += 1
-
-                print(f"{'─' * 80}")
-
-            # Missing from broker (in database, not in broker)
-            missing = db_tickers - broker_tickers
-
-            if missing:
-                print(f"\n🧹 STALE ENTRIES: {len(missing)}")
-                print(f"{'─' * 80}")
-
-                for ticker in missing:
-                    print(f"   🗑️  {ticker}: Position closed - cleaning metadata")
-                    del strategy.position_monitor.positions_metadata[ticker]
-                    cleaned_count += 1
-
-                print(f"{'─' * 80}")
-
-            print(f"\n📋 RECONCILIATION SUMMARY:")
-            print(f"   Orphaned Adopted: {orphaned_count}")
-            print(f"   Stale Cleaned: {cleaned_count}")
-
-            if orphaned_count == 0 and cleaned_count == 0:
-                print(f"   ✅ All positions in sync!")
-
-            print(f"{'=' * 80}\n")
-
-            if orphaned_count > 0 or cleaned_count > 0:
-                save_state_safe(strategy)
-                print(f"💾 State saved after reconciliation\n")
-
-        except Exception as e:
-            print(f"\n❌ RECONCILIATION ERROR: {e}")
-            print(f"   Continuing with current state...\n")
-            import traceback
-            traceback.print_exc()
 
 
 def save_state_safe(strategy):
