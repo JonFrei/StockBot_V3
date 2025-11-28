@@ -18,7 +18,7 @@ from config import Config
 # =============================================================================
 
 TRADING_START_TIME = time(10, 0)  # 10:00 AM EST
-TRADING_END_TIME = time(16, 0)  # 4:00 PM EST
+TRADING_END_TIME = time(11, 0)    # 11:00 AM EST (changed from 4:00 PM)
 
 # =============================================================================
 # US MARKET HOLIDAYS (2025)
@@ -26,16 +26,16 @@ TRADING_END_TIME = time(16, 0)  # 4:00 PM EST
 
 # NYSE/NASDAQ holiday schedule
 US_MARKET_HOLIDAYS_2025 = {
-    date(2025, 1, 1),  # New Year's Day
+    date(2025, 1, 1),   # New Year's Day
     date(2025, 1, 20),  # Martin Luther King Jr. Day
     date(2025, 2, 17),  # Presidents' Day
     date(2025, 4, 18),  # Good Friday
     date(2025, 5, 26),  # Memorial Day
     date(2025, 6, 19),  # Juneteenth
-    date(2025, 7, 4),  # Independence Day
-    date(2025, 9, 1),  # Labor Day
-    date(2025, 11, 27),  # Thanksgiving
-    date(2025, 12, 25),  # Christmas
+    date(2025, 7, 4),   # Independence Day
+    date(2025, 9, 1),   # Labor Day
+    date(2025, 11, 27), # Thanksgiving
+    date(2025, 12, 25), # Christmas
 }
 
 
@@ -258,69 +258,21 @@ def get_position_quantity(position: Any, ticker: str = "") -> int:
     Returns:
         int: Position quantity, or 0 if unable to determine
     """
+    # Try qty first (most common)
+    if hasattr(position, 'qty'):
+        try:
+            return int(float(position.qty))
+        except (ValueError, TypeError):
+            pass
+
+    # Try quantity
     if hasattr(position, 'quantity'):
         try:
-            qty = int(position.quantity)
-            if qty > 0:
-                return qty
-            elif qty < 0:
-                # Handle short positions (convert to positive)
-                return abs(qty)
+            return int(float(position.quantity))
         except (ValueError, TypeError):
             pass
 
     if ticker:
-        print(f"[ERROR] {ticker} - Could not extract quantity from position")
+        print(f"[ERROR] {ticker} - Could not determine position quantity")
 
     return 0
-
-
-def calculate_position_pnl(entry_price: float, current_price: float, quantity: int) -> Tuple[float, float]:
-    """
-    Calculate position P&L
-
-    Args:
-        entry_price: Entry price per share
-        current_price: Current price per share
-        quantity: Number of shares
-
-    Returns:
-        tuple: (pnl_dollars, pnl_pct)
-    """
-    if entry_price <= 0 or quantity <= 0:
-        return 0.0, 0.0
-
-    pnl_per_share = current_price - entry_price
-    pnl_dollars = pnl_per_share * quantity
-    pnl_pct = (pnl_per_share / entry_price * 100)
-
-    return pnl_dollars, pnl_pct
-
-
-def format_price(price: float, decimals: int = 2) -> str:
-    """
-    Format price for display
-
-    Args:
-        price: Price to format
-        decimals: Number of decimal places (default 2)
-
-    Returns:
-        str: Formatted price string
-    """
-    return f"${price:,.{decimals}f}"
-
-
-def format_pnl(pnl_dollars: float, pnl_pct: float) -> str:
-    """
-    Format P&L for display with color indicator
-
-    Args:
-        pnl_dollars: P&L in dollars
-        pnl_pct: P&L percentage
-
-    Returns:
-        str: Formatted P&L string with emoji
-    """
-    emoji = "✅" if pnl_dollars > 0 else "❌"
-    return f"{emoji} ${pnl_dollars:+,.2f} ({pnl_pct:+.1f}%)"
