@@ -8,7 +8,7 @@ Features:
 - Connection retry with exponential backoff
 - Health check endpoint
 - Rotation state persistence
-- Dashboard settings (bot pause control)
+- Dashboard settings (bot pause control) - KEY-VALUE SCHEMA
 """
 
 import os
@@ -317,15 +317,14 @@ class Database:
                 );
             """)
 
-            # Dashboard settings table (for bot pause control)
+            # Dashboard settings table (KEY-VALUE SCHEMA for flexibility)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS dashboard_settings (
-                    id INTEGER PRIMARY KEY DEFAULT 1,
-                    bot_paused BOOLEAN DEFAULT FALSE,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    CONSTRAINT single_settings_row CHECK (id = 1)
+                    key VARCHAR(50) PRIMARY KEY,
+                    value VARCHAR(255) NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
-                INSERT INTO dashboard_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+                INSERT INTO dashboard_settings (key, value) VALUES ('bot_paused', '0') ON CONFLICT (key) DO NOTHING;
             """)
 
             conn.commit()
@@ -339,7 +338,7 @@ class Database:
             self.return_connection(conn)
 
     # =========================================================================
-    # DASHBOARD SETTINGS METHODS
+    # DASHBOARD SETTINGS METHODS (KEY-VALUE SCHEMA)
     # =========================================================================
 
     def get_bot_paused(self):
@@ -353,10 +352,11 @@ class Database:
             conn = self.get_connection()
             try:
                 cursor = conn.cursor()
-                cursor.execute("SELECT bot_paused FROM dashboard_settings WHERE id = 1")
+                cursor.execute("SELECT value FROM dashboard_settings WHERE key = 'bot_paused'")
                 row = cursor.fetchone()
                 cursor.close()
-                return row[0] if row else False
+                # '1' = paused, '0' = not paused
+                return row[0] == '1' if row else False
             finally:
                 self.return_connection(conn)
 
@@ -377,14 +377,67 @@ class Database:
             conn = self.get_connection()
             try:
                 cursor = conn.cursor()
+                value = '1' if paused else '0'
                 cursor.execute("""
-                    UPDATE dashboard_settings 
-                    SET bot_paused = %s, updated_at = CURRENT_TIMESTAMP 
-                    WHERE id = 1
-                """, (paused,))
+                    INSERT INTO dashboard_settings (key, value, updated_at)
+                    VALUES ('bot_paused', %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (key) DO UPDATE SET value = %s, updated_at = CURRENT_TIMESTAMP
+                """, (value, value))
                 conn.commit()
                 cursor.close()
                 print(f"[DATABASE] Bot paused state set to: {paused}")
+            finally:
+                self.return_connection(conn)
+
+        self._retry_operation(_set)
+
+    def get_dashboard_setting(self, key, default=None):
+        """
+        Get a dashboard setting by key
+
+        Args:
+            key: Setting key
+            default: Default value if not found
+
+        Returns:
+            Setting value or default
+        """
+        def _get():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT value FROM dashboard_settings WHERE key = %s", (key,))
+                row = cursor.fetchone()
+                cursor.close()
+                return row[0] if row else default
+            finally:
+                self.return_connection(conn)
+
+        try:
+            return self._retry_operation(_get)
+        except Exception as e:
+            print(f"[DATABASE] Error getting setting {key}: {e}")
+            return default
+
+    def set_dashboard_setting(self, key, value):
+        """
+        Set a dashboard setting
+
+        Args:
+            key: Setting key
+            value: Setting value (will be converted to string)
+        """
+        def _set():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO dashboard_settings (key, value, updated_at)
+                    VALUES (%s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (key) DO UPDATE SET value = %s, updated_at = CURRENT_TIMESTAMP
+                """, (key, str(value), str(value)))
+                conn.commit()
+                cursor.close()
             finally:
                 self.return_connection(conn)
 
@@ -544,7 +597,7 @@ class InMemoryDatabase:
         }
         self.cooldowns = {}
         self.blacklist = {}
-        self.dashboard_settings = {'bot_paused': False}
+        self.dashboard_settings = {'bot_paused': '0'}
 
         print("[MEMORY DB] DataFrame-based in-memory database initialized")
 
@@ -562,16 +615,24 @@ class InMemoryDatabase:
         return True
 
     # =========================================================================
-    # DASHBOARD SETTINGS METHODS
+    # DASHBOARD SETTINGS METHODS (KEY-VALUE SCHEMA)
     # =========================================================================
 
     def get_bot_paused(self):
         """Check if bot is paused (always False in backtesting)"""
-        return self.dashboard_settings.get('bot_paused', False)
+        return self.dashboard_settings.get('bot_paused', '0') == '1'
 
     def set_bot_paused(self, paused):
         """Set bot paused state"""
-        self.dashboard_settings['bot_paused'] = paused
+        self.dashboard_settings['bot_paused'] = '1' if paused else '0'
+
+    def get_dashboard_setting(self, key, default=None):
+        """Get a dashboard setting by key"""
+        return self.dashboard_settings.get(key, default)
+
+    def set_dashboard_setting(self, key, value):
+        """Set a dashboard setting"""
+        self.dashboard_settings[key] = str(value)
 
     # =========================================================================
     # ROTATION STATE METHODS
@@ -616,57 +677,21 @@ class InMemoryDatabase:
         df = self.closed_trades_df.sort_values('exit_date', ascending=False)
         if limit:
             df = df.head(limit)
+
         return df.to_dict('records')
-
-    def get_trades_by_signal(self, signal_name, lookback=None):
-        if self.closed_trades_df.empty:
-            return []
-
-        df = self.closed_trades_df[self.closed_trades_df['entry_signal'] == signal_name]
-        if lookback:
-            df = df.tail(lookback)
-        return df.to_dict('records')
-
-    # Order log operations
-    def insert_order_log(self, ticker, side, quantity, order_type, limit_price, filled_price,
-                         submitted_at, signal_type, portfolio_value, cash_before, award,
-                         quality_score, broker_order_id, was_watchlisted=False, days_on_watchlist=0):
-        new_row = pd.DataFrame([{
-            'ticker': ticker,
-            'side': side,
-            'quantity': quantity,
-            'order_type': order_type,
-            'limit_price': limit_price,
-            'filled_price': filled_price,
-            'submitted_at': submitted_at,
-            'signal_type': signal_type,
-            'portfolio_value': portfolio_value,
-            'cash_before': cash_before,
-            'award': award,
-            'quality_score': quality_score,
-            'broker_order_id': broker_order_id,
-            'was_watchlisted': was_watchlisted,
-            'days_on_watchlist': days_on_watchlist
-        }])
-        if self.order_log_df.empty:
-            self.order_log_df = new_row
-        else:
-            self.order_log_df = pd.concat([self.order_log_df, new_row], ignore_index=True)
 
     # Position metadata operations
     def upsert_position_metadata(self, ticker, entry_date, entry_signal, entry_score,
-                                 highest_price, profit_level, level_1_lock_price,
-                                 level_2_lock_price, entry_price=None, kill_switch_active=False,
-                                 peak_price=None):
+                                  highest_price, profit_level, level_1_lock_price,
+                                  level_2_lock_price, entry_price=None,
+                                  kill_switch_active=False, peak_price=None):
         self.position_metadata[ticker] = {
             'entry_date': entry_date,
             'entry_signal': entry_signal,
             'entry_score': entry_score,
             'highest_price': float(highest_price) if highest_price else 0,
-            'local_max': float(highest_price) if highest_price else 0,
             'profit_level': profit_level,
             'level_1_lock_price': float(level_1_lock_price) if level_1_lock_price else None,
-            'tier1_lock_price': float(level_1_lock_price) if level_1_lock_price else None,
             'level_2_lock_price': float(level_2_lock_price) if level_2_lock_price else None,
             'entry_price': float(entry_price) if entry_price else None,
             'kill_switch_active': kill_switch_active,
