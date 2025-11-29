@@ -8,6 +8,7 @@ Features:
 - Connection retry with exponential backoff
 - Health check endpoint
 - Rotation state persistence
+- Dashboard settings (bot pause control)
 """
 
 import os
@@ -316,6 +317,17 @@ class Database:
                 );
             """)
 
+            # Dashboard settings table (for bot pause control)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS dashboard_settings (
+                    id INTEGER PRIMARY KEY DEFAULT 1,
+                    bot_paused BOOLEAN DEFAULT FALSE,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT single_settings_row CHECK (id = 1)
+                );
+                INSERT INTO dashboard_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+            """)
+
             conn.commit()
             print("[DATABASE] Tables created/verified successfully")
 
@@ -325,6 +337,58 @@ class Database:
         finally:
             cursor.close()
             self.return_connection(conn)
+
+    # =========================================================================
+    # DASHBOARD SETTINGS METHODS
+    # =========================================================================
+
+    def get_bot_paused(self):
+        """
+        Check if bot is paused via dashboard
+
+        Returns:
+            bool: True if paused, False otherwise
+        """
+        def _get():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT bot_paused FROM dashboard_settings WHERE id = 1")
+                row = cursor.fetchone()
+                cursor.close()
+                return row[0] if row else False
+            finally:
+                self.return_connection(conn)
+
+        try:
+            return self._retry_operation(_get)
+        except Exception as e:
+            print(f"[DATABASE] Error checking bot_paused: {e}")
+            return False  # Default to running if DB fails
+
+    def set_bot_paused(self, paused):
+        """
+        Set bot paused state from dashboard
+
+        Args:
+            paused: Boolean - True to pause, False to resume
+        """
+        def _set():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE dashboard_settings 
+                    SET bot_paused = %s, updated_at = CURRENT_TIMESTAMP 
+                    WHERE id = 1
+                """, (paused,))
+                conn.commit()
+                cursor.close()
+                print(f"[DATABASE] Bot paused state set to: {paused}")
+            finally:
+                self.return_connection(conn)
+
+        self._retry_operation(_set)
 
     # =========================================================================
     # ROTATION STATE METHODS
@@ -480,6 +544,7 @@ class InMemoryDatabase:
         }
         self.cooldowns = {}
         self.blacklist = {}
+        self.dashboard_settings = {'bot_paused': False}
 
         print("[MEMORY DB] DataFrame-based in-memory database initialized")
 
@@ -495,6 +560,18 @@ class InMemoryDatabase:
     def health_check(self):
         """In-memory database is always healthy"""
         return True
+
+    # =========================================================================
+    # DASHBOARD SETTINGS METHODS
+    # =========================================================================
+
+    def get_bot_paused(self):
+        """Check if bot is paused (always False in backtesting)"""
+        return self.dashboard_settings.get('bot_paused', False)
+
+    def set_bot_paused(self, paused):
+        """Set bot paused state"""
+        self.dashboard_settings['bot_paused'] = paused
 
     # =========================================================================
     # ROTATION STATE METHODS
@@ -546,31 +623,9 @@ class InMemoryDatabase:
             return []
 
         df = self.closed_trades_df[self.closed_trades_df['entry_signal'] == signal_name]
-        df = df.sort_values('exit_date', ascending=False)
         if lookback:
-            df = df.head(lookback)
+            df = df.tail(lookback)
         return df.to_dict('records')
-
-    def get_trades_by_date(self, target_date):
-        if self.closed_trades_df.empty:
-            return []
-
-        df = self.closed_trades_df[self.closed_trades_df['exit_date'].dt.date == target_date]
-        return df.to_dict('records')
-
-    def get_all_trades_summary(self):
-        if self.closed_trades_df.empty:
-            return {'total_trades': 0, 'total_wins': 0, 'total_realized': 0.0}
-
-        total_trades = len(self.closed_trades_df)
-        total_wins = (self.closed_trades_df['pnl_dollars'] > 0).sum()
-        total_realized = self.closed_trades_df['pnl_dollars'].sum()
-
-        return {
-            'total_trades': total_trades,
-            'total_wins': int(total_wins),
-            'total_realized': float(total_realized)
-        }
 
     # Order log operations
     def insert_order_log(self, ticker, side, quantity, order_type, limit_price, filled_price,
@@ -581,12 +636,12 @@ class InMemoryDatabase:
             'side': side,
             'quantity': quantity,
             'order_type': order_type,
-            'limit_price': float(limit_price) if limit_price else None,
-            'filled_price': float(filled_price) if filled_price else None,
+            'limit_price': limit_price,
+            'filled_price': filled_price,
             'submitted_at': submitted_at,
             'signal_type': signal_type,
-            'portfolio_value': float(portfolio_value),
-            'cash_before': float(cash_before),
+            'portfolio_value': portfolio_value,
+            'cash_before': cash_before,
             'award': award,
             'quality_score': quality_score,
             'broker_order_id': broker_order_id,
@@ -598,128 +653,11 @@ class InMemoryDatabase:
         else:
             self.order_log_df = pd.concat([self.order_log_df, new_row], ignore_index=True)
 
-    def get_order_log(self, ticker=None, limit=None):
-        if self.order_log_df.empty:
-            return []
-
-        df = self.order_log_df
-        if ticker:
-            df = df[df['ticker'] == ticker]
-
-        df = df.sort_values('submitted_at', ascending=False)
-        if limit:
-            df = df.head(limit)
-        return df.to_dict('records')
-
-    # Daily metrics operations
-    def upsert_daily_metrics(self, date, portfolio_value, cash_balance, num_positions,
-                             num_trades, realized_pnl, unrealized_pnl, win_rate,
-                             spy_close, market_regime):
-        self.daily_metrics_df = self.daily_metrics_df[self.daily_metrics_df['date'] != date]
-
-        new_row = pd.DataFrame([{
-            'date': date,
-            'portfolio_value': float(portfolio_value),
-            'cash_balance': float(cash_balance),
-            'num_positions': num_positions,
-            'num_trades': num_trades,
-            'realized_pnl': float(realized_pnl),
-            'unrealized_pnl': float(unrealized_pnl),
-            'win_rate': float(win_rate),
-            'spy_close': float(spy_close) if spy_close else None,
-            'market_regime': market_regime
-        }])
-        if self.daily_metrics_df.empty:
-            self.daily_metrics_df = new_row
-        else:
-            self.daily_metrics_df = pd.concat([self.daily_metrics_df, new_row], ignore_index=True)
-
-    def get_daily_metrics(self, date):
-        if self.daily_metrics_df.empty:
-            return None
-
-        df = self.daily_metrics_df[self.daily_metrics_df['date'] == date]
-        if df.empty:
-            return None
-        return df.iloc[0].to_dict()
-
-    def get_all_daily_metrics(self):
-        if self.daily_metrics_df.empty:
-            return []
-        return self.daily_metrics_df.sort_values('date', ascending=False).to_dict('records')
-
-    # Signal performance operations
-    def upsert_signal_performance(self, signal_name, total_trades, wins, win_rate,
-                                  total_pnl, avg_pnl):
-        self.signal_performance_df = self.signal_performance_df[
-            self.signal_performance_df['signal_name'] != signal_name
-        ]
-
-        new_row = pd.DataFrame([{
-            'signal_name': signal_name,
-            'total_trades': total_trades,
-            'wins': wins,
-            'win_rate': float(win_rate),
-            'total_pnl': float(total_pnl),
-            'avg_pnl': float(avg_pnl),
-            'last_updated': datetime.now()
-        }])
-        if self.signal_performance_df.empty:
-            self.signal_performance_df = new_row
-        else:
-            self.signal_performance_df = pd.concat([self.signal_performance_df, new_row], ignore_index=True)
-
-    def get_signal_performance(self, signal_name):
-        if self.signal_performance_df.empty:
-            return None
-
-        df = self.signal_performance_df[self.signal_performance_df['signal_name'] == signal_name]
-        if df.empty:
-            return None
-        return df.iloc[0].to_dict()
-
-    def get_all_signal_performance(self):
-        if self.signal_performance_df.empty:
-            return []
-        return self.signal_performance_df.to_dict('records')
-
-    # Ticker operations
-    def get_tickers_by_strategy(self, strategy_name):
-        if self.tickers_df.empty:
-            return []
-
-        df = self.tickers_df[
-            (self.tickers_df['strategies'].apply(lambda x: strategy_name in x if isinstance(x, list) else False)) &
-            (self.tickers_df['is_blacklisted'] == False)
-        ]
-        return df['ticker'].tolist()
-
-    def insert_ticker(self, ticker, name, strategies):
-        self.tickers_df = self.tickers_df[self.tickers_df['ticker'] != ticker]
-
-        new_row = pd.DataFrame([{
-            'ticker': ticker,
-            'name': name,
-            'strategies': strategies.copy() if isinstance(strategies, list) else [],
-            'is_blacklisted': False
-        }])
-        self.tickers_df = pd.concat([self.tickers_df, new_row], ignore_index=True)
-
-    def get_all_tickers(self):
-        if self.tickers_df.empty:
-            return {}
-        return {row['ticker']: {'name': row['name'], 'strategies': row['strategies'],
-                                'is_blacklisted': row['is_blacklisted']}
-                for _, row in self.tickers_df.iterrows()}
-
     # Position metadata operations
     def upsert_position_metadata(self, ticker, entry_date, entry_signal, entry_score,
-                                 highest_price, profit_level=0,
-                                 level_1_lock_price=None, level_2_lock_price=None,
-                                 was_watchlisted=False, confirmation_date=None,
-                                 days_to_confirmation=0, entry_price=None,
-                                 kill_switch_active=False, peak_price=None):
-        """Save position metadata with all fields"""
+                                 highest_price, profit_level, level_1_lock_price,
+                                 level_2_lock_price, entry_price=None, kill_switch_active=False,
+                                 peak_price=None):
         self.position_metadata[ticker] = {
             'entry_date': entry_date,
             'entry_signal': entry_signal,
@@ -730,9 +668,6 @@ class InMemoryDatabase:
             'level_1_lock_price': float(level_1_lock_price) if level_1_lock_price else None,
             'tier1_lock_price': float(level_1_lock_price) if level_1_lock_price else None,
             'level_2_lock_price': float(level_2_lock_price) if level_2_lock_price else None,
-            'was_watchlisted': was_watchlisted,
-            'confirmation_date': confirmation_date,
-            'days_to_confirmation': days_to_confirmation,
             'entry_price': float(entry_price) if entry_price else None,
             'kill_switch_active': kill_switch_active,
             'peak_price': float(peak_price) if peak_price else None

@@ -361,10 +361,18 @@ class SwingTradeStrategy(Strategy):
         execution_tracker = account_email_notifications.ExecutionTracker()
         summary = reset_summary()
 
-        # Check if paused (shouldn't happen but safety check)
+        # Check if paused by circuit breaker (shouldn't happen but safety check)
         if not Config.BACKTESTING and self.failure_tracker.is_paused:
-            print("[PAUSED] Bot is paused. Skipping iteration.")
+            print("[PAUSED] Bot is paused by circuit breaker. Skipping iteration.")
             return
+
+        # Check dashboard pause (user-controlled via dashboard)
+        if not Config.BACKTESTING:
+            from database import get_database
+            db = get_database()
+            if db.get_bot_paused():
+                print("[DASHBOARD] Bot paused by user via dashboard. Skipping iteration.")
+                return
 
         try:
             # === MARKET OPEN CHECK (Live Only) ===
