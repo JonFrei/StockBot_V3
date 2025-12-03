@@ -540,6 +540,10 @@ class SwingTradeStrategy(Strategy):
                     for position in positions:
                         ticker = position.symbol
                         qty = int(position.quantity)
+
+                        if ticker in account_broker_data.SKIP_SYMBOLS:
+                            continue
+
                         if qty > 0:
                             try:
                                 entry_price = account_broker_data.get_broker_entry_price(position, self, ticker)
