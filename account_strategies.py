@@ -254,6 +254,80 @@ def sync_positions_with_broker(strategy, current_date, position_monitor):
     return result
 
 
+def update_end_of_day_metrics(strategy, current_date, regime_result):
+    """Update daily_metrics and signal_performance tables at end of iteration"""
+    try:
+        from database import get_database
+        from collections import defaultdict
+
+        db = get_database()
+
+        # Gather daily metrics data
+        portfolio_value = strategy.portfolio_value
+        cash_balance = strategy.get_cash()
+        positions = strategy.get_positions()
+        num_positions = len(positions)
+
+        # Calculate unrealized P&L
+        unrealized_pnl = 0
+        for pos in positions:
+            if hasattr(pos, 'unrealized_pl'):
+                unrealized_pnl += float(pos.unrealized_pl or 0)
+
+        # Get today's trades and calculate realized P&L
+        closed_trades = strategy.profit_tracker.get_closed_trades()
+        today_trades = [t for t in closed_trades if
+                        t['exit_date'].date() == current_date.date()] if closed_trades else []
+        num_trades = len(today_trades)
+        realized_pnl = sum(t['pnl_dollars'] for t in today_trades)
+
+        # Calculate overall win rate
+        if closed_trades:
+            winners = [t for t in closed_trades if t['pnl_dollars'] > 0]
+            win_rate = (len(winners) / len(closed_trades)) * 100
+        else:
+            win_rate = 0
+
+        # Get SPY close and regime
+        spy_close = regime_result.get('spy_close', 0) if regime_result else 0
+        market_regime = regime_result.get('action', 'unknown') if regime_result else 'unknown'
+
+        # Save daily metrics
+        db.save_daily_metrics(
+            date=current_date.date(),
+            portfolio_value=portfolio_value,
+            cash_balance=cash_balance,
+            num_positions=num_positions,
+            num_trades=num_trades,
+            realized_pnl=realized_pnl,
+            unrealized_pnl=unrealized_pnl,
+            win_rate=win_rate,
+            spy_close=spy_close,
+            market_regime=market_regime
+        )
+
+        # Update signal performance
+        if closed_trades:
+            signal_stats = defaultdict(lambda: {'trades': 0, 'wins': 0, 'pnl': 0})
+            for trade in closed_trades:
+                signal = trade['entry_signal']
+                signal_stats[signal]['trades'] += 1
+                signal_stats[signal]['pnl'] += trade['pnl_dollars']
+                if trade['pnl_dollars'] > 0:
+                    signal_stats[signal]['wins'] += 1
+
+            for signal_name, stats in signal_stats.items():
+                db.update_signal_performance(
+                    signal_name=signal_name,
+                    total_trades=stats['trades'],
+                    wins=stats['wins'],
+                    total_pnl=stats['pnl']
+                )
+
+    except Exception as e:
+        print(f"[METRICS] Error updating end-of-day metrics: {e}")
+
+
 def enter_paused_state(strategy, failure_tracker, execution_tracker=None):
     """
     Enter paused state after circuit breaker triggers.
@@ -592,6 +666,7 @@ class SwingTradeStrategy(Strategy):
                     if not Config.BACKTESTING:
                         account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
 
+                    update_end_of_day_metrics(self, current_date, regime_result)
                     save_state_safe(self)
                     return
 
@@ -609,6 +684,7 @@ class SwingTradeStrategy(Strategy):
                     if not Config.BACKTESTING:
                         account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
 
+                    update_end_of_day_metrics(self, current_date, regime_result)
                     save_state_safe(self)
                     return
 
@@ -679,6 +755,8 @@ class SwingTradeStrategy(Strategy):
                     summary.print_summary()
                     if not Config.BACKTESTING:
                         account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
+
+                    update_end_of_day_metrics(self, current_date, regime_result)
                     save_state_safe(self)
                     return
 
@@ -755,6 +833,8 @@ class SwingTradeStrategy(Strategy):
                 summary.print_summary()
                 if not Config.BACKTESTING:
                     account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
+
+                update_end_of_day_metrics(self, current_date, regime_result)
                 save_state_safe(self)
                 return
 
@@ -769,6 +849,8 @@ class SwingTradeStrategy(Strategy):
 
                     execution_tracker.complete('SUCCESS')
                     summary.print_summary()
+
+                    update_end_of_day_metrics(self, current_date, regime_result)
                     save_state_safe(self)
                     return
 
@@ -780,6 +862,8 @@ class SwingTradeStrategy(Strategy):
 
                     execution_tracker.complete('SUCCESS')
                     summary.print_summary()
+
+                    update_end_of_day_metrics(self, current_date, regime_result)
                     save_state_safe(self)
                     return
 
@@ -811,6 +895,8 @@ class SwingTradeStrategy(Strategy):
 
                     execution_tracker.complete('SUCCESS')
                     summary.print_summary()
+
+                    update_end_of_day_metrics(self, current_date, regime_result)
                     save_state_safe(self)
                     return
 
@@ -888,6 +974,8 @@ class SwingTradeStrategy(Strategy):
 
             if not Config.BACKTESTING:
                 account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
+
+                update_end_of_day_metrics(self, current_date, regime_result)
                 save_state_safe(self)
 
         except Exception as e:

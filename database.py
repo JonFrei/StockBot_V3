@@ -21,7 +21,6 @@ import json
 from config import Config
 import pandas as pd
 
-
 # Retry configuration
 DB_RETRY_ATTEMPTS = 3
 DB_RETRY_DELAY_SECONDS = 2
@@ -321,10 +320,9 @@ class Database:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS dashboard_settings (
                     key VARCHAR(50) PRIMARY KEY,
-                    value VARCHAR(255) NOT NULL,
+                    value TEXT,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
-                INSERT INTO dashboard_settings (key, value) VALUES ('bot_paused', '0') ON CONFLICT (key) DO NOTHING;
             """)
 
             conn.commit()
@@ -348,6 +346,7 @@ class Database:
         Returns:
             bool: True if paused, False otherwise
         """
+
         def _get():
             conn = self.get_connection()
             try:
@@ -355,7 +354,6 @@ class Database:
                 cursor.execute("SELECT value FROM dashboard_settings WHERE key = 'bot_paused'")
                 row = cursor.fetchone()
                 cursor.close()
-                # '1' = paused, '0' = not paused
                 return row[0] == '1' if row else False
             finally:
                 self.return_connection(conn)
@@ -373,6 +371,7 @@ class Database:
         Args:
             paused: Boolean - True to pause, False to resume
         """
+
         def _set():
             conn = self.get_connection()
             try:
@@ -402,6 +401,7 @@ class Database:
         Returns:
             Setting value or default
         """
+
         def _get():
             conn = self.get_connection()
             try:
@@ -427,6 +427,7 @@ class Database:
             key: Setting key
             value: Setting value (will be converted to string)
         """
+
         def _set():
             conn = self.get_connection()
             try:
@@ -454,6 +455,7 @@ class Database:
         Args:
             ticker_states: Dict of {ticker: state_dict} from StockRotator
         """
+
         def _save():
             conn = self.get_connection()
             try:
@@ -509,6 +511,7 @@ class Database:
         Returns:
             Dict of {ticker: state_dict}
         """
+
         def _load():
             conn = self.get_connection()
             try:
@@ -553,6 +556,53 @@ class Database:
         if self.connection_pool:
             self.connection_pool.closeall()
             print("[DATABASE] Connection pool closed")
+
+    # =========================================================================
+    # DAILY METRICS METHODS
+    # =========================================================================
+
+    def save_daily_metrics(self, date, portfolio_value, cash_balance, num_positions,
+                           num_trades, realized_pnl, unrealized_pnl, win_rate,
+                           spy_close, market_regime):
+        """Save daily metrics to DataFrame"""
+        new_row = pd.DataFrame([{
+            'date': date,
+            'portfolio_value': portfolio_value,
+            'cash_balance': cash_balance,
+            'num_positions': num_positions,
+            'num_trades': num_trades,
+            'realized_pnl': realized_pnl,
+            'unrealized_pnl': unrealized_pnl,
+            'win_rate': win_rate,
+            'spy_close': spy_close,
+            'market_regime': market_regime
+        }])
+        # Remove existing entry for this date if exists
+        if not self.daily_metrics_df.empty:
+            self.daily_metrics_df = self.daily_metrics_df[self.daily_metrics_df['date'] != date]
+        self.daily_metrics_df = pd.concat([self.daily_metrics_df, new_row], ignore_index=True)
+
+    def update_signal_performance(self, signal_name, total_trades, wins, total_pnl):
+        """Update signal performance in DataFrame"""
+        win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+        avg_pnl = total_pnl / total_trades if total_trades > 0 else 0
+
+        # Remove existing entry if exists
+        if not self.signal_performance_df.empty:
+            self.signal_performance_df = self.signal_performance_df[
+                self.signal_performance_df['signal_name'] != signal_name
+                ]
+
+        new_row = pd.DataFrame([{
+            'signal_name': signal_name,
+            'total_trades': total_trades,
+            'wins': wins,
+            'win_rate': win_rate,
+            'total_pnl': total_pnl,
+            'avg_pnl': avg_pnl,
+            'last_updated': datetime.now()
+        }])
+        self.signal_performance_df = pd.concat([self.signal_performance_df, new_row], ignore_index=True)
 
 
 # =============================================================================
@@ -624,7 +674,24 @@ class InMemoryDatabase:
 
     def set_bot_paused(self, paused):
         """Set bot paused state"""
-        self.dashboard_settings['bot_paused'] = '1' if paused else '0'
+
+        def _set():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                value = '1' if paused else '0'
+                cursor.execute("""
+                    INSERT INTO dashboard_settings (key, value, updated_at)
+                    VALUES ('bot_paused', %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (key) DO UPDATE SET value = %s, updated_at = CURRENT_TIMESTAMP
+                """, (value, value))
+                conn.commit()
+                cursor.close()
+                print(f"[DATABASE] Bot paused state set to: {paused}")
+            finally:
+                self.return_connection(conn)
+
+        self._retry_operation(_set)
 
     def get_dashboard_setting(self, key, default=None):
         """Get a dashboard setting by key"""
@@ -682,9 +749,9 @@ class InMemoryDatabase:
 
     # Position metadata operations
     def upsert_position_metadata(self, ticker, entry_date, entry_signal, entry_score,
-                                  highest_price, profit_level, level_1_lock_price,
-                                  level_2_lock_price, entry_price=None,
-                                  kill_switch_active=False, peak_price=None):
+                                 highest_price, profit_level, level_1_lock_price,
+                                 level_2_lock_price, entry_price=None,
+                                 kill_switch_active=False, peak_price=None):
         self.position_metadata[ticker] = {
             'entry_date': entry_date,
             'entry_signal': entry_signal,
