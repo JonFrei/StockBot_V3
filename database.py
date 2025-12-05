@@ -8,7 +8,11 @@ Features:
 - Connection retry with exponential backoff
 - Health check endpoint
 - Rotation state persistence
-- Dashboard settings (bot pause control) - KEY-VALUE SCHEMA
+- Dashboard settings (bot pause control)
+- Position metadata persistence
+- Bot state persistence (regime detector state)
+- Daily metrics tracking
+- Signal performance tracking
 """
 
 import os
@@ -177,7 +181,7 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_closed_trades_signal_confirmation ON closed_trades(entry_signal, was_watchlisted);
             """)
 
-            # Position metadata table with new columns
+            # Position metadata table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS position_metadata (
                     ticker VARCHAR(10) PRIMARY KEY,
@@ -235,31 +239,6 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_rotation_state_updated ON rotation_state(updated_at);
             """)
 
-            # Cooldowns table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS cooldowns (
-                    ticker VARCHAR(10) PRIMARY KEY,
-                    last_buy_date TIMESTAMP NOT NULL,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-            """)
-
-            # Blacklist table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS blacklist (
-                    ticker VARCHAR(10),
-                    strategy VARCHAR(50),
-                    blacklist_type VARCHAR(20) NOT NULL,
-                    expiry_date TIMESTAMP,
-                    consecutive_losses INTEGER DEFAULT 0,
-                    reason VARCHAR(200),
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (ticker, strategy)
-                );
-                CREATE INDEX IF NOT EXISTS idx_blacklist_strategy ON blacklist(strategy);
-                CREATE INDEX IF NOT EXISTS idx_blacklist_type ON blacklist(blacklist_type);
-            """)
-
             # Order log table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS order_log (
@@ -292,15 +271,16 @@ class Database:
                     date DATE PRIMARY KEY,
                     portfolio_value DECIMAL(12, 2),
                     cash_balance DECIMAL(12, 2),
-                    num_positions INTEGER,
-                    num_trades INTEGER,
-                    realized_pnl DECIMAL(12, 2),
-                    unrealized_pnl DECIMAL(12, 2),
-                    win_rate DECIMAL(5, 2),
+                    num_positions INTEGER DEFAULT 0,
+                    num_trades INTEGER DEFAULT 0,
+                    realized_pnl DECIMAL(12, 2) DEFAULT 0,
+                    unrealized_pnl DECIMAL(12, 2) DEFAULT 0,
+                    win_rate DECIMAL(5, 2) DEFAULT 0,
                     spy_close DECIMAL(10, 2),
                     market_regime VARCHAR(50),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE INDEX IF NOT EXISTS idx_daily_metrics_date ON daily_metrics(date);
             """)
 
             # Signal performance table
@@ -316,13 +296,15 @@ class Database:
                 );
             """)
 
-            # Dashboard settings table (KEY-VALUE SCHEMA for flexibility)
+            # Dashboard settings table (for bot pause control)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS dashboard_settings (
-                    key VARCHAR(50) PRIMARY KEY,
-                    value TEXT,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    id INTEGER PRIMARY KEY DEFAULT 1,
+                    bot_paused BOOLEAN DEFAULT FALSE,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT single_settings_row CHECK (id = 1)
                 );
+                INSERT INTO dashboard_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
             """)
 
             conn.commit()
@@ -336,7 +318,7 @@ class Database:
             self.return_connection(conn)
 
     # =========================================================================
-    # DASHBOARD SETTINGS METHODS (KEY-VALUE SCHEMA)
+    # DASHBOARD SETTINGS METHODS
     # =========================================================================
 
     def get_bot_paused(self):
@@ -351,10 +333,10 @@ class Database:
             conn = self.get_connection()
             try:
                 cursor = conn.cursor()
-                cursor.execute("SELECT value FROM dashboard_settings WHERE key = 'bot_paused'")
+                cursor.execute("SELECT bot_paused FROM dashboard_settings WHERE id = 1")
                 row = cursor.fetchone()
                 cursor.close()
-                return row[0] == '1' if row else False
+                return row[0] if row else False
             finally:
                 self.return_connection(conn)
 
@@ -376,12 +358,11 @@ class Database:
             conn = self.get_connection()
             try:
                 cursor = conn.cursor()
-                value = '1' if paused else '0'
                 cursor.execute("""
-                    INSERT INTO dashboard_settings (key, value, updated_at)
-                    VALUES ('bot_paused', %s, CURRENT_TIMESTAMP)
-                    ON CONFLICT (key) DO UPDATE SET value = %s, updated_at = CURRENT_TIMESTAMP
-                """, (value, value))
+                    UPDATE dashboard_settings 
+                    SET bot_paused = %s, updated_at = CURRENT_TIMESTAMP 
+                    WHERE id = 1
+                """, (paused,))
                 conn.commit()
                 cursor.close()
                 print(f"[DATABASE] Bot paused state set to: {paused}")
@@ -390,59 +371,278 @@ class Database:
 
         self._retry_operation(_set)
 
-    def get_dashboard_setting(self, key, default=None):
-        """
-        Get a dashboard setting by key
+    # =========================================================================
+    # POSITION METADATA METHODS
+    # =========================================================================
 
-        Args:
-            key: Setting key
-            default: Default value if not found
+    def upsert_position_metadata(self, ticker, entry_date, entry_signal, entry_score,
+                                 highest_price, profit_level, level_1_lock_price,
+                                 level_2_lock_price, entry_price=None, kill_switch_active=False,
+                                 peak_price=None):
+        """Insert or update position metadata"""
 
-        Returns:
-            Setting value or default
-        """
+        def _upsert():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO position_metadata 
+                    (ticker, entry_date, entry_signal, entry_score, highest_price, 
+                     profit_level, level_1_lock_price, level_2_lock_price,
+                     entry_price, kill_switch_active, peak_price, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (ticker) DO UPDATE SET
+                        entry_date = EXCLUDED.entry_date,
+                        entry_signal = EXCLUDED.entry_signal,
+                        entry_score = EXCLUDED.entry_score,
+                        highest_price = EXCLUDED.highest_price,
+                        profit_level = EXCLUDED.profit_level,
+                        level_1_lock_price = EXCLUDED.level_1_lock_price,
+                        level_2_lock_price = EXCLUDED.level_2_lock_price,
+                        entry_price = EXCLUDED.entry_price,
+                        kill_switch_active = EXCLUDED.kill_switch_active,
+                        peak_price = EXCLUDED.peak_price,
+                        updated_at = CURRENT_TIMESTAMP
+                """, (
+                    ticker, entry_date, entry_signal, entry_score, highest_price,
+                    profit_level, level_1_lock_price, level_2_lock_price,
+                    entry_price, kill_switch_active, peak_price
+                ))
+                conn.commit()
+            finally:
+                cursor.close()
+                self.return_connection(conn)
+
+        try:
+            self._retry_operation(_upsert)
+        except Exception as e:
+            print(f"[DATABASE] Error upserting position metadata: {e}")
+            raise
+
+    def get_all_position_metadata(self):
+        """Get all position metadata as dict"""
 
         def _get():
             conn = self.get_connection()
             try:
                 cursor = conn.cursor()
-                cursor.execute("SELECT value FROM dashboard_settings WHERE key = %s", (key,))
-                row = cursor.fetchone()
-                cursor.close()
-                return row[0] if row else default
+                cursor.execute("""
+                    SELECT ticker, entry_date, entry_signal, entry_score, highest_price, 
+                           profit_level, level_1_lock_price, level_2_lock_price,
+                           entry_price, kill_switch_active, peak_price
+                    FROM position_metadata
+                """)
+
+                result = {}
+                for row in cursor.fetchall():
+                    result[row[0]] = {
+                        'entry_date': row[1],
+                        'entry_signal': row[2],
+                        'entry_score': row[3],
+                        'highest_price': float(row[4]) if row[4] else 0,
+                        'local_max': float(row[4]) if row[4] else 0,
+                        'profit_level': row[5] if row[5] else 0,
+                        'level_1_lock_price': float(row[6]) if row[6] else None,
+                        'tier1_lock_price': float(row[6]) if row[6] else None,
+                        'level_2_lock_price': float(row[7]) if row[7] else None,
+                        'entry_price': float(row[8]) if row[8] else None,
+                        'kill_switch_active': row[9] if row[9] is not None else False,
+                        'peak_price': float(row[10]) if row[10] else None
+                    }
+                return result
             finally:
+                cursor.close()
                 self.return_connection(conn)
 
         try:
             return self._retry_operation(_get)
         except Exception as e:
-            print(f"[DATABASE] Error getting setting {key}: {e}")
-            return default
+            print(f"[DATABASE] Error getting position metadata: {e}")
+            return {}
 
-    def set_dashboard_setting(self, key, value):
-        """
-        Set a dashboard setting
+    def clear_all_position_metadata(self):
+        """Clear all position metadata"""
 
-        Args:
-            key: Setting key
-            value: Setting value (will be converted to string)
-        """
+        def _clear():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM position_metadata")
+                conn.commit()
+            finally:
+                cursor.close()
+                self.return_connection(conn)
 
-        def _set():
+        try:
+            self._retry_operation(_clear)
+        except Exception as e:
+            print(f"[DATABASE] Error clearing position metadata: {e}")
+            raise
+
+    # =========================================================================
+    # BOT STATE METHODS
+    # =========================================================================
+
+    def update_bot_state(self, portfolio_peak, drawdown_protection_active,
+                         drawdown_protection_end_date, last_rotation_date,
+                         last_rotation_week, rotation_count, ticker_awards):
+        """Update bot state (regime detector state, rotation metadata)"""
+
+        def _update():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+
+                # Convert ticker_awards to JSON string if it's a dict
+                awards_json = json.dumps(ticker_awards) if isinstance(ticker_awards, dict) else ticker_awards
+
+                cursor.execute("""
+                    UPDATE bot_state SET
+                        portfolio_peak = %s,
+                        drawdown_protection_active = %s,
+                        drawdown_protection_end_date = %s,
+                        last_rotation_date = %s,
+                        last_rotation_week = %s,
+                        rotation_count = %s,
+                        ticker_awards = %s,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = 1
+                """, (
+                    portfolio_peak, drawdown_protection_active, drawdown_protection_end_date,
+                    last_rotation_date, last_rotation_week, rotation_count, awards_json
+                ))
+                conn.commit()
+            finally:
+                cursor.close()
+                self.return_connection(conn)
+
+        try:
+            self._retry_operation(_update)
+        except Exception as e:
+            print(f"[DATABASE] Error updating bot state: {e}")
+            raise
+
+    def get_bot_state(self):
+        """Get bot state (regime detector state, rotation metadata)"""
+
+        def _get():
             conn = self.get_connection()
             try:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    INSERT INTO dashboard_settings (key, value, updated_at)
-                    VALUES (%s, %s, CURRENT_TIMESTAMP)
-                    ON CONFLICT (key) DO UPDATE SET value = %s, updated_at = CURRENT_TIMESTAMP
-                """, (key, str(value), str(value)))
-                conn.commit()
-                cursor.close()
+                    SELECT portfolio_peak, drawdown_protection_active, drawdown_protection_end_date,
+                           last_rotation_date, last_rotation_week, rotation_count, ticker_awards
+                    FROM bot_state WHERE id = 1
+                """)
+                row = cursor.fetchone()
+
+                if row:
+                    ticker_awards = row[6]
+                    # Parse JSON if it's a string
+                    if isinstance(ticker_awards, str):
+                        try:
+                            ticker_awards = json.loads(ticker_awards)
+                        except:
+                            ticker_awards = {}
+
+                    return {
+                        'portfolio_peak': float(row[0]) if row[0] else None,
+                        'drawdown_protection_active': row[1] or False,
+                        'drawdown_protection_end_date': row[2],
+                        'last_rotation_date': row[3],
+                        'last_rotation_week': row[4],
+                        'rotation_count': row[5] or 0,
+                        'ticker_awards': ticker_awards or {}
+                    }
+                return None
             finally:
+                cursor.close()
                 self.return_connection(conn)
 
-        self._retry_operation(_set)
+        try:
+            return self._retry_operation(_get)
+        except Exception as e:
+            print(f"[DATABASE] Error getting bot state: {e}")
+            return None
+
+    # =========================================================================
+    # DAILY METRICS METHODS
+    # =========================================================================
+
+    def save_daily_metrics(self, date, portfolio_value, cash_balance, num_positions,
+                           num_trades, realized_pnl, unrealized_pnl, win_rate,
+                           spy_close, market_regime):
+        """Save daily metrics snapshot"""
+
+        def _save():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO daily_metrics 
+                    (date, portfolio_value, cash_balance, num_positions, num_trades,
+                     realized_pnl, unrealized_pnl, win_rate, spy_close, market_regime)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (date) DO UPDATE SET
+                        portfolio_value = EXCLUDED.portfolio_value,
+                        cash_balance = EXCLUDED.cash_balance,
+                        num_positions = EXCLUDED.num_positions,
+                        num_trades = EXCLUDED.num_trades,
+                        realized_pnl = EXCLUDED.realized_pnl,
+                        unrealized_pnl = EXCLUDED.unrealized_pnl,
+                        win_rate = EXCLUDED.win_rate,
+                        spy_close = EXCLUDED.spy_close,
+                        market_regime = EXCLUDED.market_regime
+                """, (
+                    date, portfolio_value, cash_balance, num_positions, num_trades,
+                    realized_pnl, unrealized_pnl, win_rate, spy_close, market_regime
+                ))
+                conn.commit()
+            finally:
+                cursor.close()
+                self.return_connection(conn)
+
+        try:
+            self._retry_operation(_save)
+        except Exception as e:
+            print(f"[DATABASE] Error saving daily metrics: {e}")
+
+    # =========================================================================
+    # SIGNAL PERFORMANCE METHODS
+    # =========================================================================
+
+    def update_signal_performance(self, signal_name, total_trades, wins, total_pnl):
+        """Update signal performance stats"""
+
+        def _update():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+
+                win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+                avg_pnl = total_pnl / total_trades if total_trades > 0 else 0
+
+                cursor.execute("""
+                    INSERT INTO signal_performance 
+                    (signal_name, total_trades, wins, win_rate, total_pnl, avg_pnl, last_updated)
+                    VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (signal_name) DO UPDATE SET
+                        total_trades = EXCLUDED.total_trades,
+                        wins = EXCLUDED.wins,
+                        win_rate = EXCLUDED.win_rate,
+                        total_pnl = EXCLUDED.total_pnl,
+                        avg_pnl = EXCLUDED.avg_pnl,
+                        last_updated = CURRENT_TIMESTAMP
+                """, (signal_name, total_trades, wins, win_rate, total_pnl, avg_pnl))
+                conn.commit()
+            finally:
+                cursor.close()
+                self.return_connection(conn)
+
+        try:
+            self._retry_operation(_update)
+        except Exception as e:
+            print(f"[DATABASE] Error updating signal performance: {e}")
 
     # =========================================================================
     # ROTATION STATE METHODS
@@ -557,53 +757,6 @@ class Database:
             self.connection_pool.closeall()
             print("[DATABASE] Connection pool closed")
 
-    # =========================================================================
-    # DAILY METRICS METHODS
-    # =========================================================================
-
-    def save_daily_metrics(self, date, portfolio_value, cash_balance, num_positions,
-                           num_trades, realized_pnl, unrealized_pnl, win_rate,
-                           spy_close, market_regime):
-        """Save daily metrics to DataFrame"""
-        new_row = pd.DataFrame([{
-            'date': date,
-            'portfolio_value': portfolio_value,
-            'cash_balance': cash_balance,
-            'num_positions': num_positions,
-            'num_trades': num_trades,
-            'realized_pnl': realized_pnl,
-            'unrealized_pnl': unrealized_pnl,
-            'win_rate': win_rate,
-            'spy_close': spy_close,
-            'market_regime': market_regime
-        }])
-        # Remove existing entry for this date if exists
-        if not self.daily_metrics_df.empty:
-            self.daily_metrics_df = self.daily_metrics_df[self.daily_metrics_df['date'] != date]
-        self.daily_metrics_df = pd.concat([self.daily_metrics_df, new_row], ignore_index=True)
-
-    def update_signal_performance(self, signal_name, total_trades, wins, total_pnl):
-        """Update signal performance in DataFrame"""
-        win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
-        avg_pnl = total_pnl / total_trades if total_trades > 0 else 0
-
-        # Remove existing entry if exists
-        if not self.signal_performance_df.empty:
-            self.signal_performance_df = self.signal_performance_df[
-                self.signal_performance_df['signal_name'] != signal_name
-                ]
-
-        new_row = pd.DataFrame([{
-            'signal_name': signal_name,
-            'total_trades': total_trades,
-            'wins': wins,
-            'win_rate': win_rate,
-            'total_pnl': total_pnl,
-            'avg_pnl': avg_pnl,
-            'last_updated': datetime.now()
-        }])
-        self.signal_performance_df = pd.concat([self.signal_performance_df, new_row], ignore_index=True)
-
 
 # =============================================================================
 # IN-MEMORY DATABASE FOR BACKTESTING
@@ -645,9 +798,7 @@ class InMemoryDatabase:
             'rotation_count': 0,
             'ticker_awards': {}
         }
-        self.cooldowns = {}
-        self.blacklist = {}
-        self.dashboard_settings = {'bot_paused': '0'}
+        self.dashboard_settings = {'bot_paused': False}
 
         print("[MEMORY DB] DataFrame-based in-memory database initialized")
 
@@ -665,41 +816,16 @@ class InMemoryDatabase:
         return True
 
     # =========================================================================
-    # DASHBOARD SETTINGS METHODS (KEY-VALUE SCHEMA)
+    # DASHBOARD SETTINGS METHODS
     # =========================================================================
 
     def get_bot_paused(self):
         """Check if bot is paused (always False in backtesting)"""
-        return self.dashboard_settings.get('bot_paused', '0') == '1'
+        return self.dashboard_settings.get('bot_paused', False)
 
     def set_bot_paused(self, paused):
         """Set bot paused state"""
-
-        def _set():
-            conn = self.get_connection()
-            try:
-                cursor = conn.cursor()
-                value = '1' if paused else '0'
-                cursor.execute("""
-                    INSERT INTO dashboard_settings (key, value, updated_at)
-                    VALUES ('bot_paused', %s, CURRENT_TIMESTAMP)
-                    ON CONFLICT (key) DO UPDATE SET value = %s, updated_at = CURRENT_TIMESTAMP
-                """, (value, value))
-                conn.commit()
-                cursor.close()
-                print(f"[DATABASE] Bot paused state set to: {paused}")
-            finally:
-                self.return_connection(conn)
-
-        self._retry_operation(_set)
-
-    def get_dashboard_setting(self, key, default=None):
-        """Get a dashboard setting by key"""
-        return self.dashboard_settings.get(key, default)
-
-    def set_dashboard_setting(self, key, value):
-        """Set a dashboard setting"""
-        self.dashboard_settings[key] = str(value)
+        self.dashboard_settings['bot_paused'] = paused
 
     # =========================================================================
     # ROTATION STATE METHODS
@@ -713,7 +839,10 @@ class InMemoryDatabase:
         """Load rotation states from memory"""
         return self.rotation_state.copy()
 
-    # Trade operations
+    # =========================================================================
+    # TRADE OPERATIONS
+    # =========================================================================
+
     def insert_trade(self, ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct,
                      entry_signal, entry_score, exit_signal, exit_date, was_watchlisted=False,
                      confirmation_date=None, days_to_confirmation=0):
@@ -744,21 +873,63 @@ class InMemoryDatabase:
         df = self.closed_trades_df.sort_values('exit_date', ascending=False)
         if limit:
             df = df.head(limit)
-
         return df.to_dict('records')
 
-    # Position metadata operations
+    def get_trades_by_signal(self, signal_name, lookback=None):
+        if self.closed_trades_df.empty:
+            return []
+
+        df = self.closed_trades_df[self.closed_trades_df['entry_signal'] == signal_name]
+        if lookback:
+            df = df.tail(lookback)
+        return df.to_dict('records')
+
+    # =========================================================================
+    # ORDER LOG OPERATIONS
+    # =========================================================================
+
+    def insert_order_log(self, ticker, side, quantity, order_type, limit_price, filled_price,
+                         submitted_at, signal_type, portfolio_value, cash_before, award,
+                         quality_score, broker_order_id, was_watchlisted=False, days_on_watchlist=0):
+        new_row = pd.DataFrame([{
+            'ticker': ticker,
+            'side': side,
+            'quantity': quantity,
+            'order_type': order_type,
+            'limit_price': limit_price,
+            'filled_price': filled_price,
+            'submitted_at': submitted_at,
+            'signal_type': signal_type,
+            'portfolio_value': portfolio_value,
+            'cash_before': cash_before,
+            'award': award,
+            'quality_score': quality_score,
+            'broker_order_id': broker_order_id,
+            'was_watchlisted': was_watchlisted,
+            'days_on_watchlist': days_on_watchlist
+        }])
+        if self.order_log_df.empty:
+            self.order_log_df = new_row
+        else:
+            self.order_log_df = pd.concat([self.order_log_df, new_row], ignore_index=True)
+
+    # =========================================================================
+    # POSITION METADATA OPERATIONS
+    # =========================================================================
+
     def upsert_position_metadata(self, ticker, entry_date, entry_signal, entry_score,
                                  highest_price, profit_level, level_1_lock_price,
-                                 level_2_lock_price, entry_price=None,
-                                 kill_switch_active=False, peak_price=None):
+                                 level_2_lock_price, entry_price=None, kill_switch_active=False,
+                                 peak_price=None):
         self.position_metadata[ticker] = {
             'entry_date': entry_date,
             'entry_signal': entry_signal,
             'entry_score': entry_score,
             'highest_price': float(highest_price) if highest_price else 0,
+            'local_max': float(highest_price) if highest_price else 0,
             'profit_level': profit_level,
             'level_1_lock_price': float(level_1_lock_price) if level_1_lock_price else None,
+            'tier1_lock_price': float(level_1_lock_price) if level_1_lock_price else None,
             'level_2_lock_price': float(level_2_lock_price) if level_2_lock_price else None,
             'entry_price': float(entry_price) if entry_price else None,
             'kill_switch_active': kill_switch_active,
@@ -768,14 +939,13 @@ class InMemoryDatabase:
     def get_all_position_metadata(self):
         return self.position_metadata.copy()
 
-    def delete_position_metadata(self, ticker):
-        if ticker in self.position_metadata:
-            del self.position_metadata[ticker]
-
     def clear_all_position_metadata(self):
         self.position_metadata = {}
 
-    # Bot state operations
+    # =========================================================================
+    # BOT STATE OPERATIONS
+    # =========================================================================
+
     def update_bot_state(self, portfolio_peak, drawdown_protection_active,
                          drawdown_protection_end_date, last_rotation_date,
                          last_rotation_week, rotation_count, ticker_awards):
@@ -792,49 +962,71 @@ class InMemoryDatabase:
     def get_bot_state(self):
         return self.bot_state.copy()
 
-    # Cooldown operations
-    def upsert_cooldown(self, ticker, last_buy_date):
-        self.cooldowns[ticker] = last_buy_date
+    # =========================================================================
+    # DAILY METRICS OPERATIONS
+    # =========================================================================
 
-    def get_all_cooldowns(self):
-        return self.cooldowns.copy()
+    def save_daily_metrics(self, date, portfolio_value, cash_balance, num_positions,
+                           num_trades, realized_pnl, unrealized_pnl, win_rate,
+                           spy_close, market_regime):
+        """Save daily metrics to DataFrame"""
+        new_row = pd.DataFrame([{
+            'date': date,
+            'portfolio_value': portfolio_value,
+            'cash_balance': cash_balance,
+            'num_positions': num_positions,
+            'num_trades': num_trades,
+            'realized_pnl': realized_pnl,
+            'unrealized_pnl': unrealized_pnl,
+            'win_rate': win_rate,
+            'spy_close': spy_close,
+            'market_regime': market_regime
+        }])
 
-    def delete_cooldown(self, ticker):
-        if ticker in self.cooldowns:
-            del self.cooldowns[ticker]
+        # Remove existing row for this date if exists
+        if not self.daily_metrics_df.empty:
+            self.daily_metrics_df = self.daily_metrics_df[self.daily_metrics_df['date'] != date]
 
-    def clear_all_cooldowns(self):
-        self.cooldowns = {}
+        if self.daily_metrics_df.empty:
+            self.daily_metrics_df = new_row
+        else:
+            self.daily_metrics_df = pd.concat([self.daily_metrics_df, new_row], ignore_index=True)
 
-    # Blacklist operations
-    def upsert_blacklist(self, ticker, strategy, blacklist_type, expiry_date, reason):
-        key = (ticker, strategy)
-        self.blacklist[key] = {
-            'blacklist_type': blacklist_type,
-            'expiry_date': expiry_date,
-            'reason': reason
-        }
+    # =========================================================================
+    # SIGNAL PERFORMANCE OPERATIONS
+    # =========================================================================
 
-    def get_blacklist_by_strategy(self, strategy):
-        result = {}
-        for (ticker, strat), data in self.blacklist.items():
-            if strat == strategy:
-                result[ticker] = data.copy()
-        return result
+    def update_signal_performance(self, signal_name, total_trades, wins, total_pnl):
+        """Update signal performance in DataFrame"""
+        win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+        avg_pnl = total_pnl / total_trades if total_trades > 0 else 0
 
-    def get_all_blacklist(self):
-        return self.blacklist.copy()
+        new_row = pd.DataFrame([{
+            'signal_name': signal_name,
+            'total_trades': total_trades,
+            'wins': wins,
+            'win_rate': win_rate,
+            'total_pnl': total_pnl,
+            'avg_pnl': avg_pnl,
+            'last_updated': datetime.now()
+        }])
 
-    def delete_blacklist(self, ticker, strategy):
-        key = (ticker, strategy)
-        if key in self.blacklist:
-            del self.blacklist[key]
+        # Remove existing row for this signal if exists
+        if not self.signal_performance_df.empty:
+            self.signal_performance_df = self.signal_performance_df[
+                self.signal_performance_df['signal_name'] != signal_name
+                ]
 
-    def clear_all_blacklist(self):
-        self.blacklist = {}
+        if self.signal_performance_df.empty:
+            self.signal_performance_df = new_row
+        else:
+            self.signal_performance_df = pd.concat([self.signal_performance_df, new_row], ignore_index=True)
 
 
-# Global database instance
+# =============================================================================
+# GLOBAL DATABASE INSTANCE
+# =============================================================================
+
 _db_instance = None
 
 
