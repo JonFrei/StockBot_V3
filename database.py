@@ -299,12 +299,10 @@ class Database:
             # Dashboard settings table (for bot pause control)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS dashboard_settings (
-                    id INTEGER PRIMARY KEY DEFAULT 1,
-                    bot_paused BOOLEAN DEFAULT FALSE,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    CONSTRAINT single_settings_row CHECK (id = 1)
+                    key VARCHAR(50) PRIMARY KEY,
+                    value VARCHAR(200),
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
-                INSERT INTO dashboard_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
             """)
 
             conn.commit()
@@ -820,12 +818,46 @@ class InMemoryDatabase:
     # =========================================================================
 
     def get_bot_paused(self):
-        """Check if bot is paused (always False in backtesting)"""
-        return self.dashboard_settings.get('bot_paused', False)
+        """Check if bot is paused via dashboard"""
+
+        def _get():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT value FROM dashboard_settings WHERE key = 'bot_paused'")
+                row = cursor.fetchone()
+                cursor.close()
+                # '1' = paused, '0' or None = not paused
+                return row[0] == '1' if row else False
+            finally:
+                self.return_connection(conn)
+
+        try:
+            return self._retry_operation(_get)
+        except Exception as e:
+            print(f"[DATABASE] Error checking bot_paused: {e}")
+            return False
 
     def set_bot_paused(self, paused):
-        """Set bot paused state"""
-        self.dashboard_settings['bot_paused'] = paused
+        """Set bot paused state from dashboard"""
+
+        def _set():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                value = '1' if paused else '0'
+                cursor.execute("""
+                    INSERT INTO dashboard_settings (key, value, updated_at)
+                    VALUES ('bot_paused', %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (key) DO UPDATE SET value = %s, updated_at = CURRENT_TIMESTAMP
+                """, (value, value))
+                conn.commit()
+                cursor.close()
+                print(f"[DATABASE] Bot paused state set to: {paused}")
+            finally:
+                self.return_connection(conn)
+
+        self._retry_operation(_set)
 
     # =========================================================================
     # ROTATION STATE METHODS
