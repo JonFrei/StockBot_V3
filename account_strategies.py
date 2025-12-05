@@ -788,6 +788,13 @@ class SwingTradeStrategy(Strategy):
                     rotation_mult = self.stock_rotator.get_multiplier(ticker)
 
                     data = all_stock_data[ticker]['indicators']
+
+                    if not Config.BACKTESTING:
+                        price = data.get('close', 0)
+                        rsi = data.get('rsi', 0)
+                        sma200 = data.get('sma200', 0)
+                        print(f"[SCAN] {ticker:<6} | ${price:>8.2f} | RSI: {rsi:>5.1f} | SMA200: ${sma200:>8.2f}")
+
                     vol_metrics = data.get('volatility_metrics', {})
                     if not vol_metrics.get('allow_trading', True):
                         continue
