@@ -22,7 +22,7 @@ from server_recovery import save_state_safe, load_state_safe
 from account_drawdown_protection import MarketRegimeDetector
 from account_recovery_mode import RecoveryModeManager
 import account_broker_data
-from account_profit_tracking import get_summary, reset_summary
+from account_profit_tracking import get_summary, reset_summary, update_end_of_day_metrics
 
 from lumibot.brokers import Alpaca
 import time
@@ -415,6 +415,7 @@ class SwingTradeStrategy(Strategy):
         self.stock_rotator.profit_tracker = self.profit_tracker
 
         self.order_logger = account_profit_tracking.OrderLogger(self)
+        self._current_regime_result = None  # Store for metrics tracking
 
         print(f"\n{'=' * 60}")
         print(f"🤖 SwingTradeStrategy Initialized")
@@ -589,6 +590,8 @@ class SwingTradeStrategy(Strategy):
                     recovery_mode_active=recovery_mode_active
                 )
 
+                self._current_regime_result = regime_result  # Store for metrics
+
                 # Handle recovery mode override for display
                 if regime_result['action'] == 'recovery_override':
                     regime_result['position_size_multiplier'] = recovery_result['position_multiplier']
@@ -666,7 +669,7 @@ class SwingTradeStrategy(Strategy):
                     if not Config.BACKTESTING:
                         account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
 
-                    update_end_of_day_metrics(self, current_date, regime_result)
+                    update_end_of_day_metrics(self, current_date, self._current_regime_result)
                     save_state_safe(self)
                     return
 
@@ -684,7 +687,7 @@ class SwingTradeStrategy(Strategy):
                     if not Config.BACKTESTING:
                         account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
 
-                    update_end_of_day_metrics(self, current_date, regime_result)
+                    update_end_of_day_metrics(self, current_date, self._current_regime_result)
                     save_state_safe(self)
                     return
 
@@ -756,7 +759,7 @@ class SwingTradeStrategy(Strategy):
                     if not Config.BACKTESTING:
                         account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
 
-                    update_end_of_day_metrics(self, current_date, regime_result)
+                    update_end_of_day_metrics(self, current_date, self._current_regime_result)
                     save_state_safe(self)
                     return
 
@@ -834,7 +837,7 @@ class SwingTradeStrategy(Strategy):
                 if not Config.BACKTESTING:
                     account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
 
-                update_end_of_day_metrics(self, current_date, regime_result)
+                update_end_of_day_metrics(self, current_date, self._current_regime_result)
                 save_state_safe(self)
                 return
 
@@ -850,7 +853,7 @@ class SwingTradeStrategy(Strategy):
                     execution_tracker.complete('SUCCESS')
                     summary.print_summary()
 
-                    update_end_of_day_metrics(self, current_date, regime_result)
+                    update_end_of_day_metrics(self, current_date, self._current_regime_result)
                     save_state_safe(self)
                     return
 
@@ -863,7 +866,7 @@ class SwingTradeStrategy(Strategy):
                     execution_tracker.complete('SUCCESS')
                     summary.print_summary()
 
-                    update_end_of_day_metrics(self, current_date, regime_result)
+                    update_end_of_day_metrics(self, current_date, self._current_regime_result)
                     save_state_safe(self)
                     return
 
@@ -896,7 +899,7 @@ class SwingTradeStrategy(Strategy):
                     execution_tracker.complete('SUCCESS')
                     summary.print_summary()
 
-                    update_end_of_day_metrics(self, current_date, regime_result)
+                    update_end_of_day_metrics(self, current_date, self._current_regime_result)
                     save_state_safe(self)
                     return
 
@@ -975,7 +978,7 @@ class SwingTradeStrategy(Strategy):
             if not Config.BACKTESTING:
                 account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
 
-                update_end_of_day_metrics(self, current_date, regime_result)
+                update_end_of_day_metrics(self, current_date, self._current_regime_result)
                 save_state_safe(self)
 
         except Exception as e:

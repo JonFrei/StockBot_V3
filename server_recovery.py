@@ -7,6 +7,7 @@ Features:
 - In-memory fallback window (30 min) before halt
 - Alert email on persistent database failure
 - Integrated rotation state persistence
+- Regime detector state persistence (drawdown, crisis lockouts)
 
 Note: Position reconciliation has been moved to account_strategies.py
       and runs at the start of each trading iteration.
@@ -16,6 +17,7 @@ from datetime import datetime, timedelta
 from database import get_database
 from config import Config
 import time
+import json
 
 # Fallback configuration
 FALLBACK_WINDOW_MINUTES = 30
@@ -133,7 +135,8 @@ def _send_database_failure_alert(error, fallback_state):
                 <li>Check Railway logs for connection errors</li>
             </ul>
 
-            <p><em>Bot is running with in-memory state. Positions are safe but state won't persist if bot restarts.</em></p>
+            <p><em>Bot is running with in-memory state.
+            Positions are safe but state won't persist if bot restarts.</em></p>
         </body>
         </html>
         """
@@ -186,49 +189,91 @@ class StatePersistence:
                 _send_database_failure_alert(result, self.fallback_state)
 
     def _save_state_postgres(self, strategy):
-        """Save to PostgreSQL"""
-        conn = self.db.get_connection()
-        try:
-            cursor = conn.cursor()
+        """Save to PostgreSQL using database class methods"""
 
-            # Clear and save position metadata
-            cursor.execute("DELETE FROM position_metadata")
-            for ticker, meta in strategy.position_monitor.positions_metadata.items():
-                cursor.execute("""
-                    INSERT INTO position_metadata 
-                    (ticker, entry_date, entry_signal, entry_score, highest_price, 
-                     profit_level, level_1_lock_price, level_2_lock_price,
-                     entry_price, kill_switch_active, peak_price)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, (
-                    ticker,
-                    meta['entry_date'],
-                    meta['entry_signal'],
-                    meta.get('entry_score', 0),
-                    meta.get('highest_price', meta.get('local_max', 0)),
-                    meta.get('profit_level', 0),
-                    meta.get('level_1_lock_price') or meta.get('tier1_lock_price'),
-                    meta.get('level_2_lock_price'),
-                    meta.get('entry_price'),
-                    meta.get('kill_switch_active', False),
-                    meta.get('peak_price')
-                ))
+        # Save position metadata using class methods
+        self.db.clear_all_position_metadata()
+        for ticker, meta in strategy.position_monitor.positions_metadata.items():
+            self.db.upsert_position_metadata(
+                ticker=ticker,
+                entry_date=meta['entry_date'],
+                entry_signal=meta['entry_signal'],
+                entry_score=meta.get('entry_score', 0),
+                highest_price=meta.get('highest_price', meta.get('local_max', 0)),
+                profit_level=meta.get('profit_level', 0),
+                level_1_lock_price=meta.get('level_1_lock_price') or meta.get('tier1_lock_price'),
+                level_2_lock_price=meta.get('level_2_lock_price'),
+                entry_price=meta.get('entry_price'),
+                kill_switch_active=meta.get('kill_switch_active', False),
+                peak_price=meta.get('peak_price')
+            )
 
-            conn.commit()
+        # Save rotation state
+        if hasattr(strategy, 'stock_rotator') and strategy.stock_rotator:
+            rotation_states = strategy.stock_rotator.get_state_for_persistence()
+            self.db.save_rotation_state(rotation_states)
 
-            # Save rotation state
-            if hasattr(strategy, 'stock_rotator') and strategy.stock_rotator:
-                rotation_states = strategy.stock_rotator.get_state_for_persistence()
-                self.db.save_rotation_state(rotation_states)
+        # Save bot state (regime detector state, rotation metadata)
+        self._save_bot_state(strategy)
 
-            print(f"[DATABASE] State saved at {datetime.now().strftime('%H:%M:%S')}")
+        print(f"[DATABASE] State saved at {datetime.now().strftime('%H:%M:%S')}")
 
-        except Exception as e:
-            conn.rollback()
-            raise
-        finally:
-            cursor.close()
-            self.db.return_connection(conn)
+    def _save_bot_state(self, strategy):
+        """Save bot_state table with regime detector and rotation info"""
+
+        # Gather regime detector state
+        regime_state = {}
+        if hasattr(strategy, 'regime_detector') and strategy.regime_detector:
+            rd = strategy.regime_detector
+            regime_state = {
+                'portfolio_drawdown_active': rd.portfolio_drawdown_active,
+                'portfolio_drawdown_trigger_date': rd.portfolio_drawdown_trigger_date.isoformat() if rd.portfolio_drawdown_trigger_date else None,
+                'portfolio_drawdown_lockout_end': rd.portfolio_drawdown_lockout_end.isoformat() if rd.portfolio_drawdown_lockout_end else None,
+                'crisis_active': rd.crisis_active,
+                'crisis_trigger_date': rd.crisis_trigger_date.isoformat() if rd.crisis_trigger_date else None,
+                'crisis_trigger_reason': rd.crisis_trigger_reason,
+                'lockout_end_date': rd.lockout_end_date.isoformat() if rd.lockout_end_date else None,
+                'portfolio_value_history': [
+                    {'date': p['date'].isoformat(), 'value': p['value']}
+                    for p in rd.portfolio_value_history[-35:]  # Keep last 35 days
+                ] if rd.portfolio_value_history else []
+            }
+
+        # Gather rotation metadata
+        rotation_metadata = {}
+        if hasattr(strategy, 'stock_rotator') and strategy.stock_rotator:
+            sr = strategy.stock_rotator
+            rotation_metadata = {
+                'last_rotation_date': sr.last_rotation_date.isoformat() if sr.last_rotation_date else None,
+                'rotation_count': sr.rotation_count
+            }
+
+        # Calculate portfolio peak from regime detector history
+        portfolio_peak = None
+        if regime_state.get('portfolio_value_history'):
+            values = [p['value'] for p in regime_state['portfolio_value_history']]
+            portfolio_peak = max(values) if values else None
+
+        # Get current week for rotation tracking
+        current_date = strategy.get_datetime() if hasattr(strategy, 'get_datetime') else datetime.now()
+        last_rotation_week = current_date.strftime('%Y-W%W') if current_date else None
+
+        # Combine all state into ticker_awards JSON field (repurposed for extended state)
+        extended_state = {
+            'regime_detector': regime_state,
+            'rotation_metadata': rotation_metadata
+        }
+
+        # Update bot_state table
+        self.db.update_bot_state(
+            portfolio_peak=portfolio_peak,
+            drawdown_protection_active=regime_state.get('portfolio_drawdown_active', False),
+            drawdown_protection_end_date=_parse_datetime(regime_state.get('portfolio_drawdown_lockout_end')),
+            last_rotation_date=_parse_datetime(rotation_metadata.get('last_rotation_date')),
+            last_rotation_week=last_rotation_week,
+            rotation_count=rotation_metadata.get('rotation_count', 0),
+            ticker_awards=extended_state  # Store extended state as JSON
+        )
 
     def _save_state_memory(self, strategy):
         """Save to in-memory database"""
@@ -274,58 +319,108 @@ class StatePersistence:
             return False
 
     def _load_state_postgres(self, strategy):
-        """Load from PostgreSQL"""
-        conn = self.db.get_connection()
-        try:
-            cursor = conn.cursor()
+        """Load from PostgreSQL using database class methods"""
 
-            print(f"\n{'=' * 80}")
-            print(f"🔄 LOADING STATE FROM DATABASE")
-            print(f"{'=' * 80}")
+        print(f"\n{'=' * 80}")
+        print(f"🔄 LOADING STATE FROM DATABASE")
+        print(f"{'=' * 80}")
 
-            # Load position metadata with new columns
-            cursor.execute("""
-                SELECT ticker, entry_date, entry_signal, entry_score, highest_price, 
-                       profit_level, level_1_lock_price, level_2_lock_price,
-                       entry_price, kill_switch_active, peak_price
-                FROM position_metadata
-            """)
-            positions = cursor.fetchall()
-            for pos in positions:
-                strategy.position_monitor.positions_metadata[pos[0]] = {
-                    'entry_date': pos[1],
-                    'entry_signal': pos[2],
-                    'entry_score': pos[3],
-                    'highest_price': float(pos[4]) if pos[4] else 0,
-                    'local_max': float(pos[4]) if pos[4] else 0,
-                    'profit_level': pos[5] if pos[5] else 0,
-                    'level_1_lock_price': float(pos[6]) if pos[6] else None,
-                    'tier1_lock_price': float(pos[6]) if pos[6] else None,
-                    'level_2_lock_price': float(pos[7]) if pos[7] else None,
-                    'entry_price': float(pos[8]) if pos[8] else None,
-                    'kill_switch_active': pos[9] if pos[9] is not None else False,
-                    'peak_price': float(pos[10]) if pos[10] else None
-                }
-            print(f"✅ Position Metadata: {len(positions)} position(s)")
+        # Load position metadata using class methods
+        positions = self.db.get_all_position_metadata()
+        strategy.position_monitor.positions_metadata = {}
+        for ticker, meta in positions.items():
+            strategy.position_monitor.positions_metadata[ticker] = {
+                'entry_date': meta['entry_date'],
+                'entry_signal': meta['entry_signal'],
+                'entry_score': meta.get('entry_score', 0),
+                'highest_price': meta.get('highest_price', 0),
+                'local_max': meta.get('highest_price', 0),
+                'profit_level': meta.get('profit_level', 0),
+                'level_1_lock_price': meta.get('level_1_lock_price'),
+                'tier1_lock_price': meta.get('level_1_lock_price'),
+                'level_2_lock_price': meta.get('level_2_lock_price'),
+                'entry_price': meta.get('entry_price'),
+                'kill_switch_active': meta.get('kill_switch_active', False),
+                'peak_price': meta.get('peak_price')
+            }
+        print(f"✅ Position Metadata: {len(positions)} position(s)")
 
-            # Load rotation state
-            if hasattr(strategy, 'stock_rotator') and strategy.stock_rotator:
-                rotation_states = self.db.load_rotation_state()
-                if rotation_states:
-                    strategy.stock_rotator.load_state_from_persistence(rotation_states)
-                    print(f"✅ Rotation State: {len(rotation_states)} ticker(s)")
+        # Load rotation state
+        if hasattr(strategy, 'stock_rotator') and strategy.stock_rotator:
+            rotation_states = self.db.load_rotation_state()
+            if rotation_states:
+                strategy.stock_rotator.load_state_from_persistence(rotation_states)
+                print(f"✅ Rotation State: {len(rotation_states)} ticker(s)")
 
-            print(f"{'=' * 80}\n")
+        # Load bot state (regime detector state, rotation metadata)
+        self._load_bot_state(strategy)
 
-            cursor.close()
-            self.db.return_connection(conn)
+        print(f"{'=' * 80}\n")
+        return True
 
-            return True
+    def _load_bot_state(self, strategy):
+        """Load bot_state table and restore regime detector state"""
 
-        except Exception as e:
-            cursor.close()
-            self.db.return_connection(conn)
-            raise
+        bot_state = self.db.get_bot_state()
+        if not bot_state:
+            print(f"⚠️ No bot_state found - starting fresh")
+            return
+
+        # Extract extended state from ticker_awards JSON
+        extended_state = bot_state.get('ticker_awards', {})
+        if isinstance(extended_state, str):
+            try:
+                extended_state = json.loads(extended_state)
+            except:
+                extended_state = {}
+
+        regime_state = extended_state.get('regime_detector', {})
+        rotation_metadata = extended_state.get('rotation_metadata', {})
+
+        # Restore regime detector state
+        if hasattr(strategy, 'regime_detector') and strategy.regime_detector and regime_state:
+            rd = strategy.regime_detector
+
+            # Restore portfolio drawdown state
+            rd.portfolio_drawdown_active = regime_state.get('portfolio_drawdown_active', False)
+            rd.portfolio_drawdown_trigger_date = _parse_datetime(regime_state.get('portfolio_drawdown_trigger_date'))
+            rd.portfolio_drawdown_lockout_end = _parse_datetime(regime_state.get('portfolio_drawdown_lockout_end'))
+
+            # Restore crisis state
+            rd.crisis_active = regime_state.get('crisis_active', False)
+            rd.crisis_trigger_date = _parse_datetime(regime_state.get('crisis_trigger_date'))
+            rd.crisis_trigger_reason = regime_state.get('crisis_trigger_reason')
+            rd.lockout_end_date = _parse_datetime(regime_state.get('lockout_end_date'))
+
+            # Restore portfolio value history
+            history = regime_state.get('portfolio_value_history', [])
+            rd.portfolio_value_history = []
+            for entry in history:
+                try:
+                    rd.portfolio_value_history.append({
+                        'date': _parse_datetime(entry['date']),
+                        'value': entry['value']
+                    })
+                except:
+                    pass
+
+            status_parts = []
+            if rd.portfolio_drawdown_active:
+                status_parts.append(f"Portfolio Drawdown Active (until {rd.portfolio_drawdown_lockout_end})")
+            if rd.crisis_active:
+                status_parts.append(f"Crisis Active: {rd.crisis_trigger_reason}")
+            if rd.portfolio_value_history:
+                status_parts.append(f"{len(rd.portfolio_value_history)} days history")
+
+            status = ", ".join(status_parts) if status_parts else "Normal"
+            print(f"✅ Regime Detector: {status}")
+
+        # Restore rotation metadata
+        if hasattr(strategy, 'stock_rotator') and strategy.stock_rotator and rotation_metadata:
+            sr = strategy.stock_rotator
+            sr.last_rotation_date = _parse_datetime(rotation_metadata.get('last_rotation_date'))
+            sr.rotation_count = rotation_metadata.get('rotation_count', 0)
+            print(f"✅ Rotation Metadata: {sr.rotation_count} rotations, last: {sr.last_rotation_date}")
 
     def _load_state_memory(self, strategy):
         """Load from in-memory database"""
@@ -345,6 +440,18 @@ class StatePersistence:
 
         print(f"{'=' * 80}\n")
         return True
+
+
+def _parse_datetime(value):
+    """Parse datetime from string or return None"""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(value)
+    except:
+        return None
 
 
 def save_state_safe(strategy):

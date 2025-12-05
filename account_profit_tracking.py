@@ -1,14 +1,16 @@
 """
-Profit Tracking System - WITH ROTATION INTEGRATION AND ADD-ON SUPPORT
+Profit Tracking System - WITH ROTATION INTEGRATION, ADD-ON SUPPORT, AND METRICS
 
 MODIFICATIONS:
 - record_trade() now notifies stock_rotator of trade results
 - This enables real-time tier updates based on actual performance
-- NEW: DailySummary now tracks add-ons separately from new entries
-- NEW: OrderLogger supports is_addon flag
+- DailySummary tracks add-ons separately from new entries
+- OrderLogger supports is_addon flag
+- NEW: update_end_of_day_metrics() updates daily_metrics and signal_performance tables
 """
 
 from datetime import datetime
+from collections import defaultdict
 from database import get_database
 from config import Config
 
@@ -30,7 +32,7 @@ class DailySummary:
         self.recovery_signals = None
         self.exits = []
         self.entries = []
-        self.addons = []  # NEW: Track add-ons separately
+        self.addons = []  # Track add-ons separately
         self.profit_takes = []
         self.signals_found = []
         self.signals_skipped = []
@@ -62,7 +64,7 @@ class DailySummary:
             {'ticker': ticker, 'qty': qty, 'price': price, 'cost': cost, 'signal': signal, 'score': score})
 
     def add_addon(self, ticker, qty, price, cost, signal, score, existing_qty, new_total_exposure_pct):
-        """NEW: Track add-on to existing position"""
+        """Track add-on to existing position"""
         self.addons.append({
             'ticker': ticker,
             'qty': qty,
@@ -139,10 +141,10 @@ class DailySummary:
             print(
                 f"   🟢 BUY: {en['ticker']} x{en['qty']} @ ${en['price']:.2f} (${en['cost']:,.0f}) | {en['signal']} [{en['score']}]")
 
-        # NEW: Show add-ons
+        # Show add-ons
         for ad in self.addons:
             print(
-                f"   🔵 ADD: {ad['ticker']} +{ad['qty']} @ ${ad['price']:.2f} (${ad['cost']:,.0f}) | {ad['signal']} [{ad['score']}] | Now {ad['existing_qty']+ad['qty']} shares ({ad['new_total_exposure_pct']:.1f}%)")
+                f"   🔵 ADD: {ad['ticker']} +{ad['qty']} @ ${ad['price']:.2f} (${ad['cost']:,.0f}) | {ad['signal']} [{ad['score']}] | Now {ad['existing_qty'] + ad['qty']} shares ({ad['new_total_exposure_pct']:.1f}%)")
 
         if self.signals_found and not self.entries and not self.addons:
             tickers = [f"{s['ticker']}[{s['score']}]" for s in self.signals_found[:5]]
@@ -153,7 +155,8 @@ class DailySummary:
         for e in self.errors[:3]:
             print(f"   ❌ {e}")
 
-        if not any([self.profit_takes, self.exits, self.entries, self.addons, self.tier_changes, self.warnings, self.errors]):
+        if not any([self.profit_takes, self.exits, self.entries, self.addons, self.tier_changes, self.warnings,
+                    self.errors]):
             if self.regime_status not in ['stop_buying', 'exit_all', 'recovery_mode']:
                 print(f"   (No activity)")
             elif self.regime_status == 'recovery_mode':
@@ -180,6 +183,144 @@ def reset_summary():
         _summary = DailySummary()
     return _summary
 
+
+# =============================================================================
+# END OF DAY METRICS UPDATE
+# =============================================================================
+
+def update_end_of_day_metrics(strategy, current_date, regime_result=None):
+    """
+    Update daily_metrics and signal_performance tables at end of iteration.
+
+    Called from account_strategies.py after successful iteration completion.
+
+    Args:
+        strategy: SwingTradeStrategy instance
+        current_date: Current datetime
+        regime_result: Result from regime detector (optional, for SPY/regime data)
+    """
+    try:
+        _update_metrics_internal(strategy, current_date, regime_result)
+    except Exception as e:
+        print(f"[METRICS] Error updating end-of-day metrics: {e}")
+
+
+def _update_metrics_internal(strategy, current_date, regime_result):
+    """Internal implementation of metrics update"""
+
+    db = get_database()
+
+    # =================================================================
+    # GATHER DAILY METRICS DATA
+    # =================================================================
+
+    # Portfolio basics
+    portfolio_value = strategy.portfolio_value
+    cash_balance = strategy.get_cash()
+    positions = strategy.get_positions()
+    num_positions = len(positions)
+
+    # Calculate unrealized P&L from positions
+    unrealized_pnl = 0
+    for pos in positions:
+        try:
+            if hasattr(pos, 'unrealized_pl') and pos.unrealized_pl is not None:
+                unrealized_pnl += float(pos.unrealized_pl)
+        except:
+            pass
+
+    # Get closed trades for today and calculate realized P&L
+    closed_trades = []
+    if hasattr(strategy, 'profit_tracker'):
+        closed_trades = strategy.profit_tracker.get_closed_trades() or []
+
+    # Filter to today's trades
+    today_date = current_date.date() if hasattr(current_date, 'date') else current_date
+    today_trades = []
+    for t in closed_trades:
+        try:
+            exit_date = t.get('exit_date')
+            if exit_date:
+                trade_date = exit_date.date() if hasattr(exit_date, 'date') else exit_date
+                if trade_date == today_date:
+                    today_trades.append(t)
+        except:
+            pass
+
+    num_trades = len(today_trades)
+    realized_pnl = sum(t.get('pnl_dollars', 0) for t in today_trades)
+
+    # Calculate overall win rate from all closed trades
+    win_rate = 0
+    if closed_trades:
+        winners = [t for t in closed_trades if t.get('pnl_dollars', 0) > 0]
+        win_rate = (len(winners) / len(closed_trades)) * 100
+
+    # Get SPY close and regime from regime_result
+    spy_close = 0
+    market_regime = 'unknown'
+    if regime_result:
+        # Try to get SPY close from details
+        details = regime_result.get('details', {})
+        spy_close = details.get('spy_close', 0) or regime_result.get('spy_close', 0)
+        market_regime = regime_result.get('action', 'unknown')
+
+    # =================================================================
+    # SAVE DAILY METRICS
+    # =================================================================
+
+    try:
+        db.save_daily_metrics(
+            date=today_date,
+            portfolio_value=portfolio_value,
+            cash_balance=cash_balance,
+            num_positions=num_positions,
+            num_trades=num_trades,
+            realized_pnl=realized_pnl,
+            unrealized_pnl=unrealized_pnl,
+            win_rate=win_rate,
+            spy_close=spy_close,
+            market_regime=market_regime
+        )
+    except Exception as e:
+        print(f"[METRICS] Failed to save daily metrics: {e}")
+
+    # =================================================================
+    # UPDATE SIGNAL PERFORMANCE
+    # =================================================================
+
+    if closed_trades:
+        try:
+            # Aggregate stats by signal
+            signal_stats = defaultdict(lambda: {'trades': 0, 'wins': 0, 'pnl': 0.0})
+
+            for trade in closed_trades:
+                signal = trade.get('entry_signal', 'unknown')
+                if signal:
+                    signal_stats[signal]['trades'] += 1
+                    signal_stats[signal]['pnl'] += float(trade.get('pnl_dollars', 0))
+                    if trade.get('pnl_dollars', 0) > 0:
+                        signal_stats[signal]['wins'] += 1
+
+            # Update each signal's performance
+            for signal_name, stats in signal_stats.items():
+                try:
+                    db.update_signal_performance(
+                        signal_name=signal_name,
+                        total_trades=stats['trades'],
+                        wins=stats['wins'],
+                        total_pnl=stats['pnl']
+                    )
+                except Exception as e:
+                    print(f"[METRICS] Failed to update signal {signal_name}: {e}")
+
+        except Exception as e:
+            print(f"[METRICS] Failed to update signal performance: {e}")
+
+
+# =============================================================================
+# PROFIT TRACKER CLASS
+# =============================================================================
 
 class ProfitTracker:
     def __init__(self, strategy, stock_rotator=None):
@@ -293,159 +434,154 @@ class ProfitTracker:
         print(f"{'=' * 100}\n")
 
     def _display_overall_performance(self, closed_trades):
-        from collections import defaultdict
         total_trades = len(closed_trades)
         winners = [t for t in closed_trades if t['pnl_dollars'] > 0]
         losers = [t for t in closed_trades if t['pnl_dollars'] < 0]
         total_realized = sum(t['pnl_dollars'] for t in closed_trades)
         win_rate = (len(winners) / total_trades * 100) if total_trades > 0 else 0
-        avg_win = sum(t['pnl_dollars'] for t in winners) / len(winners) if winners else 0
-        avg_loss = sum(t['pnl_dollars'] for t in losers) / len(losers) if losers else 0
+
         gross_profit = sum(t['pnl_dollars'] for t in winners)
         gross_loss = abs(sum(t['pnl_dollars'] for t in losers))
-        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else float('inf') if gross_profit > 0 else 0
+        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else float('inf')
 
-        print(f"\n{'─' * 100}")
-        print(f"📈 OVERALL PERFORMANCE")
-        print(f"{'─' * 100}")
-        print(f"{'Total Trades':<25} {total_trades:>20}")
-        print(f"{'Win Rate':<25} {f'{win_rate:.1f}% ({len(winners)}/{total_trades})':>20}")
-        print(f"{'Avg Win':<25} {f'${avg_win:,.2f}':>20}")
-        print(f"{'Avg Loss':<25} {f'${avg_loss:,.2f}':>20}")
-        print(f"{'Total Realized P&L':<25} {f'${total_realized:+,.2f}':>20}")
-        print(f"{'Profit Factor':<25} {f'{profit_factor:.2f}':>20}")
+        avg_win = (sum(t['pnl_dollars'] for t in winners) / len(winners)) if winners else 0
+        avg_loss = (sum(t['pnl_dollars'] for t in losers) / len(losers)) if losers else 0
+        avg_win_pct = (sum(t['pnl_pct'] for t in winners) / len(winners)) if winners else 0
+        avg_loss_pct = (sum(t['pnl_pct'] for t in losers) / len(losers)) if losers else 0
+
+        print(f"\n{'OVERALL PERFORMANCE':^100}")
+        print(f"{'-' * 100}")
+        print(f"{'Total Trades':<35} {total_trades:>25}")
+        print(f"{'Winners':<35} {len(winners):>25}")
+        print(f"{'Losers':<35} {len(losers):>25}")
+        print(f"{'Win Rate':<35} {win_rate:>24.1f}%")
+        print(f"{'Total Realized P&L':<35} ${total_realized:>24,.2f}")
+        print(f"{'Profit Factor':<35} {profit_factor:>25.2f}")
+        print(f"{'Avg Win':<35} ${avg_win:>24,.2f} ({avg_win_pct:+.1f}%)")
+        print(f"{'Avg Loss':<35} ${avg_loss:>24,.2f} ({avg_loss_pct:+.1f}%)")
 
     def _display_signal_summary(self, closed_trades):
-        from collections import defaultdict
-        signal_stats = defaultdict(lambda: {'trades': 0, 'wins': 0, 'total_pnl': 0.0, 'win_pnl': 0.0, 'loss_pnl': 0.0})
-        for trade in closed_trades:
-            signal = trade['entry_signal']
-            pnl = trade['pnl_dollars']
+        signal_stats = defaultdict(lambda: {'trades': 0, 'wins': 0, 'pnl': 0, 'pnl_pct_sum': 0})
+        for t in closed_trades:
+            signal = t['entry_signal']
             signal_stats[signal]['trades'] += 1
-            signal_stats[signal]['total_pnl'] += pnl
-            if pnl > 0:
+            signal_stats[signal]['pnl'] += t['pnl_dollars']
+            signal_stats[signal]['pnl_pct_sum'] += t['pnl_pct']
+            if t['pnl_dollars'] > 0:
                 signal_stats[signal]['wins'] += 1
-                signal_stats[signal]['win_pnl'] += pnl
-            elif pnl < 0:
-                signal_stats[signal]['loss_pnl'] += pnl
 
-        print(f"\n{'─' * 100}")
-        print(f"📊 PERFORMANCE BY SIGNAL")
-        print(f"{'─' * 100}")
-        print(f"{'Signal':<25} {'Trades':>7} {'WR%':>8} {'Avg Win':>12} {'Avg Loss':>12} {'Total P&L':>14}")
-        print(f"{'─' * 100}")
+        print(f"\n{'SIGNAL PERFORMANCE':^100}")
+        print(f"{'-' * 100}")
+        print(f"{'Signal':<25} {'Trades':>10} {'Wins':>10} {'Win%':>10} {'Total P&L':>20} {'Avg P&L%':>15}")
+        print(f"{'-' * 100}")
 
-        for signal, stats in sorted(signal_stats.items(), key=lambda x: x[1]['total_pnl'], reverse=True):
-            trades = stats['trades']
-            wins = stats['wins']
-            losses = trades - wins
-            wr = (wins / trades * 100) if trades > 0 else 0
-            avg_win = (stats['win_pnl'] / wins) if wins > 0 else 0
-            avg_loss = (stats['loss_pnl'] / losses) if losses > 0 else 0
+        for signal, stats in sorted(signal_stats.items(), key=lambda x: x[1]['pnl'], reverse=True):
+            win_rate = (stats['wins'] / stats['trades'] * 100) if stats['trades'] > 0 else 0
+            avg_pnl_pct = stats['pnl_pct_sum'] / stats['trades'] if stats['trades'] > 0 else 0
             print(
-                f"{signal[:25]:<25} {trades:>7} {wr:>7.1f}% {f'${avg_win:,.2f}':>12} {f'${avg_loss:,.2f}':>12} {f'${stats['total_pnl']:+,.2f}':>14}")
+                f"{signal:<25} {stats['trades']:>10} {stats['wins']:>10} {win_rate:>9.1f}% ${stats['pnl']:>19,.2f} {avg_pnl_pct:>14.1f}%")
 
     def _display_exit_breakdown(self, closed_trades):
-        from collections import defaultdict
-        exit_stats = defaultdict(lambda: {'count': 0, 'wins': 0, 'total_pnl': 0.0})
-        for trade in closed_trades:
-            exit_type = trade.get('exit_signal', 'unknown')
-            pnl = trade['pnl_dollars']
-            exit_stats[exit_type]['count'] += 1
-            exit_stats[exit_type]['total_pnl'] += pnl
-            if pnl > 0:
-                exit_stats[exit_type]['wins'] += 1
+        exit_stats = defaultdict(lambda: {'count': 0, 'pnl': 0})
+        for t in closed_trades:
+            exit_reason = t['exit_signal']
+            exit_stats[exit_reason]['count'] += 1
+            exit_stats[exit_reason]['pnl'] += t['pnl_dollars']
 
-        total_trades = len(closed_trades)
-        print(f"\n{'─' * 100}")
-        print(f"🚪 EXIT BREAKDOWN")
-        print(f"{'─' * 100}")
-        print(f"{'Exit Type':<30} {'Count':>7} {'Freq%':>7} {'WR%':>8} {'Total P&L':>14}")
-        print(f"{'─' * 100}")
+        print(f"\n{'EXIT BREAKDOWN':^100}")
+        print(f"{'-' * 100}")
+        print(f"{'Exit Reason':<40} {'Count':>15} {'Total P&L':>20} {'Avg P&L':>15}")
+        print(f"{'-' * 100}")
 
-        for exit_type, stats in sorted(exit_stats.items(), key=lambda x: x[1]['count'], reverse=True):
-            count = stats['count']
-            freq_pct = (count / total_trades * 100) if total_trades > 0 else 0
-            wr = (stats['wins'] / count * 100) if count > 0 else 0
-            print(f"{exit_type[:30]:<30} {count:>7} {freq_pct:>6.1f}% {wr:>7.1f}% {f'${stats['total_pnl']:+,.2f}':>14}")
+        for reason, stats in sorted(exit_stats.items(), key=lambda x: x[1]['count'], reverse=True):
+            avg_pnl = stats['pnl'] / stats['count'] if stats['count'] > 0 else 0
+            print(f"{reason:<40} {stats['count']:>15} ${stats['pnl']:>19,.2f} ${avg_pnl:>14,.2f}")
 
     def _display_ticker_summary(self, closed_trades, stock_rotator=None):
-        from collections import defaultdict
-        ticker_stats = defaultdict(lambda: {'trades': 0, 'wins': 0, 'total_pnl': 0.0})
-        for trade in closed_trades:
-            ticker = trade['ticker']
-            pnl = trade['pnl_dollars']
+        ticker_stats = defaultdict(lambda: {'trades': 0, 'wins': 0, 'pnl': 0})
+        for t in closed_trades:
+            ticker = t['ticker']
             ticker_stats[ticker]['trades'] += 1
-            ticker_stats[ticker]['total_pnl'] += pnl
-            if pnl > 0:
+            ticker_stats[ticker]['pnl'] += t['pnl_dollars']
+            if t['pnl_dollars'] > 0:
                 ticker_stats[ticker]['wins'] += 1
 
-        print(f"\n{'─' * 100}")
-        print(f"📊 PERFORMANCE BY TICKER")
-        print(f"{'─' * 100}")
-        print(f"{'Ticker':<8} {'Tier':<12} {'Trades':>7} {'WR%':>8} {'Total P&L':>14}")
-        print(f"{'─' * 100}")
+        print(f"\n{'TOP/BOTTOM TICKERS':^100}")
+        print(f"{'-' * 100}")
 
-        for ticker, stats in sorted(ticker_stats.items(), key=lambda x: x[1]['total_pnl'], reverse=True):
-            trades = stats['trades']
-            wr = (stats['wins'] / trades * 100) if trades > 0 else 0
-            tier = stock_rotator.get_tier(ticker) if stock_rotator else 'active'
-            tier_icon = {'premium': '🥇', 'active': '🥈', 'probation': '⚠️', 'rehabilitation': '🔄', 'frozen': '❄️'}.get(tier, '🥈')
-            print(f"{ticker:<8} {tier_icon}{tier[:10]:<11} {trades:>7} {wr:>7.1f}% {f'${stats['total_pnl']:+,.2f}':>14}")
+        sorted_tickers = sorted(ticker_stats.items(), key=lambda x: x[1]['pnl'], reverse=True)
+
+        print("TOP 5:")
+        for ticker, stats in sorted_tickers[:5]:
+            win_rate = (stats['wins'] / stats['trades'] * 100) if stats['trades'] > 0 else 0
+            tier = stock_rotator.get_tier(ticker) if stock_rotator else 'N/A'
+            print(
+                f"   {ticker:<10} {stats['trades']:>3} trades | {win_rate:>5.1f}% WR | ${stats['pnl']:>10,.2f} | Tier: {tier}")
+
+        print("\nBOTTOM 5:")
+        for ticker, stats in sorted_tickers[-5:]:
+            win_rate = (stats['wins'] / stats['trades'] * 100) if stats['trades'] > 0 else 0
+            tier = stock_rotator.get_tier(ticker) if stock_rotator else 'N/A'
+            print(
+                f"   {ticker:<10} {stats['trades']:>3} trades | {win_rate:>5.1f}% WR | ${stats['pnl']:>10,.2f} | Tier: {tier}")
 
     def _display_last_100_trades(self, closed_trades):
-        print(f"\n{'─' * 100}")
-        print(f"📜 LAST 100 TRADES")
-        print(f"{'─' * 100}")
-        print(f"{'#':<4} {'Ticker':<8} {'P&L $':>12} {'P&L %':>8} {'Signal':<25} {'Exit':<25}")
-        print(f"{'─' * 100}")
+        last_100 = closed_trades[:100]
+        if len(last_100) < 10:
+            return
 
-        for i, trade in enumerate(closed_trades[:100], 1):
-            pnl = trade['pnl_dollars']
-            emoji = '✅' if pnl > 0 else '❌' if pnl < 0 else '➖'
-            print(
-                f"{i:<4} {emoji}{trade['ticker']:<7} {f'${pnl:+,.2f}':>12} {f'{trade['pnl_pct']:+.1f}%':>8} {trade['entry_signal'][:25]:<25} {trade.get('exit_signal', 'unknown')[:25]:<25}")
+        winners = [t for t in last_100 if t['pnl_dollars'] > 0]
+        total_pnl = sum(t['pnl_dollars'] for t in last_100)
+        win_rate = (len(winners) / len(last_100) * 100)
+
+        print(f"\n{'LAST 100 TRADES':^100}")
+        print(f"{'-' * 100}")
+        print(f"{'Trades':<35} {len(last_100):>25}")
+        print(f"{'Win Rate':<35} {win_rate:>24.1f}%")
+        print(f"{'Total P&L':<35} ${total_pnl:>24,.2f}")
 
     def _display_rotation_summary(self, stock_rotator):
-        print(f"\n{'─' * 100}")
-        print(f"🏆 STOCK ROTATION SUMMARY")
-        print(f"{'─' * 100}")
         if not stock_rotator:
-            print("   Not available")
             return
+
         stats = stock_rotator.get_statistics()
         dist = stats['tier_distribution']
-        print(f"{'Total Evaluations':<30} {stats['rotation_count']:>20}")
-        print(f"   🥇 Premium: {dist.get('premium', 0)} | "
-              f"🥈 Active: {dist.get('active', 0)} | "
-              f"⚠️ Probation: {dist.get('probation', 0)} | "
-              f"🔄 Rehab: {dist.get('rehabilitation', 0)} | "
-              f"❄️ Frozen: {dist.get('frozen', 0)}")
 
-        if stats.get('premium_stocks'):
-            print(f"   Premium: {', '.join(stats['premium_stocks'])}")
-        if stats.get('frozen_stocks'):
-            print(f"   Frozen: {', '.join(stats['frozen_stocks'])}")
+        print(f"\n{'ROTATION SUMMARY':^100}")
+        print(f"{'-' * 100}")
+        print(f"{'Rotation Count':<35} {stats['rotation_count']:>25}")
+        print(f"{'🥇 Premium':<35} {dist.get('premium', 0):>25}")
+        print(f"{'🥈 Active':<35} {dist.get('active', 0):>25}")
+        print(f"{'⚠️ Probation':<35} {dist.get('probation', 0):>25}")
+        print(f"{'🔄 Rehabilitation':<35} {dist.get('rehabilitation', 0):>25}")
+        print(f"{'❄️ Frozen':<35} {dist.get('frozen', 0):>25}")
+
+        if stats['premium_stocks']:
+            print(f"\nPremium Stocks: {', '.join(stats['premium_stocks'][:10])}")
+        if stats['frozen_stocks']:
+            print(f"Frozen Stocks: {', '.join(stats['frozen_stocks'][:10])}")
 
     def _display_safeguard_summary(self, regime_detector):
-        print(f"\n{'─' * 100}")
-        print(f"🛡️ MARKET SAFEGUARD SUMMARY")
-        print(f"{'─' * 100}")
         if not regime_detector:
-            print("   Not available")
             return
+
         stats = regime_detector.get_statistics()
-        print(
-            f"   Distribution: {stats['distribution_days']} | Accumulation: {stats['accumulation_days']} | Net: {stats['net_distribution']}")
+
+        print(f"\n{'SAFEGUARD SUMMARY':^100}")
+        print(f"{'-' * 100}")
+        print(f"{'Crisis Active':<35} {str(stats.get('crisis_active', False)):>25}")
+        print(f"{'Portfolio Drawdown Active':<35} {str(stats.get('portfolio_drawdown_active', False)):>25}")
+
+        if stats.get('crisis_trigger_reason'):
+            print(f"{'Crisis Reason':<35} {stats['crisis_trigger_reason']:>25}")
 
     def _display_recovery_mode_summary(self, recovery_manager):
-        print(f"\n{'─' * 100}")
-        print(f"🔓 RECOVERY MODE SUMMARY")
-        print(f"{'─' * 100}")
         if not recovery_manager:
-            print("   Not available")
             return
+
         stats = recovery_manager.get_statistics()
+        print(f"\n{'RECOVERY MODE SUMMARY':^100}")
+        print(f"{'-' * 100}")
         print(f"{'Times Activated':<35} {stats.get('activation_count', 0):>25}")
 
     def generate_final_summary_html(self, stock_rotator=None, regime_detector=None, recovery_manager=None):
@@ -489,6 +625,10 @@ class ProfitTracker:
         """
 
 
+# =============================================================================
+# ORDER LOGGER CLASS
+# =============================================================================
+
 class OrderLogger:
     def __init__(self, strategy):
         self.strategy = strategy
@@ -509,7 +649,7 @@ class OrderLogger:
             limit_price: Limit price if applicable
             was_watchlisted: Whether came from watchlist
             days_on_watchlist: Days on watchlist before entry
-            is_addon: True if this is an add to existing position (NEW)
+            is_addon: True if this is an add to existing position
         """
         try:
             filled_price = self.strategy.get_last_price(ticker) if limit_price is None else limit_price
@@ -517,7 +657,7 @@ class OrderLogger:
             cash_before = self.strategy.get_cash()
             submitted_at = self.strategy.get_datetime()
 
-            # NEW: Modify signal_type to indicate add-on
+            # Modify signal_type to indicate add-on
             if is_addon:
                 signal_type = f"addon_{signal_type}"
 
