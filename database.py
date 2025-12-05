@@ -320,21 +320,16 @@ class Database:
     # =========================================================================
 
     def get_bot_paused(self):
-        """
-        Check if bot is paused via dashboard
-
-        Returns:
-            bool: True if paused, False otherwise
-        """
+        """Check if bot is paused via dashboard"""
 
         def _get():
             conn = self.get_connection()
             try:
                 cursor = conn.cursor()
-                cursor.execute("SELECT bot_paused FROM dashboard_settings WHERE id = 1")
+                cursor.execute("SELECT value FROM dashboard_settings WHERE key = 'bot_paused'")
                 row = cursor.fetchone()
                 cursor.close()
-                return row[0] if row else False
+                return row[0] == '1' if row else False
             finally:
                 self.return_connection(conn)
 
@@ -342,25 +337,21 @@ class Database:
             return self._retry_operation(_get)
         except Exception as e:
             print(f"[DATABASE] Error checking bot_paused: {e}")
-            return False  # Default to running if DB fails
+            return False
 
     def set_bot_paused(self, paused):
-        """
-        Set bot paused state from dashboard
-
-        Args:
-            paused: Boolean - True to pause, False to resume
-        """
+        """Set bot paused state from dashboard"""
 
         def _set():
             conn = self.get_connection()
             try:
                 cursor = conn.cursor()
+                value = '1' if paused else '0'
                 cursor.execute("""
                     UPDATE dashboard_settings 
-                    SET bot_paused = %s, updated_at = CURRENT_TIMESTAMP 
-                    WHERE id = 1
-                """, (paused,))
+                    SET value = %s, updated_at = CURRENT_TIMESTAMP 
+                    WHERE key = 'bot_paused'
+                """, (value,))
                 conn.commit()
                 cursor.close()
                 print(f"[DATABASE] Bot paused state set to: {paused}")
