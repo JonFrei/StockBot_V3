@@ -903,6 +903,120 @@ class Database:
             self.connection_pool.closeall()
             print("[DATABASE] Connection pool closed")
 
+    # =========================================================================
+    # BOT STATE METHODS
+    # =========================================================================
+
+    def get_bot_state(self):
+        """Get bot state from database"""
+
+        def _get():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT portfolio_peak, drawdown_protection_active, drawdown_protection_end_date,
+                           last_rotation_date, last_rotation_week, rotation_count, ticker_awards
+                    FROM bot_state WHERE id = 1
+                """)
+                row = cursor.fetchone()
+                cursor.close()
+
+                if row:
+                    return {
+                        'portfolio_peak': float(row[0]) if row[0] else None,
+                        'drawdown_protection_active': row[1] or False,
+                        'drawdown_protection_end_date': row[2],
+                        'last_rotation_date': row[3],
+                        'last_rotation_week': row[4],
+                        'rotation_count': row[5] or 0,
+                        'ticker_awards': row[6] or {}
+                    }
+                return {
+                    'portfolio_peak': None,
+                    'drawdown_protection_active': False,
+                    'drawdown_protection_end_date': None,
+                    'last_rotation_date': None,
+                    'last_rotation_week': None,
+                    'rotation_count': 0,
+                    'ticker_awards': {}
+                }
+            finally:
+                self.return_connection(conn)
+
+        try:
+            return self._retry_operation(_get)
+        except Exception as e:
+            print(f"[DATABASE] Error getting bot state: {e}")
+            return {
+                'portfolio_peak': None,
+                'drawdown_protection_active': False,
+                'drawdown_protection_end_date': None,
+                'last_rotation_date': None,
+                'last_rotation_week': None,
+                'rotation_count': 0,
+                'ticker_awards': {}
+            }
+
+    def update_bot_state(self, portfolio_peak=None, drawdown_protection_active=None,
+                         drawdown_protection_end_date=None, last_rotation_date=None,
+                         last_rotation_week=None, rotation_count=None, ticker_awards=None,
+                         regime_state=None, rotation_metadata=None):
+        """Update bot state in database"""
+
+        def _update():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+
+                # Build dynamic update based on provided values
+                updates = []
+                values = []
+
+                if portfolio_peak is not None:
+                    updates.append("portfolio_peak = %s")
+                    values.append(portfolio_peak)
+                if drawdown_protection_active is not None:
+                    updates.append("drawdown_protection_active = %s")
+                    values.append(drawdown_protection_active)
+                if drawdown_protection_end_date is not None:
+                    updates.append("drawdown_protection_end_date = %s")
+                    values.append(drawdown_protection_end_date)
+                if last_rotation_date is not None:
+                    updates.append("last_rotation_date = %s")
+                    values.append(last_rotation_date)
+                if last_rotation_week is not None:
+                    updates.append("last_rotation_week = %s")
+                    values.append(last_rotation_week)
+                if rotation_count is not None:
+                    updates.append("rotation_count = %s")
+                    values.append(rotation_count)
+                if ticker_awards is not None:
+                    updates.append("ticker_awards = %s")
+                    values.append(json.dumps(ticker_awards) if isinstance(ticker_awards, dict) else ticker_awards)
+
+                updates.append("updated_at = CURRENT_TIMESTAMP")
+
+                if updates:
+                    query = f"UPDATE bot_state SET {', '.join(updates)} WHERE id = 1"
+                    cursor.execute(query, values)
+                    conn.commit()
+
+                cursor.close()
+            finally:
+                self.return_connection(conn)
+
+        try:
+            self._retry_operation(_update)
+        except Exception as e:
+            print(f"[DATABASE] Error updating bot state: {e}")
+
+    def close_pool(self):
+        """Close all connections in pool"""
+        if self.connection_pool:
+            self.connection_pool.closeall()
+            print("[DATABASE] Connection pool closed")
+
 
 # =============================================================================
 # IN-MEMORY DATABASE FOR BACKTESTING
