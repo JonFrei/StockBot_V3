@@ -13,6 +13,7 @@ Features:
 - Bot state persistence (regime detector state)
 - Daily metrics tracking
 - Signal performance tracking
+- Daily traded stocks tracking (prevents duplicate trades per day)
 """
 
 import os
@@ -305,6 +306,18 @@ class Database:
                 );
             """)
 
+            # Daily traded stocks table (prevents same stock being traded twice in one day)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS daily_traded_stocks (
+                    id SERIAL PRIMARY KEY,
+                    ticker VARCHAR(10) NOT NULL,
+                    trade_date DATE NOT NULL,
+                    traded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(ticker, trade_date)
+                );
+                CREATE INDEX IF NOT EXISTS idx_daily_traded_date ON daily_traded_stocks(trade_date);
+            """)
+
             conn.commit()
             print("[DATABASE] Tables created/verified successfully")
 
@@ -348,10 +361,10 @@ class Database:
                 cursor = conn.cursor()
                 value = '1' if paused else '0'
                 cursor.execute("""
-                    UPDATE dashboard_settings 
-                    SET value = %s, updated_at = CURRENT_TIMESTAMP 
-                    WHERE key = 'bot_paused'
-                """, (value,))
+                    INSERT INTO dashboard_settings (key, value, updated_at)
+                    VALUES ('bot_paused', %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (key) DO UPDATE SET value = %s, updated_at = CURRENT_TIMESTAMP
+                """, (value, value))
                 conn.commit()
                 cursor.close()
                 print(f"[DATABASE] Bot paused state set to: {paused}")
@@ -359,6 +372,98 @@ class Database:
                 self.return_connection(conn)
 
         self._retry_operation(_set)
+
+    # =========================================================================
+    # DAILY TRADED STOCKS METHODS (Live Trading Only)
+    # =========================================================================
+
+    def add_daily_traded_stock(self, ticker, trade_date):
+        """
+        Record that a stock was traded today (prevents duplicate trades)
+
+        Args:
+            ticker: Stock symbol
+            trade_date: Date of trade (date object)
+        """
+
+        def _add():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO daily_traded_stocks (ticker, trade_date)
+                    VALUES (%s, %s)
+                    ON CONFLICT (ticker, trade_date) DO NOTHING
+                """, (ticker.upper(), trade_date))
+                conn.commit()
+                cursor.close()
+            finally:
+                self.return_connection(conn)
+
+        try:
+            self._retry_operation(_add)
+        except Exception as e:
+            print(f"[DATABASE] Error adding daily traded stock {ticker}: {e}")
+
+    def get_daily_traded_stocks(self, trade_date):
+        """
+        Get set of tickers already traded today
+
+        Args:
+            trade_date: Date to check (date object)
+
+        Returns:
+            set: Set of ticker symbols traded on this date
+        """
+
+        def _get():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT ticker FROM daily_traded_stocks WHERE trade_date = %s",
+                    (trade_date,)
+                )
+                result = {row[0] for row in cursor.fetchall()}
+                cursor.close()
+                return result
+            finally:
+                self.return_connection(conn)
+
+        try:
+            return self._retry_operation(_get)
+        except Exception as e:
+            print(f"[DATABASE] Error getting daily traded stocks: {e}")
+            return set()
+
+    def clear_old_daily_traded(self, current_date):
+        """
+        Clear traded stocks from previous days
+
+        Args:
+            current_date: Current date (date object) - entries before this are deleted
+        """
+
+        def _clear():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "DELETE FROM daily_traded_stocks WHERE trade_date < %s",
+                    (current_date,)
+                )
+                deleted = cursor.rowcount
+                conn.commit()
+                cursor.close()
+                if deleted > 0:
+                    print(f"[DATABASE] Cleared {deleted} old daily traded entries")
+            finally:
+                self.return_connection(conn)
+
+        try:
+            self._retry_operation(_clear)
+        except Exception as e:
+            print(f"[DATABASE] Error clearing old daily traded: {e}")
 
     # =========================================================================
     # POSITION METADATA METHODS
@@ -405,49 +510,103 @@ class Database:
         try:
             self._retry_operation(_upsert)
         except Exception as e:
-            print(f"[DATABASE] Error upserting position metadata: {e}")
-            raise
+            print(f"[DATABASE] Error upserting position metadata for {ticker}: {e}")
 
-    def get_all_position_metadata(self):
-        """Get all position metadata as dict"""
+    def get_position_metadata(self, ticker):
+        """Get position metadata for a ticker"""
 
         def _get():
             conn = self.get_connection()
             try:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT ticker, entry_date, entry_signal, entry_score, highest_price, 
+                    SELECT entry_date, entry_signal, entry_score, highest_price, 
                            profit_level, level_1_lock_price, level_2_lock_price,
                            entry_price, kill_switch_active, peak_price
-                    FROM position_metadata
-                """)
-
-                result = {}
-                for row in cursor.fetchall():
-                    result[row[0]] = {
-                        'entry_date': row[1],
-                        'entry_signal': row[2],
-                        'entry_score': row[3],
-                        'highest_price': float(row[4]) if row[4] else 0,
-                        'local_max': float(row[4]) if row[4] else 0,
-                        'profit_level': row[5] if row[5] else 0,
-                        'level_1_lock_price': float(row[6]) if row[6] else None,
-                        'tier1_lock_price': float(row[6]) if row[6] else None,
-                        'level_2_lock_price': float(row[7]) if row[7] else None,
-                        'entry_price': float(row[8]) if row[8] else None,
-                        'kill_switch_active': row[9] if row[9] is not None else False,
-                        'peak_price': float(row[10]) if row[10] else None
-                    }
-                return result
-            finally:
+                    FROM position_metadata WHERE ticker = %s
+                """, (ticker,))
+                row = cursor.fetchone()
                 cursor.close()
+
+                if row:
+                    return {
+                        'entry_date': row[0],
+                        'entry_signal': row[1],
+                        'entry_score': row[2],
+                        'highest_price': float(row[3]) if row[3] else 0,
+                        'profit_level': row[4],
+                        'level_1_lock_price': float(row[5]) if row[5] else None,
+                        'level_2_lock_price': float(row[6]) if row[6] else None,
+                        'entry_price': float(row[7]) if row[7] else None,
+                        'kill_switch_active': row[8],
+                        'peak_price': float(row[9]) if row[9] else None
+                    }
+                return None
+            finally:
                 self.return_connection(conn)
 
         try:
             return self._retry_operation(_get)
         except Exception as e:
-            print(f"[DATABASE] Error getting position metadata: {e}")
+            print(f"[DATABASE] Error getting position metadata for {ticker}: {e}")
+            return None
+
+    def get_all_position_metadata(self):
+        """Get all position metadata"""
+
+        def _get_all():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT ticker, entry_date, entry_signal, entry_score, highest_price,
+                           profit_level, level_1_lock_price, level_2_lock_price,
+                           entry_price, kill_switch_active, peak_price
+                    FROM position_metadata
+                """)
+
+                positions = {}
+                for row in cursor.fetchall():
+                    positions[row[0]] = {
+                        'entry_date': row[1],
+                        'entry_signal': row[2],
+                        'entry_score': row[3],
+                        'highest_price': float(row[4]) if row[4] else 0,
+                        'profit_level': row[5],
+                        'level_1_lock_price': float(row[6]) if row[6] else None,
+                        'level_2_lock_price': float(row[7]) if row[7] else None,
+                        'entry_price': float(row[8]) if row[8] else None,
+                        'kill_switch_active': row[9],
+                        'peak_price': float(row[10]) if row[10] else None
+                    }
+                cursor.close()
+                return positions
+            finally:
+                self.return_connection(conn)
+
+        try:
+            return self._retry_operation(_get_all)
+        except Exception as e:
+            print(f"[DATABASE] Error getting all position metadata: {e}")
             return {}
+
+    def delete_position_metadata(self, ticker):
+        """Delete position metadata for a ticker"""
+
+        def _delete():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM position_metadata WHERE ticker = %s", (ticker,))
+                conn.commit()
+                cursor.close()
+            finally:
+                self.return_connection(conn)
+
+        try:
+            self._retry_operation(_delete)
+        except Exception as e:
+            print(f"[DATABASE] Error deleting position metadata for {ticker}: {e}")
 
     def clear_all_position_metadata(self):
         """Clear all position metadata"""
@@ -458,180 +617,14 @@ class Database:
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM position_metadata")
                 conn.commit()
-            finally:
                 cursor.close()
+            finally:
                 self.return_connection(conn)
 
         try:
             self._retry_operation(_clear)
         except Exception as e:
             print(f"[DATABASE] Error clearing position metadata: {e}")
-            raise
-
-    # =========================================================================
-    # BOT STATE METHODS
-    # =========================================================================
-
-    def update_bot_state(self, portfolio_peak, drawdown_protection_active,
-                         drawdown_protection_end_date, last_rotation_date,
-                         last_rotation_week, rotation_count, ticker_awards):
-        """Update bot state (regime detector state, rotation metadata)"""
-
-        def _update():
-            conn = self.get_connection()
-            try:
-                cursor = conn.cursor()
-
-                # Convert ticker_awards to JSON string if it's a dict
-                awards_json = json.dumps(ticker_awards) if isinstance(ticker_awards, dict) else ticker_awards
-
-                cursor.execute("""
-                    UPDATE bot_state SET
-                        portfolio_peak = %s,
-                        drawdown_protection_active = %s,
-                        drawdown_protection_end_date = %s,
-                        last_rotation_date = %s,
-                        last_rotation_week = %s,
-                        rotation_count = %s,
-                        ticker_awards = %s,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE id = 1
-                """, (
-                    portfolio_peak, drawdown_protection_active, drawdown_protection_end_date,
-                    last_rotation_date, last_rotation_week, rotation_count, awards_json
-                ))
-                conn.commit()
-            finally:
-                cursor.close()
-                self.return_connection(conn)
-
-        try:
-            self._retry_operation(_update)
-        except Exception as e:
-            print(f"[DATABASE] Error updating bot state: {e}")
-            raise
-
-    def get_bot_state(self):
-        """Get bot state (regime detector state, rotation metadata)"""
-
-        def _get():
-            conn = self.get_connection()
-            try:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT portfolio_peak, drawdown_protection_active, drawdown_protection_end_date,
-                           last_rotation_date, last_rotation_week, rotation_count, ticker_awards
-                    FROM bot_state WHERE id = 1
-                """)
-                row = cursor.fetchone()
-
-                if row:
-                    ticker_awards = row[6]
-                    # Parse JSON if it's a string
-                    if isinstance(ticker_awards, str):
-                        try:
-                            ticker_awards = json.loads(ticker_awards)
-                        except:
-                            ticker_awards = {}
-
-                    return {
-                        'portfolio_peak': float(row[0]) if row[0] else None,
-                        'drawdown_protection_active': row[1] or False,
-                        'drawdown_protection_end_date': row[2],
-                        'last_rotation_date': row[3],
-                        'last_rotation_week': row[4],
-                        'rotation_count': row[5] or 0,
-                        'ticker_awards': ticker_awards or {}
-                    }
-                return None
-            finally:
-                cursor.close()
-                self.return_connection(conn)
-
-        try:
-            return self._retry_operation(_get)
-        except Exception as e:
-            print(f"[DATABASE] Error getting bot state: {e}")
-            return None
-
-    # =========================================================================
-    # DAILY METRICS METHODS
-    # =========================================================================
-
-    def save_daily_metrics(self, date, portfolio_value, cash_balance, num_positions,
-                           num_trades, realized_pnl, unrealized_pnl, win_rate,
-                           spy_close, market_regime):
-        """Save daily metrics snapshot"""
-
-        def _save():
-            conn = self.get_connection()
-            try:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    INSERT INTO daily_metrics 
-                    (date, portfolio_value, cash_balance, num_positions, num_trades,
-                     realized_pnl, unrealized_pnl, win_rate, spy_close, market_regime)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (date) DO UPDATE SET
-                        portfolio_value = EXCLUDED.portfolio_value,
-                        cash_balance = EXCLUDED.cash_balance,
-                        num_positions = EXCLUDED.num_positions,
-                        num_trades = EXCLUDED.num_trades,
-                        realized_pnl = EXCLUDED.realized_pnl,
-                        unrealized_pnl = EXCLUDED.unrealized_pnl,
-                        win_rate = EXCLUDED.win_rate,
-                        spy_close = EXCLUDED.spy_close,
-                        market_regime = EXCLUDED.market_regime
-                """, (
-                    date, portfolio_value, cash_balance, num_positions, num_trades,
-                    realized_pnl, unrealized_pnl, win_rate, spy_close, market_regime
-                ))
-                conn.commit()
-            finally:
-                cursor.close()
-                self.return_connection(conn)
-
-        try:
-            self._retry_operation(_save)
-        except Exception as e:
-            print(f"[DATABASE] Error saving daily metrics: {e}")
-
-    # =========================================================================
-    # SIGNAL PERFORMANCE METHODS
-    # =========================================================================
-
-    def update_signal_performance(self, signal_name, total_trades, wins, total_pnl):
-        """Update signal performance stats"""
-
-        def _update():
-            conn = self.get_connection()
-            try:
-                cursor = conn.cursor()
-
-                win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
-                avg_pnl = total_pnl / total_trades if total_trades > 0 else 0
-
-                cursor.execute("""
-                    INSERT INTO signal_performance 
-                    (signal_name, total_trades, wins, win_rate, total_pnl, avg_pnl, last_updated)
-                    VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-                    ON CONFLICT (signal_name) DO UPDATE SET
-                        total_trades = EXCLUDED.total_trades,
-                        wins = EXCLUDED.wins,
-                        win_rate = EXCLUDED.win_rate,
-                        total_pnl = EXCLUDED.total_pnl,
-                        avg_pnl = EXCLUDED.avg_pnl,
-                        last_updated = CURRENT_TIMESTAMP
-                """, (signal_name, total_trades, wins, win_rate, total_pnl, avg_pnl))
-                conn.commit()
-            finally:
-                cursor.close()
-                self.return_connection(conn)
-
-        try:
-            self._retry_operation(_update)
-        except Exception as e:
-            print(f"[DATABASE] Error updating signal performance: {e}")
 
     # =========================================================================
     # ROTATION STATE METHODS
@@ -639,10 +632,10 @@ class Database:
 
     def save_rotation_state(self, ticker_states):
         """
-        Save all rotation states to database with retry logic
+        Save rotation states to database
 
         Args:
-            ticker_states: Dict of {ticker: state_dict} from StockRotator
+            ticker_states: Dict of {ticker: state_dict}
         """
 
         def _save():
@@ -654,8 +647,8 @@ class Database:
                     cursor.execute("""
                         INSERT INTO rotation_state 
                         (ticker, tier, consecutive_wins, consecutive_losses, total_trades,
-                         total_wins, total_pnl, total_win_pnl, total_loss_pnl, last_tier_change)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         total_wins, total_pnl, total_win_pnl, total_loss_pnl, last_tier_change, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
                         ON CONFLICT (ticker) DO UPDATE SET
                             tier = EXCLUDED.tier,
                             consecutive_wins = EXCLUDED.consecutive_wins,
@@ -740,6 +733,170 @@ class Database:
             print(f"[DATABASE] Error loading rotation state: {e}")
             return {}
 
+    # =========================================================================
+    # TRADE OPERATIONS
+    # =========================================================================
+
+    def insert_trade(self, ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct,
+                     entry_signal, entry_score, exit_signal, exit_date, was_watchlisted=False,
+                     confirmation_date=None, days_to_confirmation=0):
+        """Insert a closed trade record"""
+
+        def _insert():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO closed_trades 
+                    (ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct,
+                     entry_signal, entry_score, exit_signal, exit_date, was_watchlisted,
+                     confirmation_date, days_to_confirmation)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct,
+                    entry_signal, entry_score, exit_signal, exit_date, was_watchlisted,
+                    confirmation_date, days_to_confirmation
+                ))
+                conn.commit()
+            finally:
+                cursor.close()
+                self.return_connection(conn)
+
+        try:
+            self._retry_operation(_insert)
+        except Exception as e:
+            print(f"[DATABASE] Error inserting trade: {e}")
+
+    def get_closed_trades(self, limit=None):
+        """Get closed trades"""
+
+        def _get():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                query = """
+                    SELECT ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct,
+                           entry_signal, entry_score, exit_signal, exit_date
+                    FROM closed_trades ORDER BY exit_date DESC
+                """
+                if limit:
+                    cursor.execute(query + " LIMIT %s", (limit,))
+                else:
+                    cursor.execute(query)
+
+                trades = []
+                for row in cursor.fetchall():
+                    trades.append({
+                        'ticker': row[0],
+                        'quantity': row[1],
+                        'entry_price': float(row[2]),
+                        'exit_price': float(row[3]),
+                        'pnl_dollars': float(row[4]),
+                        'pnl_pct': float(row[5]),
+                        'entry_signal': row[6],
+                        'entry_score': row[7],
+                        'exit_signal': row[8],
+                        'exit_date': row[9]
+                    })
+                cursor.close()
+                return trades
+            finally:
+                self.return_connection(conn)
+
+        try:
+            return self._retry_operation(_get)
+        except Exception as e:
+            print(f"[DATABASE] Error getting closed trades: {e}")
+            return []
+
+    # =========================================================================
+    # DAILY METRICS METHODS
+    # =========================================================================
+
+    def save_daily_metrics(self, date, portfolio_value, cash_balance, num_positions,
+                           num_trades, realized_pnl, unrealized_pnl, win_rate,
+                           spy_close, market_regime):
+        """Save daily metrics"""
+
+        def _save():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO daily_metrics 
+                    (date, portfolio_value, cash_balance, num_positions, num_trades,
+                     realized_pnl, unrealized_pnl, win_rate, spy_close, market_regime)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (date) DO UPDATE SET
+                        portfolio_value = EXCLUDED.portfolio_value,
+                        cash_balance = EXCLUDED.cash_balance,
+                        num_positions = EXCLUDED.num_positions,
+                        num_trades = EXCLUDED.num_trades,
+                        realized_pnl = EXCLUDED.realized_pnl,
+                        unrealized_pnl = EXCLUDED.unrealized_pnl,
+                        win_rate = EXCLUDED.win_rate,
+                        spy_close = EXCLUDED.spy_close,
+                        market_regime = EXCLUDED.market_regime
+                """, (
+                    date, portfolio_value, cash_balance, num_positions, num_trades,
+                    realized_pnl, unrealized_pnl, win_rate, spy_close, market_regime
+                ))
+                conn.commit()
+            finally:
+                cursor.close()
+                self.return_connection(conn)
+
+        try:
+            self._retry_operation(_save)
+        except Exception as e:
+            print(f"[DATABASE] Error saving daily metrics: {e}")
+
+    # =========================================================================
+    # SIGNAL PERFORMANCE METHODS
+    # =========================================================================
+
+    def update_signal_performance(self, signal_name, total_trades, wins, total_pnl):
+        """Update signal performance metrics"""
+
+        def _update():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+                avg_pnl = total_pnl / total_trades if total_trades > 0 else 0
+
+                cursor.execute("""
+                    INSERT INTO signal_performance 
+                    (signal_name, total_trades, wins, win_rate, total_pnl, avg_pnl, last_updated)
+                    VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (signal_name) DO UPDATE SET
+                        total_trades = signal_performance.total_trades + EXCLUDED.total_trades,
+                        wins = signal_performance.wins + EXCLUDED.wins,
+                        total_pnl = signal_performance.total_pnl + EXCLUDED.total_pnl,
+                        win_rate = CASE 
+                            WHEN (signal_performance.total_trades + EXCLUDED.total_trades) > 0 
+                            THEN ((signal_performance.wins + EXCLUDED.wins)::DECIMAL / 
+                                  (signal_performance.total_trades + EXCLUDED.total_trades) * 100)
+                            ELSE 0 
+                        END,
+                        avg_pnl = CASE 
+                            WHEN (signal_performance.total_trades + EXCLUDED.total_trades) > 0 
+                            THEN ((signal_performance.total_pnl + EXCLUDED.total_pnl) / 
+                                  (signal_performance.total_trades + EXCLUDED.total_trades))
+                            ELSE 0 
+                        END,
+                        last_updated = CURRENT_TIMESTAMP
+                """, (signal_name, total_trades, wins, win_rate, total_pnl, avg_pnl))
+                conn.commit()
+            finally:
+                cursor.close()
+                self.return_connection(conn)
+
+        try:
+            self._retry_operation(_update)
+        except Exception as e:
+            print(f"[DATABASE] Error updating signal performance: {e}")
+
     def close_pool(self):
         """Close all connections in pool"""
         if self.connection_pool:
@@ -810,45 +967,27 @@ class InMemoryDatabase:
 
     def get_bot_paused(self):
         """Check if bot is paused via dashboard"""
-
-        def _get():
-            conn = self.get_connection()
-            try:
-                cursor = conn.cursor()
-                cursor.execute("SELECT value FROM dashboard_settings WHERE key = 'bot_paused'")
-                row = cursor.fetchone()
-                cursor.close()
-                # '1' = paused, '0' or None = not paused
-                return row[0] == '1' if row else False
-            finally:
-                self.return_connection(conn)
-
-        try:
-            return self._retry_operation(_get)
-        except Exception as e:
-            print(f"[DATABASE] Error checking bot_paused: {e}")
-            return False
+        return self.dashboard_settings.get('bot_paused', False)
 
     def set_bot_paused(self, paused):
         """Set bot paused state from dashboard"""
+        self.dashboard_settings['bot_paused'] = paused
 
-        def _set():
-            conn = self.get_connection()
-            try:
-                cursor = conn.cursor()
-                value = '1' if paused else '0'
-                cursor.execute("""
-                    INSERT INTO dashboard_settings (key, value, updated_at)
-                    VALUES ('bot_paused', %s, CURRENT_TIMESTAMP)
-                    ON CONFLICT (key) DO UPDATE SET value = %s, updated_at = CURRENT_TIMESTAMP
-                """, (value, value))
-                conn.commit()
-                cursor.close()
-                print(f"[DATABASE] Bot paused state set to: {paused}")
-            finally:
-                self.return_connection(conn)
+    # =========================================================================
+    # DAILY TRADED STOCKS METHODS (No-ops for backtesting)
+    # =========================================================================
 
-        self._retry_operation(_set)
+    def add_daily_traded_stock(self, ticker, trade_date):
+        """No-op for backtesting - trades controlled by last_trade_date"""
+        pass
+
+    def get_daily_traded_stocks(self, trade_date):
+        """Return empty set for backtesting - trades controlled by last_trade_date"""
+        return set()
+
+    def clear_old_daily_traded(self, current_date):
+        """No-op for backtesting"""
+        pass
 
     # =========================================================================
     # ROTATION STATE METHODS

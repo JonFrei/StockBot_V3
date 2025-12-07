@@ -6,6 +6,9 @@ Changes:
 - Daily position sync: Broker is source of truth, runs every iteration
 - Missing entry price collection and email notification
 - Paused state with manual intervention required
+- UPDATED: Removed time-based trading window for live trading
+- UPDATED: Per-stock daily tracking (no stock traded more than once per day)
+- UPDATED: Daily traded stocks persisted to database for crash recovery
 """
 
 from lumibot.strategies import Strategy
@@ -87,22 +90,9 @@ def sync_positions_with_broker(strategy, current_date, position_monitor):
     Daily position sync - Broker is source of truth.
 
     Runs at start of each iteration to:
-    1. Adopt orphaned positions (in broker, not in metadata)
-    2. Remove stale metadata (in metadata, not in broker)
-    3. Collect positions with missing entry prices
-
-    Args:
-        strategy: Lumibot Strategy instance
-        current_date: Current datetime
-        position_monitor: PositionMonitor instance
-
-    Returns:
-        dict: {
-            'synced': bool,
-            'orphaned_adopted': list of tickers,
-            'stale_removed': list of tickers,
-            'missing_entry_prices': list of position dicts
-        }
+    1. Adopt orphaned broker positions (positions we don't have metadata for)
+    2. Remove stale metadata (for positions no longer at broker)
+    3. Collect positions with missing entry prices for notification
     """
     result = {
         'synced': False,
@@ -113,98 +103,61 @@ def sync_positions_with_broker(strategy, current_date, position_monitor):
 
     try:
         print(f"\n{'=' * 60}")
-        print(f"🔄 DAILY POSITION SYNC - {current_date.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"🔄 DAILY POSITION SYNC - {current_date.strftime('%Y-%m-%d %H:%M')}")
         print(f"{'=' * 60}")
 
         # Get broker positions
         broker_positions = strategy.get_positions()
-        broker_tickers = {}
-        for p in broker_positions:
-            qty = account_broker_data.get_position_quantity(p, p.symbol)
-            if qty > 0:
-                broker_tickers[p.symbol] = p
+        broker_tickers = set()
 
-        # Get local metadata
-        local_tickers = set(position_monitor.positions_metadata.keys())
+        for position in broker_positions:
+            ticker = position.symbol
+            if ticker in account_broker_data.SKIP_SYMBOLS:
+                continue
+            broker_tickers.add(ticker)
 
-        print(f"📊 Broker positions: {len(broker_tickers)}")
-        print(f"📊 Local metadata: {len(local_tickers)}")
+        # Get our tracked positions
+        tracked_tickers = set(position_monitor.positions_metadata.keys())
+
+        print(f"   Broker positions: {len(broker_tickers)}")
+        print(f"   Tracked positions: {len(tracked_tickers)}")
 
         # === ADOPT ORPHANED POSITIONS ===
-        # Positions in broker but not in local metadata
-        orphaned = set(broker_tickers.keys()) - local_tickers
+        orphaned = broker_tickers - tracked_tickers
+        for ticker in orphaned:
+            print(f"   📥 Adopting orphaned position: {ticker}")
 
-        if orphaned:
-            print(f"\n⚠️  ORPHANED POSITIONS: {len(orphaned)}")
-            print(f"{'─' * 60}")
+            # Try to get entry price from broker
+            position = next((p for p in broker_positions if p.symbol == ticker), None)
+            entry_price = account_broker_data.get_broker_entry_price(position, strategy, ticker)
 
-            for ticker in orphaned:
-                position = broker_tickers[ticker]
-                quantity = account_broker_data.get_position_quantity(position, ticker)
-                entry_price = account_broker_data.get_broker_entry_price(position, strategy, ticker)
-
-                try:
-                    current_price = strategy.get_last_price(ticker)
-                except:
-                    current_price = entry_price if entry_price > 0 else 0
-
-                # Track position with whatever data we have
-                position_monitor.positions_metadata[ticker] = {
-                    'entry_date': current_date,
-                    'entry_signal': 'recovered_orphan',
-                    'entry_score': 0,
-                    'entry_price': entry_price if entry_price > 0 else current_price,
-                    'highest_price': max(entry_price, current_price) if entry_price > 0 else current_price,
-                    'local_max': max(entry_price, current_price) if entry_price > 0 else current_price,
-                    'profit_level': 0,
-                    'tier1_lock_price': None,
-                    'level_1_lock_price': None,
-                    'level_2_lock_price': None,
-                    'kill_switch_active': False,
-                    'peak_price': None
-                }
-
-                result['orphaned_adopted'].append(ticker)
-
-                if entry_price > 0:
-                    print(f"   ✅ {ticker}: ADOPTED - {quantity} shares @ ${entry_price:.2f}")
-                else:
-                    print(f"   ⚠️  {ticker}: ADOPTED - {quantity} shares (NO ENTRY PRICE)")
-                    result['missing_entry_prices'].append({
-                        'ticker': ticker,
-                        'quantity': quantity,
-                        'current_price': current_price,
-                        'market_value': quantity * current_price if current_price > 0 else 0,
-                        'issue': 'Missing entry price (orphaned position)'
-                    })
-
-            print(f"{'─' * 60}")
+            position_monitor.track_position(
+                ticker=ticker,
+                entry_date=current_date,
+                entry_signal='adopted_orphan',
+                entry_score=0,
+                entry_price=entry_price if entry_price > 0 else None
+            )
+            result['orphaned_adopted'].append(ticker)
 
         # === REMOVE STALE METADATA ===
-        # Positions in local metadata but not in broker
-        stale = local_tickers - set(broker_tickers.keys())
+        stale = tracked_tickers - broker_tickers
+        for ticker in stale:
+            print(f"   🗑️ Removing stale metadata: {ticker}")
+            position_monitor.clean_position_metadata(ticker)
+            result['stale_removed'].append(ticker)
 
-        if stale:
-            print(f"\n🧹 STALE METADATA: {len(stale)}")
-            print(f"{'─' * 60}")
+        # === CHECK FOR MISSING ENTRY PRICES ===
+        for position in broker_positions:
+            ticker = position.symbol
+            if ticker in account_broker_data.SKIP_SYMBOLS:
+                continue
 
-            for ticker in stale:
-                print(f"   🗑️  {ticker}: Position closed at broker - removing metadata")
-                del position_monitor.positions_metadata[ticker]
-                result['stale_removed'].append(ticker)
+            metadata = position_monitor.get_position_metadata(ticker)
+            entry_price = metadata.get('entry_price') if metadata else None
 
-            print(f"{'─' * 60}")
-
-        # === CHECK EXISTING POSITIONS FOR MISSING ENTRY PRICES ===
-        for ticker, position in broker_tickers.items():
-            if ticker in result['orphaned_adopted']:
-                continue  # Already handled above
-
-            metadata = position_monitor.positions_metadata.get(ticker, {})
-            entry_price = metadata.get('entry_price', 0)
-
-            # If metadata has no entry price, try to get from broker
             if not entry_price or entry_price <= 0:
+                # Try to get from broker
                 broker_entry = account_broker_data.get_broker_entry_price(position, strategy, ticker)
 
                 if broker_entry > 0:
@@ -332,42 +285,32 @@ def enter_paused_state(strategy, failure_tracker, execution_tracker=None):
     """
     Enter paused state after circuit breaker triggers.
     Sends alert email and waits for manual intervention.
-
-    Args:
-        strategy: Lumibot Strategy instance
-        failure_tracker: ConsecutiveFailureTracker instance
-        execution_tracker: ExecutionTracker instance (optional)
     """
     import account_email_notifications
 
-    current_date = strategy.get_datetime()
-    failure_tracker.trigger_pause("Circuit breaker triggered - consecutive failures exceeded threshold")
+    failure_tracker.trigger_pause(f"{failure_tracker.consecutive_failures} consecutive failures")
 
     print(f"\n{'=' * 80}")
     print(f"🚨 CIRCUIT BREAKER TRIGGERED - BOT PAUSED")
     print(f"{'=' * 80}")
-    print(f"Consecutive failures: {failure_tracker.consecutive_failures}")
-    print(f"Threshold: {failure_tracker.threshold}")
+    print(f"Failures: {failure_tracker.consecutive_failures}/{failure_tracker.threshold}")
     print(f"Paused at: {failure_tracker.paused_at}")
     print(f"\nRecent failures:")
     for f in failure_tracker.get_recent_failures():
-        print(f"   [{f['timestamp'].strftime('%H:%M:%S')}] {f['context']}: {f['error']}")
-    print(f"\n⏸️  Bot is now PAUSED. Manual intervention required.")
-    print(f"   Restart the bot via Railway dashboard to resume.")
+        print(f"  - {f['timestamp']}: {f['context']} - {f['error'][:100]}")
     print(f"{'=' * 80}\n")
 
-    # Send alert email
+    # Send circuit breaker email
     try:
-        account_email_notifications.send_circuit_breaker_alert_email(
+        account_email_notifications.send_circuit_breaker_email(
             failure_tracker=failure_tracker,
-            current_date=current_date
+            execution_tracker=execution_tracker
         )
     except Exception as e:
-        print(f"[EMAIL] Failed to send circuit breaker alert: {e}")
+        print(f"[EMAIL] Failed to send circuit breaker email: {e}")
 
-    # Enter infinite pause loop
-    # Health check server keeps running so Railway doesn't kill the container
-    print("[PAUSED] Entering pause loop. Health check server remains active.")
+    # Enter infinite wait loop
+    print("[PAUSED] Bot is now paused. Manual intervention required.")
     print("[PAUSED] To resume, restart the bot via Railway dashboard.")
 
     pause_log_interval = 300  # Log every 5 minutes
@@ -391,10 +334,14 @@ class SwingTradeStrategy(Strategy):
         if Config.BACKTESTING:
             self.sleeptime = "1D"
         else:
-            self.sleeptime = "10M"
+            self.sleeptime = "30M"
 
         self.tickers = self.parameters.get("tickers", [])
         self.last_trade_date = None
+
+        # Daily traded stocks tracker (live trading only)
+        # This is loaded from DB at start of each iteration
+        self.daily_traded_stocks = set()
 
         # Initialize circuit breaker (disabled in backtesting)
         self.failure_tracker = ConsecutiveFailureTracker(threshold=CONSECUTIVE_FAILURE_THRESHOLD)
@@ -424,6 +371,7 @@ class SwingTradeStrategy(Strategy):
         print(f"   Safeguards: Portfolio DD (15%) + Market Crisis + SPY<200")
         if not Config.BACKTESTING:
             print(f"   Circuit Breaker: {CONSECUTIVE_FAILURE_THRESHOLD} consecutive failures → pause")
+            print(f"   Trading: Continuous throughout market hours (per-stock daily limit)")
         print(f"{'=' * 60}\n")
 
     def before_starting_trading(self):
@@ -458,15 +406,23 @@ class SwingTradeStrategy(Strategy):
                 except:
                     pass
 
-                if account_broker_data.has_traded_today(self, self.last_trade_date):
-                    return
+                # Load daily traded stocks from database (survives crashes/deploys)
+                current_date_only = self.get_datetime().date()
+                db.clear_old_daily_traded(current_date_only)
+                self.daily_traded_stocks = db.get_daily_traded_stocks(current_date_only)
 
-                if not account_broker_data.is_within_trading_window(self):
+                if self.daily_traded_stocks:
+                    print(f"[INFO] Stocks already traded today: {', '.join(sorted(self.daily_traded_stocks))}")
+
+            # Backtesting: use existing once-per-day behavior
+            if Config.BACKTESTING:
+                if account_broker_data.has_traded_today(self, self.last_trade_date):
                     return
 
             current_date = self.get_datetime()
 
-            if not Config.BACKTESTING:
+            # Only update last_trade_date in backtesting mode
+            if Config.BACKTESTING:
                 self.last_trade_date = current_date.date()
 
             summary.set_context(current_date, self.portfolio_value, self.get_cash())
@@ -511,62 +467,30 @@ class SwingTradeStrategy(Strategy):
                         enter_paused_state(self, self.failure_tracker, execution_tracker)
                         return
 
-                    # Continue with caution if not at threshold
-                    summary.add_error(f"Position sync failed: {e}")
-
             # =============================================================
-            # UPDATE PORTFOLIO VALUE FOR DRAWDOWN TRACKING
-            # =============================================================
-            self.regime_detector.update_portfolio_value(current_date, self.portfolio_value)
-
-            # =============================================================
-            # FETCH DATA
+            # MARKET REGIME DETECTION
             # =============================================================
             try:
-                all_tickers = list(set(self.tickers + ['SPY'] + [p.symbol for p in self.get_positions()]))
-                all_stock_data = stock_data.process_data(all_tickers, current_date)
+                regime_result = self.regime_detector.evaluate_regime(
+                    strategy=self,
+                    current_date=current_date,
+                    recovery_manager=self.recovery_manager
+                )
+                self._current_regime_result = regime_result
 
-                if 'SPY' in all_stock_data:
-                    spy_ind = all_stock_data['SPY']['indicators']
-                    spy_raw = all_stock_data['SPY'].get('raw')
-
-                    spy_close = spy_ind['close']
-                    spy_20_ema = spy_ind.get('ema20', 0)
-                    spy_50_sma = spy_ind.get('sma50', spy_ind.get('ema50', 0))
-                    spy_200_sma = spy_ind['sma200']
-
-                    # Get volume data
-                    spy_volume = None
-                    spy_avg_volume = None
-                    if spy_raw is not None and len(spy_raw) >= 2:
-                        spy_volume = spy_raw['volume'].iloc[-1]
-                        spy_avg_volume = spy_ind.get('avg_volume', spy_raw['volume'].iloc[-20:].mean() if len(
-                            spy_raw) >= 20 else None)
-                        spy_prev_close = spy_raw['close'].iloc[-2]
-                    else:
-                        spy_prev_close = None
-
-                    # Update regime detector with new simplified interface
-                    self.regime_detector.update_spy(
-                        date=current_date,
-                        spy_close=spy_close,
-                        spy_20_ema=spy_20_ema,
-                        spy_50_sma=spy_50_sma,
-                        spy_200_sma=spy_200_sma,
-                        spy_volume=spy_volume,
-                        spy_avg_volume=spy_avg_volume
-                    )
-
-                    # Update recovery manager
-                    self.recovery_manager.update_spy_data(current_date, spy_close, spy_prev_close)
-                    self.recovery_manager.update_breadth(all_stock_data)
+                summary.set_regime(
+                    regime_result['action'],
+                    regime_result['reason'],
+                    regime_result['position_size_multiplier'],
+                    recovery_details=regime_result.get('recovery_details')
+                )
 
             except Exception as e:
-                summary.add_error(f"Data fetch failed: {e}")
-                execution_tracker.add_error("Data Fetch", e)
+                summary.add_error(f"Regime detection failed: {e}")
+                execution_tracker.add_error("Regime Detection", e)
 
                 if not Config.BACKTESTING:
-                    should_pause = self.failure_tracker.record_failure("Data Fetch", e)
+                    should_pause = self.failure_tracker.record_failure("Regime Detection", e)
                     if should_pause:
                         enter_paused_state(self, self.failure_tracker, execution_tracker)
                         return
@@ -576,44 +500,14 @@ class SwingTradeStrategy(Strategy):
                 return
 
             # =============================================================
-            # REGIME DETECTION (includes portfolio drawdown check)
+            # EMERGENCY EXIT HANDLERS
             # =============================================================
-            try:
-                # Check if recovery mode is active
-                spy_below_200 = self.regime_detector._is_spy_below_200()
-                recovery_result = self.recovery_manager.evaluate(current_date, spy_below_200)
-                recovery_mode_active = recovery_result.get('recovery_mode_active', False)
+            if regime_result['action'] in ['exit_all', 'portfolio_drawdown_exit']:
+                exit_reason = regime_result['reason']
+                exit_count = 0
 
-                # Get regime result (pass recovery mode status)
-                regime_result = self.regime_detector.detect_regime(
-                    current_date=current_date,
-                    recovery_mode_active=recovery_mode_active
-                )
-
-                self._current_regime_result = regime_result  # Store for metrics
-
-                # Handle recovery mode override for display
-                if regime_result['action'] == 'recovery_override':
-                    regime_result['position_size_multiplier'] = recovery_result['position_multiplier']
-                    regime_result['max_positions'] = recovery_result['max_positions']
-                    regime_result['recovery_profit_target'] = recovery_result['profit_target']
-
-                summary.set_regime(
-                    regime_result['action'],
-                    regime_result['reason'],
-                    regime_result['position_size_multiplier']
-                )
-
-                # =============================================================
-                # HANDLE EXIT ALL - Crisis or Portfolio Drawdown
-                # =============================================================
-
-                if regime_result.get('exit_all', False):
-                    positions = self.get_positions()
-                    exit_count = 0
-                    exit_reason = 'crisis_exit' if regime_result[
-                                                       'action'] == 'crisis_exit' else 'portfolio_drawdown_exit'
-
+                positions = self.get_positions()
+                if positions:
                     for position in positions:
                         ticker = position.symbol
                         qty = int(position.quantity)
@@ -673,55 +567,62 @@ class SwingTradeStrategy(Strategy):
                     save_state_safe(self)
                     return
 
-                # =============================================================
-                # HANDLE LOCKOUT/BLOCK - No new entries
-                # =============================================================
-                if not regime_result['allow_new_entries']:
-                    # Success - reset failure counter
-                    if not Config.BACKTESTING:
-                        self.failure_tracker.record_success()
+            # =============================================================
+            # STOP BUYING MODE
+            # =============================================================
+            if regime_result['action'] == 'stop_buying':
+                if not Config.BACKTESTING:
+                    self.failure_tracker.record_success()
 
-                    execution_tracker.complete('SUCCESS')
+                execution_tracker.complete('SUCCESS')
+                summary.print_summary()
+
+                update_end_of_day_metrics(self, current_date, self._current_regime_result)
+                save_state_safe(self)
+                return
+
+            # =============================================================
+            # FETCH MARKET DATA
+            # =============================================================
+            try:
+                all_tickers = list(set(self.tickers + ['SPY']))
+                all_stock_data = stock_data.get_stock_data(self, all_tickers)
+
+                if not all_stock_data:
+                    summary.add_error("No stock data available")
+
+                    if not Config.BACKTESTING:
+                        should_pause = self.failure_tracker.record_failure("Stock Data", "No data returned")
+                        if should_pause:
+                            enter_paused_state(self, self.failure_tracker, execution_tracker)
+                            return
+
+                    execution_tracker.complete('FAILED')
                     summary.print_summary()
-
-                    if not Config.BACKTESTING:
-                        account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
-
-                    update_end_of_day_metrics(self, current_date, self._current_regime_result)
-                    save_state_safe(self)
                     return
 
             except Exception as e:
-                summary.add_error(f"Regime detection failed: {e}")
+                summary.add_error(f"Stock data fetch failed: {e}")
+                execution_tracker.add_error("Stock Data", e)
 
                 if not Config.BACKTESTING:
-                    should_pause = self.failure_tracker.record_failure("Regime Detection", e)
+                    should_pause = self.failure_tracker.record_failure("Stock Data", e)
                     if should_pause:
                         enter_paused_state(self, self.failure_tracker, execution_tracker)
                         return
 
-                regime_result = {
-                    'action': 'error_fallback',
-                    'position_size_multiplier': 0.5,
-                    'allow_new_entries': True,
-                    'exit_all': False,
-                    'reason': f'Safeguard error: {e}'
-                }
+                execution_tracker.complete('FAILED')
+                summary.print_summary()
+                return
 
             # =============================================================
-            # CHECK EXITS (normal position monitoring)
+            # PROCESS EXISTING POSITIONS (Exits)
             # =============================================================
             try:
-                exit_orders = stock_position_monitoring.check_positions_for_exits(
+                exit_orders = stock_position_monitoring.process_position_exits(
                     strategy=self,
-                    current_date=current_date,
-                    all_stock_data=all_stock_data,
-                    position_monitor=self.position_monitor
-                )
-
-                stock_position_monitoring.execute_exit_orders(
-                    strategy=self,
-                    exit_orders=exit_orders,
+                    stock_data=all_stock_data,
+                    exit_orders=[],
                     current_date=current_date,
                     position_monitor=self.position_monitor,
                     profit_tracker=self.profit_tracker,
@@ -778,7 +679,7 @@ class SwingTradeStrategy(Strategy):
             # Get current holdings to avoid buying into existing positions
             current_holdings = {p.symbol for p in self.get_positions()}
 
-            for ticker in all_tickers:
+            for ticker in self.tickers:
                 try:
                     if ticker not in all_stock_data:
                         continue
@@ -831,6 +732,21 @@ class SwingTradeStrategy(Strategy):
                         })
                 except:
                     continue
+
+            # =============================================================
+            # FILTER OUT STOCKS ALREADY TRADED TODAY (Live Trading Only)
+            # =============================================================
+            if not Config.BACKTESTING and hasattr(self, 'daily_traded_stocks') and self.daily_traded_stocks:
+                pre_filter_count = len(all_opportunities)
+                all_opportunities = [
+                    opp for opp in all_opportunities
+                    if opp['ticker'] not in self.daily_traded_stocks
+                ]
+                filtered_count = pre_filter_count - len(all_opportunities)
+                if filtered_count > 0:
+                    print(f"[INFO] Filtered {filtered_count} stock(s) already traded today")
+                    for opp_ticker in [o['ticker'] for o in all_opportunities[:filtered_count]]:
+                        summary.add_warning(f"{opp_ticker} already traded today - skipped")
 
             # =============================================================
             # POSITION SIZING
@@ -948,6 +864,11 @@ class SwingTradeStrategy(Strategy):
 
                     order = self.create_order(ticker, quantity, 'buy')
                     self.submit_order(order)
+
+                    # Record stock as traded today (live trading only)
+                    if not Config.BACKTESTING:
+                        db.add_daily_traded_stock(ticker, current_date.date())
+                        self.daily_traded_stocks.add(ticker)
 
                     if hasattr(self, 'order_logger'):
                         self.order_logger.log_order(
