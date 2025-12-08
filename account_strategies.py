@@ -747,16 +747,23 @@ class SwingTradeStrategy(Strategy):
             # FILTER OUT STOCKS ALREADY TRADED TODAY (Live Trading Only)
             # =============================================================
             if not Config.BACKTESTING and hasattr(self, 'daily_traded_stocks') and self.daily_traded_stocks:
-                pre_filter_count = len(all_opportunities)
+                # pre_filter_count = len(all_opportunities)
+                filtered_tickers = [opp['ticker'] for opp in all_opportunities if
+                                    opp['ticker'] in self.daily_traded_stocks]
+
                 all_opportunities = [
                     opp for opp in all_opportunities
                     if opp['ticker'] not in self.daily_traded_stocks
                 ]
-                filtered_count = pre_filter_count - len(all_opportunities)
-                if filtered_count > 0:
-                    print(f"[INFO] Filtered {filtered_count} stock(s) already traded today")
-                    for opp_ticker in [o['ticker'] for o in all_opportunities[:filtered_count]]:
-                        summary.add_warning(f"{opp_ticker} already traded today - skipped")
+                #filtered_count = pre_filter_count - len(all_opportunities)
+                # if filtered_count > 0:
+                #     print(f"[INFO] Filtered {filtered_count} stock(s) already traded today")
+                #     for opp_ticker in [o['ticker'] for o in all_opportunities[:filtered_count]]:
+                #         summary.add_warning(f"{opp_ticker} already traded today - skipped")
+                if filtered_tickers:
+                    print(f"[INFO] Filtered {len(filtered_tickers)} stock(s) already traded today")
+                    for ticker in filtered_tickers:
+                        summary.add_warning(f"{ticker} already traded today - skipped")
 
             # =============================================================
             # POSITION SIZING
