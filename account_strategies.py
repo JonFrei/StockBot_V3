@@ -586,7 +586,7 @@ class SwingTradeStrategy(Strategy):
             # =============================================================
             try:
                 all_tickers = list(set(self.tickers + ['SPY']))
-                all_stock_data = stock_data.get_stock_data(self, all_tickers)
+                all_stock_data = stock_data.process_data(all_tickers, current_date)
 
                 if not all_stock_data:
                     summary.add_error("No stock data available")
