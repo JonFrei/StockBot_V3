@@ -207,6 +207,7 @@ def sync_positions_with_broker(strategy, current_date, position_monitor):
     return result
 
 
+'''
 def update_end_of_day_metrics(strategy, current_date, regime_result):
     """Update daily_metrics and signal_performance tables at end of iteration"""
     try:
@@ -279,6 +280,8 @@ def update_end_of_day_metrics(strategy, current_date, regime_result):
 
     except Exception as e:
         print(f"[METRICS] Error updating end-of-day metrics: {e}")
+
+'''
 
 
 def enter_paused_state(strategy, failure_tracker, execution_tracker=None):
@@ -619,16 +622,23 @@ class SwingTradeStrategy(Strategy):
             # PROCESS EXISTING POSITIONS (Exits)
             # =============================================================
             try:
-                exit_orders = stock_position_monitoring.process_position_exits(
+                exit_orders = stock_position_monitoring.check_positions_for_exits(
                     strategy=self,
-                    stock_data=all_stock_data,
-                    exit_orders=[],
                     current_date=current_date,
-                    position_monitor=self.position_monitor,
-                    profit_tracker=self.profit_tracker,
-                    summary=summary,
-                    recovery_manager=self.recovery_manager
+                    all_stock_data=all_stock_data,
+                    position_monitor=self.position_monitor
                 )
+
+                if exit_orders:
+                    stock_position_monitoring.execute_exit_orders(
+                        strategy=self,
+                        exit_orders=exit_orders,
+                        current_date=current_date,
+                        position_monitor=self.position_monitor,
+                        profit_tracker=self.profit_tracker,
+                        summary=summary,
+                        recovery_manager=self.recovery_manager
+                    )
 
                 if exit_orders:
                     execution_tracker.record_action('exits', count=len(exit_orders))
