@@ -302,9 +302,9 @@ def enter_paused_state(strategy, failure_tracker, execution_tracker=None):
 
     # Send circuit breaker email
     try:
-        account_email_notifications.send_circuit_breaker_email(
+        account_email_notifications.send_circuit_breaker_alert_email(
             failure_tracker=failure_tracker,
-            execution_tracker=execution_tracker
+            current_date=datetime.now()
         )
     except Exception as e:
         print(f"[EMAIL] Failed to send circuit breaker email: {e}")

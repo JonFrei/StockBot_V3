@@ -554,3 +554,78 @@ class MarketRegimeDetector:
             'accumulation_days': 0,
             'net_distribution': 0,
         }
+
+    # =========================================================================
+    # HIGH-LEVEL REGIME EVALUATION
+    # =========================================================================
+
+    def evaluate_regime(self, strategy, current_date, recovery_manager):
+        """
+        High-level regime evaluation - orchestrates data gathering and detection
+
+        Args:
+            strategy: The trading strategy (for portfolio value and data access)
+            current_date: Current datetime
+            recovery_manager: RecoveryModeManager instance
+
+        Returns:
+            dict with action, reason, position_size_multiplier, and optional recovery_details
+        """
+        import stock_data
+
+        # Get SPY data
+        try:
+            spy_data = stock_data.process_data(['SPY'], current_date)
+            if 'SPY' in spy_data:
+                spy_ind = spy_data['SPY']['indicators']
+                spy_raw = spy_data['SPY'].get('raw')
+
+                # Get volume data if available
+                spy_volume = 0
+                spy_avg_volume = 0
+                if spy_raw is not None and 'volume' in spy_raw.columns:
+                    spy_volume = spy_raw['volume'].iloc[-1]
+                    spy_avg_volume = spy_ind.get('avg_volume', 0)
+
+                self.update_spy(
+                    date=current_date,
+                    spy_close=spy_ind.get('close', 0),
+                    spy_20_ema=spy_ind.get('ema20', 0),
+                    spy_50_sma=spy_ind.get('sma50', 0),
+                    spy_200_sma=spy_ind.get('sma200', 0),
+                    spy_volume=spy_volume,
+                    spy_avg_volume=spy_avg_volume
+                )
+        except Exception as e:
+            print(f"[REGIME] Warning: Could not fetch SPY data: {e}")
+
+        # Update portfolio value for drawdown tracking
+        try:
+            portfolio_value = strategy.get_portfolio_value()
+            if portfolio_value and portfolio_value > 0:
+                self.update_portfolio_value(current_date, portfolio_value)
+        except Exception as e:
+            print(f"[REGIME] Warning: Could not get portfolio value: {e}")
+
+        # Check recovery mode status
+        recovery_mode_active = False
+        recovery_details = None
+        if recovery_manager:
+            recovery_mode_active = recovery_manager.recovery_mode_active
+            if recovery_mode_active:
+                recovery_details = {
+                    'start_date': recovery_manager.recovery_mode_start_date,
+                    'activation_count': recovery_manager.activation_count
+                }
+
+        # Run detection
+        result = self.detect_regime(
+            current_date=current_date,
+            recovery_mode_active=recovery_mode_active
+        )
+
+        # Add recovery details if applicable
+        if recovery_details:
+            result['recovery_details'] = recovery_details
+
+        return result
