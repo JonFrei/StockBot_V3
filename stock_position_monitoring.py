@@ -44,7 +44,8 @@ class PositionMonitor:
         self.strategy = strategy
         self.positions_metadata = {}
 
-    def track_position(self, ticker, entry_date, entry_signal='unknown', entry_score=0, is_addon=False):
+    def track_position(self, ticker, entry_date, entry_signal='unknown', entry_score=0, is_addon=False,
+                       entry_price=None):
         """
         Initialize or update position tracking
 
@@ -60,7 +61,7 @@ class PositionMonitor:
         """
         if ticker not in self.positions_metadata:
             # New position - initialize tracking
-            current_price = self._get_current_price(ticker)
+            current_price = entry_price if entry_price and entry_price > 0 else self._get_current_price(ticker)
 
             self.positions_metadata[ticker] = {
                 'entry_date': entry_date,
