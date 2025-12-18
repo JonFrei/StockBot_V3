@@ -272,7 +272,7 @@ class StatePersistence:
             last_rotation_date=_parse_datetime(rotation_metadata.get('last_rotation_date')),
             last_rotation_week=last_rotation_week,
             rotation_count=rotation_metadata.get('rotation_count', 0),
-            ticker_awards=extended_state  # Store extended state as JSON
+            runtime_state=extended_state  # Store extended state as JSON
         )
 
     def _save_state_memory(self, strategy):
@@ -367,7 +367,7 @@ class StatePersistence:
             return
 
         # Extract extended state from ticker_awards JSON
-        extended_state = bot_state.get('ticker_awards', {})
+        extended_state = bot_state.get('runtime_state', {})
         if isinstance(extended_state, str):
             try:
                 extended_state = json.loads(extended_state)

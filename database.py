@@ -214,7 +214,7 @@ class Database:
                     last_rotation_date TIMESTAMP,
                     last_rotation_week VARCHAR(10),
                     rotation_count INTEGER DEFAULT 0,
-                    ticker_awards JSONB DEFAULT '{}',
+                    runtime_state JSONB DEFAULT '{}'                    
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     CONSTRAINT single_row CHECK (id = 1)
                 );
@@ -916,7 +916,7 @@ class Database:
                 cursor = conn.cursor()
                 cursor.execute("""
                     SELECT portfolio_peak, drawdown_protection_active, drawdown_protection_end_date,
-                           last_rotation_date, last_rotation_week, rotation_count, ticker_awards
+                           last_rotation_date, last_rotation_week, rotation_count, runtime_state
                     FROM bot_state WHERE id = 1
                 """)
                 row = cursor.fetchone()
@@ -930,7 +930,7 @@ class Database:
                         'last_rotation_date': row[3],
                         'last_rotation_week': row[4],
                         'rotation_count': row[5] or 0,
-                        'ticker_awards': row[6] or {}
+                        'runtime_state': row[6] or {}
                     }
                 return {
                     'portfolio_peak': None,
@@ -939,7 +939,7 @@ class Database:
                     'last_rotation_date': None,
                     'last_rotation_week': None,
                     'rotation_count': 0,
-                    'ticker_awards': {}
+                    'runtime_state': {}
                 }
             finally:
                 self.return_connection(conn)
@@ -955,12 +955,12 @@ class Database:
                 'last_rotation_date': None,
                 'last_rotation_week': None,
                 'rotation_count': 0,
-                'ticker_awards': {}
+                'runtime_state': {}
             }
 
     def update_bot_state(self, portfolio_peak=None, drawdown_protection_active=None,
                          drawdown_protection_end_date=None, last_rotation_date=None,
-                         last_rotation_week=None, rotation_count=None, ticker_awards=None,
+                         last_rotation_week=None, rotation_count=None, runtime_state=None,
                          regime_state=None, rotation_metadata=None):
         """Update bot state in database"""
 
@@ -991,9 +991,9 @@ class Database:
                 if rotation_count is not None:
                     updates.append("rotation_count = %s")
                     values.append(rotation_count)
-                if ticker_awards is not None:
-                    updates.append("ticker_awards = %s")
-                    values.append(json.dumps(ticker_awards) if isinstance(ticker_awards, dict) else ticker_awards)
+                if runtime_state is not None:
+                    updates.append("runtime_state = %s")
+                    values.append(json.dumps(runtime_state) if isinstance(runtime_state, dict) else runtime_state)
 
                 updates.append("updated_at = CURRENT_TIMESTAMP")
 
@@ -1056,7 +1056,7 @@ class InMemoryDatabase:
             'last_rotation_date': None,
             'last_rotation_week': None,
             'rotation_count': 0,
-            'ticker_awards': {}
+            'runtime_state': {}
         }
         self.dashboard_settings = {'bot_paused': False}
 
@@ -1224,7 +1224,7 @@ class InMemoryDatabase:
 
     def update_bot_state(self, portfolio_peak, drawdown_protection_active,
                          drawdown_protection_end_date, last_rotation_date,
-                         last_rotation_week, rotation_count, ticker_awards):
+                         last_rotation_week, rotation_count, runtime_state):
         self.bot_state = {
             'portfolio_peak': portfolio_peak,
             'drawdown_protection_active': drawdown_protection_active,
@@ -1232,7 +1232,7 @@ class InMemoryDatabase:
             'last_rotation_date': last_rotation_date,
             'last_rotation_week': last_rotation_week,
             'rotation_count': rotation_count,
-            'ticker_awards': ticker_awards
+            'runtime_state': runtime_state
         }
 
     def get_bot_state(self):

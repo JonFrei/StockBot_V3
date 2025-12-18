@@ -6,7 +6,8 @@
   <component name="ChangeListManager">
     <list default="true" id="d6df019d-759f-4aef-8455-f63cac562958" name="Changes" comment="com">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/stock_position_monitoring.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_position_monitoring.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/database.py" beforeDir="false" afterPath="$PROJECT_DIR$/database.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/server_recovery.py" beforeDir="false" afterPath="$PROJECT_DIR$/server_recovery.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -230,14 +231,6 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1762775089088</updated>
-    </task>
-    <task id="LOCAL-00136" summary="com">
-      <option name="closed" value="true" />
-      <created>1764171069534</created>
-      <option name="number" value="00136" />
-      <option name="presentableId" value="LOCAL-00136" />
-      <option name="project" value="LOCAL" />
-      <updated>1764171069534</updated>
     </task>
     <task id="LOCAL-00137" summary="com">
       <option name="closed" value="true" />
@@ -623,7 +616,15 @@
       <option name="project" value="LOCAL" />
       <updated>1765219085490</updated>
     </task>
-    <option name="localTasksCounter" value="185" />
+    <task id="LOCAL-00185" summary="com">
+      <option name="closed" value="true" />
+      <created>1765976653471</created>
+      <option name="number" value="00185" />
+      <option name="presentableId" value="LOCAL-00185" />
+      <option name="project" value="LOCAL" />
+      <updated>1765976653471</updated>
+    </task>
+    <option name="localTasksCounter" value="186" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
