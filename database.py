@@ -214,7 +214,7 @@ class Database:
                     last_rotation_date TIMESTAMP,
                     last_rotation_week VARCHAR(10),
                     rotation_count INTEGER DEFAULT 0,
-                    runtime_state JSONB DEFAULT '{}'                    
+                    runtime_state JSONB DEFAULT '{}',                    
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     CONSTRAINT single_row CHECK (id = 1)
                 );
