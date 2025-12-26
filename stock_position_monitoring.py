@@ -1,4 +1,5 @@
 import stock_indicators
+from config import Config
 
 
 class ExitConfig:
@@ -28,7 +29,7 @@ class ExitConfig:
     MAX_LOSS_VERY_HIGH_VOL = 25.0  # Very high volatility
 
     # Stagnant position check
-    STAGNANT_MAX_DAYS = 90
+    STAGNANT_MAX_DAYS = 60 # Changed from 90
     STAGNANT_MIN_GAIN_PCT = 5
     STAGNANT_ENABLED = True
 
@@ -520,7 +521,17 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
 
         # IMPORTANT: Use broker's avg_entry_price for P&L calculations
         # This handles add-ons correctly since broker averages automatically
-        entry_price = broker_entry_price
+        # entry_price = broker_entry_price
+        # entry_date = metadata.get('entry_date')
+
+        if Config.BACKTESTING:
+            # In backtesting, use the stored price (matches split-adjusted data feed)
+            stored_entry = metadata.get('entry_price')
+            entry_price = stored_entry if stored_entry and stored_entry > 0 else broker_entry_price
+        else:
+            # In live trading, broker handles splits and add-ons correctly
+            entry_price = broker_entry_price
+
         entry_date = metadata.get('entry_date')
 
         # Calculate P&L using broker's averaged entry price

@@ -18,6 +18,7 @@ class SignalConfig:
     ST1_ADX_MIN = 15
     ST1_ADX_MAX = 50
 
+    '''
     # CONSOLIDATION_BREAKOUT
     CB_RANGE_MAX = 18.0
     CB_VOLUME_RATIO_MIN = 1.10
@@ -28,6 +29,19 @@ class SignalConfig:
     CB_BREAKOUT_THRESHOLD = 0.97
     CB_ADX_MIN = 18
     CB_MACD_REQUIRED = True
+    '''
+    # CONSOLIDATION_BREAKOUT (tightened)
+    CB_RANGE_MAX = 12.0              # Was 18.0 - tighter consolidation required
+    CB_VOLUME_RATIO_MIN = 1.5        # Was 1.10 - require real volume surge
+    CB_RSI_MIN = 50                  # Was 48 - ensure momentum
+    CB_RSI_MAX = 70                  # Was 72 - avoid overextended
+    CB_EMA20_DISTANCE_MAX = 8.0      # Was 12.0 - stay closer to mean
+    CB_LOOKBACK_PERIODS = 15         # Was 10 - longer base formation
+    CB_BREAKOUT_THRESHOLD = 1.005    # Was 0.97 - must break HIGH by 0.5%
+    CB_ADX_MIN = 20                  # Was 18 - stronger trend required
+    CB_MACD_REQUIRED = True
+    CB_MIN_BASE_DAYS = 5             # NEW - minimum consolidation days
+    CB_PRIOR_UPTREND_PCT = 5.0       # NEW - must have gained before consolidating
 
     # GOLDEN_CROSS (loosened for more signals)
     GC_DISTANCE_MIN = 0.0
@@ -194,7 +208,7 @@ def swing_trade_1(data: IndicatorData) -> SignalResult:
 
     return _create_signal_result(score, 'buy', f'swing_trade_1 [{score:.0f}]', 'swing_trade_1', close, breakdown)
 
-
+'''
 def consolidation_breakout(data: IndicatorData) -> SignalResult:
     """Consolidation Breakout"""
     score = 0
@@ -277,7 +291,176 @@ def consolidation_breakout(data: IndicatorData) -> SignalResult:
             return _no_signal()
 
     return _create_signal_result(score, 'buy', f'consolidation_breakout [{score:.0f}]', 'consolidation_breakout', close)
+'''
 
+
+def consolidation_breakout(data: IndicatorData) -> SignalResult:
+    """
+    Consolidation Breakout - Professional Implementation
+
+    Detects true breakouts from tight consolidation patterns:
+    1. Prior uptrend (not breaking out of a downtrend)
+    2. Tight consolidation range (volatility squeeze)
+    3. Actual breakout above range high (not just "near" high)
+    4. Volume surge confirmation
+    5. Trend structure intact
+    """
+    score = 0
+
+    close = data.get('close', 0)
+    high = data.get('high', 0)
+    ema20 = data.get('ema20', 0)
+    ema50 = data.get('ema50', 0)
+    sma200 = data.get('sma200', 0)
+    rsi = data.get('rsi', 50)
+    volume_ratio = data.get('volume_ratio', 0)
+    adx = data.get('adx', 0)
+    macd = data.get('macd', 0)
+    macd_signal = data.get('macd_signal', 0)
+
+    # Bollinger bands for squeeze detection
+    bb_upper = data.get('bollinger_upper', 0)
+    bb_lower = data.get('bollinger_lower', 0)
+    bb_mean = data.get('bollinger_mean', 0)
+
+    raw_data = data.get('raw', None)
+    if raw_data is None or len(raw_data) < SignalConfig.CB_LOOKBACK_PERIODS + 10:
+        return _no_signal('Insufficient data')
+
+    # =========================================================================
+    # HARD FILTERS
+    # =========================================================================
+
+    # 1. TREND STRUCTURE - must be in uptrend
+    if close <= sma200:
+        return _no_signal('Below 200 SMA')
+    if ema20 <= ema50:
+        return _no_signal('EMA20 below EMA50')
+
+    # 2. PRIOR UPTREND - must have gained before consolidating
+    #    Check price 30 days ago vs start of consolidation
+    try:
+        price_30d_ago = float(raw_data['close'].iloc[-30]) if len(raw_data) >= 30 else float(raw_data['close'].iloc[0])
+        price_at_consolidation_start = float(raw_data['close'].iloc[-SignalConfig.CB_LOOKBACK_PERIODS])
+        prior_gain_pct = ((price_at_consolidation_start - price_30d_ago) / price_30d_ago) * 100
+
+        if prior_gain_pct < SignalConfig.CB_PRIOR_UPTREND_PCT:
+            return _no_signal(f'No prior uptrend: {prior_gain_pct:.1f}%')
+    except:
+        return _no_signal('Cannot calculate prior trend')
+
+    # 3. CONSOLIDATION RANGE - must be tight
+    recent_highs = raw_data['high'].iloc[-SignalConfig.CB_LOOKBACK_PERIODS:].values
+    recent_lows = raw_data['low'].iloc[-SignalConfig.CB_LOOKBACK_PERIODS:].values
+    range_high = max(recent_highs)
+    range_low = min(recent_lows)
+    consolidation_range = ((range_high - range_low) / range_low) * 100
+
+    if consolidation_range > SignalConfig.CB_RANGE_MAX:
+        return _no_signal(f'Range too wide: {consolidation_range:.1f}%')
+
+    # 4. ACTUAL BREAKOUT - price must break ABOVE the range high
+    #    Not just "near" the high - must exceed it
+    breakout_threshold = range_high * SignalConfig.CB_BREAKOUT_THRESHOLD
+    if close < breakout_threshold:
+        return _no_signal(f'No breakout: ${close:.2f} < ${breakout_threshold:.2f}')
+
+    # 5. VOLUME SURGE - breakouts need volume confirmation
+    if volume_ratio < SignalConfig.CB_VOLUME_RATIO_MIN:
+        return _no_signal(f'Weak volume: {volume_ratio:.1f}x')
+
+    # 6. RSI - momentum but not overextended
+    if not (SignalConfig.CB_RSI_MIN <= rsi <= SignalConfig.CB_RSI_MAX):
+        return _no_signal(f'RSI out of range: {rsi:.1f}')
+
+    # 7. ADX - trend strength
+    if adx < SignalConfig.CB_ADX_MIN:
+        return _no_signal(f'ADX too weak: {adx:.1f}')
+
+    # 8. MACD - momentum confirmation
+    if SignalConfig.CB_MACD_REQUIRED and macd <= macd_signal:
+        return _no_signal('MACD not bullish')
+
+    # =========================================================================
+    # SCORING
+    # =========================================================================
+
+    # Consolidation tightness (0-25 points) - tighter is better
+    if consolidation_range <= 5.0:
+        score += 25
+    elif consolidation_range <= 7.0:
+        score += 20
+    elif consolidation_range <= 9.0:
+        score += 15
+    else:
+        score += 10
+
+    # Volume surge strength (0-20 points)
+    if volume_ratio >= 2.5:
+        score += 20
+    elif volume_ratio >= 2.0:
+        score += 16
+    elif volume_ratio >= 1.8:
+        score += 12
+    else:
+        score += 8
+
+    # Breakout strength - how far above range high (0-15 points)
+    breakout_pct = ((close - range_high) / range_high) * 100
+    if breakout_pct >= 2.0:
+        score += 15
+    elif breakout_pct >= 1.5:
+        score += 12
+    elif breakout_pct >= 1.0:
+        score += 9
+    else:
+        score += 6
+
+    # Volatility squeeze - Bollinger bandwidth (0-15 points)
+    # Tighter bands = better setup
+    if bb_mean > 0 and bb_upper > 0 and bb_lower > 0:
+        bb_width_pct = ((bb_upper - bb_lower) / bb_mean) * 100
+        if bb_width_pct <= 8.0:
+            score += 15  # Very tight squeeze
+        elif bb_width_pct <= 12.0:
+            score += 12
+        elif bb_width_pct <= 16.0:
+            score += 8
+        else:
+            score += 4
+    else:
+        score += 5  # Default if no BB data
+
+    # RSI positioning (0-10 points)
+    if 55 <= rsi <= 65:
+        score += 10  # Sweet spot
+    elif 50 <= rsi < 55 or 65 < rsi <= 68:
+        score += 7
+    else:
+        score += 4
+
+    # ADX trend strength (0-10 points)
+    if adx >= 30:
+        score += 10
+    elif adx >= 25:
+        score += 8
+    else:
+        score += 5
+
+    # Prior uptrend strength bonus (0-5 points)
+    if prior_gain_pct >= 15.0:
+        score += 5
+    elif prior_gain_pct >= 10.0:
+        score += 3
+    else:
+        score += 1
+
+    return _create_signal_result(
+        score, 'buy',
+        f'consolidation_breakout [{score:.0f}] rng:{consolidation_range:.1f}% vol:{volume_ratio:.1f}x brk:{breakout_pct:.1f}%',
+        'consolidation_breakout',
+        close
+    )
 
 def golden_cross(data: IndicatorData) -> SignalResult:
     """Golden Cross - Loosened for more signals"""

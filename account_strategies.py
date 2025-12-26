@@ -724,6 +724,15 @@ class SwingTradeStrategy(Strategy):
                         except:
                             pass
 
+                    # 200 SMA trend filter - only buy stocks in uptrends
+                    sma200 = data.get('sma200', 0)
+                    close = data.get('close', 0)
+                    if sma200 > 0 and close > 0:
+                        if close <= sma200:
+                            pct_below = ((sma200 - close) / sma200) * 100
+                            summary.add_skip(ticker, f"Below 200 SMA: {pct_below:.1f}% under")
+                            continue
+
                     signal_result = self.signal_processor.process_ticker(ticker, data, None)
 
                     if signal_result['action'] == 'buy':
@@ -877,7 +886,8 @@ class SwingTradeStrategy(Strategy):
                                   'rehabilitation': '🔄', 'frozen': '❄️'}.get(tier, '❓')
 
                     summary.add_entry(ticker, quantity, price, cost, f"{signal_type} {tier_emoji}", signal_score)
-                    self.position_monitor.track_position(ticker, current_date, signal_type, entry_score=signal_score)
+                    self.position_monitor.track_position(ticker, current_date, signal_type, entry_score=signal_score,
+                                                         entry_price=price)
 
                     order = self.create_order(ticker, quantity, 'buy')
                     self.submit_order(order)
