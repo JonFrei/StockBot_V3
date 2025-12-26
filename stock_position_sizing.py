@@ -192,9 +192,10 @@ def create_portfolio_context(strategy, pending_exit_orders=None):
     portfolio_value = strategy.portfolio_value
     existing_positions = len(strategy.get_positions())
 
-    # Add pending proceeds from unsettled exit orders
-    pending_proceeds = calculate_pending_exit_proceeds(pending_exit_orders)
-    cash_balance += pending_proceeds
+    # Add pending proceeds from unsettled exit orders (fixes negative cash in backtesting)
+    if pending_exit_orders:
+        pending_proceeds = calculate_pending_exit_proceeds(pending_exit_orders)
+        cash_balance += pending_proceeds
 
     deployed_capital = portfolio_value - cash_balance
     min_reserve = portfolio_value * (SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100)
