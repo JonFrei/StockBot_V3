@@ -724,7 +724,7 @@ class SwingTradeStrategy(Strategy):
                         except:
                             pass
 
-                    # 200 SMA trend filter - only buy stocks in uptrends
+                    # 200 SMA trend filter - only buy stocks in uptrends with rising 200 SMA
                     sma200 = data.get('sma200', 0)
                     close = data.get('close', 0)
                     if sma200 > 0 and close > 0:
@@ -732,6 +732,22 @@ class SwingTradeStrategy(Strategy):
                             pct_below = ((sma200 - close) / sma200) * 100
                             summary.add_skip(ticker, f"Below 200 SMA: {pct_below:.1f}% under")
                             continue
+
+                        # Check 200 SMA slope (must be rising)
+                        raw_df = data.get('raw')
+                        if raw_df is not None and len(raw_df) >= 210:
+                            try:
+                                sma200_series = raw_df['close'].rolling(window=200).mean()
+                                if len(sma200_series) >= 11:
+                                    sma200_current = sma200_series.iloc[-1]
+                                    sma200_past = sma200_series.iloc[-11]  # 10 days ago
+                                    if sma200_past > 0:
+                                        sma200_slope = ((sma200_current - sma200_past) / sma200_past) * 100
+                                        if sma200_slope < 0:
+                                            summary.add_skip(ticker, f"200 SMA declining: {sma200_slope:.2f}%")
+                                            continue
+                            except:
+                                pass
 
                     signal_result = self.signal_processor.process_ticker(ticker, data, None)
 
