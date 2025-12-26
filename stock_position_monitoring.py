@@ -1,6 +1,6 @@
 import stock_indicators
 from config import Config
-
+import stock_position_sizing
 
 class ExitConfig:
     """Tiered exit configuration"""
@@ -700,6 +700,8 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
 
                 sell_order = strategy.create_order(ticker, sell_quantity, 'sell')
                 strategy.submit_order(sell_order)
+                if Config.BACKTESTING:
+                    stock_position_sizing.update_backtest_cash_for_sell(sell_quantity * current_price)
                 continue
 
             # Normal Tier 1 exit
@@ -722,6 +724,8 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
 
             sell_order = strategy.create_order(ticker, sell_quantity, 'sell')
             strategy.submit_order(sell_order)
+            if Config.BACKTESTING:
+                stock_position_sizing.update_backtest_cash_for_sell(sell_quantity * current_price)
 
         # =====================================================================
         # TIER 2 EXIT: Partial exit + activate trailing stop
@@ -755,6 +759,8 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
 
                 sell_order = strategy.create_order(ticker, sell_quantity, 'sell')
                 strategy.submit_order(sell_order)
+                if Config.BACKTESTING:
+                    stock_position_sizing.update_backtest_cash_for_sell(sell_quantity * current_price)
                 continue
 
             # Normal Tier 2 exit
@@ -777,6 +783,8 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
 
             sell_order = strategy.create_order(ticker, sell_quantity, 'sell')
             strategy.submit_order(sell_order)
+            if Config.BACKTESTING:
+                stock_position_sizing.update_backtest_cash_for_sell(sell_quantity * current_price)
 
         # =====================================================================
         # FULL EXIT: Close entire position
@@ -809,3 +817,5 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
 
             sell_order = strategy.create_order(ticker, sell_quantity, 'sell')
             strategy.submit_order(sell_order)
+            if Config.BACKTESTING:
+                stock_position_sizing.update_backtest_cash_for_sell(sell_quantity * current_price)

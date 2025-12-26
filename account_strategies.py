@@ -367,6 +367,9 @@ class SwingTradeStrategy(Strategy):
         self.order_logger = account_profit_tracking.OrderLogger(self)
         self._current_regime_result = None  # Store for metrics tracking
 
+        if Config.BACKTESTING:
+            stock_position_sizing.reset_backtest_cash_tracker(self.cash)
+
         print(f"\n{'=' * 60}")
         print(f"🤖 SwingTradeStrategy Initialized")
         print(f"   Tickers: {len(self.tickers)} | Mode: {'BACKTEST' if Config.BACKTESTING else 'LIVE'}")
@@ -547,6 +550,10 @@ class SwingTradeStrategy(Strategy):
                                 sell_order = self.create_order(ticker, qty, 'sell')
                                 self.submit_order(sell_order)
                                 exit_count += 1
+
+                                # Update backtest cash tracker
+                                if Config.BACKTESTING:
+                                    stock_position_sizing.update_backtest_cash_for_sell(qty * current_price)
 
                             except Exception as e:
                                 summary.add_error(f"{exit_reason} {ticker} failed: {e}")
@@ -809,8 +816,8 @@ class SwingTradeStrategy(Strategy):
                 return
 
             try:
-                portfolio_context = stock_position_sizing.create_portfolio_context(self,
-                                                                                   pending_exit_orders=exit_orders)
+                portfolio_context = stock_position_sizing.create_portfolio_context(self)
+
                 if portfolio_context['deployable_cash'] <= 0:
                     summary.add_warning("No deployable cash")
 
@@ -909,6 +916,8 @@ class SwingTradeStrategy(Strategy):
 
                     order = self.create_order(ticker, quantity, 'buy')
                     self.submit_order(order)
+                    if Config.BACKTESTING:
+                        stock_position_sizing.update_backtest_cash_for_buy(cost)
 
                     # Record stock as traded today (live trading only)
                     if not Config.BACKTESTING:

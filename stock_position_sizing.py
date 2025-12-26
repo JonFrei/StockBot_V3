@@ -10,7 +10,53 @@ Changes from previous version:
 - NEW: Returns is_addon flag and existing position details
 """
 import account_broker_data
+from config import Config
 
+# =============================================================================
+# BACKTEST CASH TRACKER
+# =============================================================================
+
+_backtest_cash_tracker = {
+    'initialized': False,
+    'cash': 0.0
+}
+
+
+def reset_backtest_cash_tracker(initial_cash):
+    """Call this at the start of backtesting"""
+    global _backtest_cash_tracker
+    _backtest_cash_tracker = {
+        'initialized': True,
+        'cash': float(initial_cash)
+    }
+    print(f"[CASH TRACKER] Initialized with ${initial_cash:,.2f}")
+
+
+def update_backtest_cash_for_buy(cost):
+    """Call after each buy order in backtesting"""
+    global _backtest_cash_tracker
+    if _backtest_cash_tracker['initialized']:
+        _backtest_cash_tracker['cash'] -= cost
+
+
+def update_backtest_cash_for_sell(proceeds):
+    """Call after each sell order in backtesting"""
+    global _backtest_cash_tracker
+    if _backtest_cash_tracker['initialized']:
+        _backtest_cash_tracker['cash'] += proceeds
+
+
+def get_tracked_cash():
+    """Get our tracked cash balance for backtesting"""
+    global _backtest_cash_tracker
+    if _backtest_cash_tracker['initialized']:
+        return _backtest_cash_tracker['cash']
+    return None
+
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
 
 class SimplifiedSizingConfig:
     """Position sizing configuration"""
@@ -20,26 +66,16 @@ class SimplifiedSizingConfig:
     MIN_CASH_RESERVE_PCT = 5.0
     MAX_CASH_DEPLOYMENT_PCT = 85.0
     MAX_DAILY_DEPLOYMENT_PCT = 50.0
+    MAX_SINGLE_POSITION_PCT = 18.0
 
-    # NEW: Concentration limit - max exposure to single stock (including add-ons)
-    MAX_SINGLE_POSITION_PCT = 18.0  # Can't exceed 18% of portfolio in one stock
 
+# =============================================================================
+# POSITION EXPOSURE
+# =============================================================================
 
 def get_current_position_exposure(strategy, ticker):
     """
     Get current exposure to a ticker as percentage of portfolio
-
-    Args:
-        strategy: Lumibot Strategy instance
-        ticker: Stock symbol
-
-    Returns:
-        dict: {
-            'has_position': bool,
-            'quantity': int,
-            'market_value': float,
-            'exposure_pct': float
-        }
     """
     positions = strategy.get_positions()
     portfolio_value = strategy.portfolio_value
@@ -74,19 +110,13 @@ def get_current_position_exposure(strategy, ticker):
     }
 
 
+# =============================================================================
+# POSITION SIZING
+# =============================================================================
+
 def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier=1.0, verbose=True, strategy=None):
     """
     Position sizing with rotation multiplier support and concentration limits
-
-    Args:
-        opportunities: List of opportunity dicts
-        portfolio_context: Portfolio state dict
-        regime_multiplier: From safeguard system (0.0 to 1.0)
-        verbose: If False, suppress detailed logging
-        strategy: Lumibot Strategy instance (optional, required for concentration check)
-
-    Returns:
-        List of allocation dicts with quantity, price, cost, is_addon flag, etc.
     """
     if not opportunities:
         return []
@@ -94,7 +124,7 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
     portfolio_value = portfolio_context['portfolio_value']
     deployable_cash = portfolio_context['deployable_cash']
 
-    # Safety cap: Never deploy more than actual reported cash (prevents negative cash)
+    # Safety cap: Never deploy more than actual reported cash
     actual_cash = portfolio_context['total_cash']
     if deployable_cash > actual_cash:
         deployable_cash = max(0, actual_cash - portfolio_value * (SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100))
@@ -103,7 +133,6 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
     daily_limit = portfolio_value * (SimplifiedSizingConfig.MAX_DAILY_DEPLOYMENT_PCT / 100)
     max_deployment = min(cash_limit, daily_limit)
 
-    # Calculate positions
     allocations = []
 
     for opp in opportunities:
@@ -112,7 +141,6 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
         vol_mult = opp['vol_metrics'].get('position_multiplier', 1.0)
         rotation_mult = opp.get('rotation_mult', 1.0)
 
-        # Check current exposure if strategy provided
         current_exposure = {'has_position': False, 'exposure_pct': 0, 'quantity': 0, 'market_value': 0}
         is_addon = False
 
@@ -120,22 +148,19 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
             current_exposure = get_current_position_exposure(strategy, ticker)
             is_addon = current_exposure['has_position']
 
-            # Check concentration limit
             if current_exposure['exposure_pct'] >= SimplifiedSizingConfig.MAX_SINGLE_POSITION_PCT:
                 if verbose:
-                    print(f"   ⚠️ {ticker}: At max concentration ({current_exposure['exposure_pct']:.1f}% >= {SimplifiedSizingConfig.MAX_SINGLE_POSITION_PCT}%)")
+                    print(f"   ⚠️ {ticker}: At max concentration ({current_exposure['exposure_pct']:.1f}%)")
                 continue
 
-        # Apply all multipliers: regime, volatility, and rotation
         position_pct = SimplifiedSizingConfig.BASE_POSITION_PCT * regime_multiplier * vol_mult * rotation_mult
         position_pct = max(0.5, min(position_pct, SimplifiedSizingConfig.MAX_POSITION_PCT))
 
-        # For add-ons, calculate remaining room under concentration limit
         if is_addon:
             remaining_room_pct = SimplifiedSizingConfig.MAX_SINGLE_POSITION_PCT - current_exposure['exposure_pct']
             position_pct = min(position_pct, remaining_room_pct)
 
-            if position_pct <= 0.5:  # Not enough room for meaningful add
+            if position_pct <= 0.5:
                 if verbose:
                     print(f"   ⚠️ {ticker}: Insufficient room for add-on ({remaining_room_pct:.1f}% remaining)")
                 continue
@@ -143,10 +168,8 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
         position_dollars = portfolio_value * (position_pct / 100)
         current_price = data['close']
 
-        # Calculate quantity - no minimum enforcement
         quantity = int(position_dollars / current_price)
 
-        # Skip if quantity is 0 (price too high for allocated dollars)
         if quantity <= 0:
             if verbose:
                 print(f"   ⚠️ {ticker}: Position too small (${position_dollars:.0f} / ${current_price:.2f} = 0 shares)")
@@ -164,7 +187,6 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
             'regime_mult': regime_multiplier,
             'vol_mult': vol_mult,
             'rotation_mult': rotation_mult,
-            # NEW: Add-on tracking fields
             'is_addon': is_addon,
             'existing_exposure_pct': current_exposure['exposure_pct'],
             'existing_quantity': current_exposure['quantity']
@@ -181,7 +203,7 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
         scaled = []
         for alloc in allocations:
             scaled_qty = int(alloc['quantity'] * scale_factor)
-            if scaled_qty > 0:  # Keep if at least 1 share
+            if scaled_qty > 0:
                 alloc['quantity'] = scaled_qty
                 alloc['cost'] = scaled_qty * alloc['price']
                 alloc['pct_portfolio'] = (alloc['cost'] / portfolio_value * 100)
@@ -192,16 +214,22 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
     return allocations
 
 
-def create_portfolio_context(strategy, pending_exit_orders=None):
-    """Create portfolio context dict"""
-    cash_balance = account_broker_data.get_cash_balance(strategy)
+# =============================================================================
+# PORTFOLIO CONTEXT
+# =============================================================================
+
+def create_portfolio_context(strategy):
+    """Create portfolio context dict with accurate cash tracking"""
+    import account_broker_data
+
     portfolio_value = strategy.portfolio_value
     existing_positions = len(strategy.get_positions())
 
-    # Add pending proceeds from unsettled exit orders (fixes negative cash in backtesting)
-    if pending_exit_orders:
-        pending_proceeds = calculate_pending_exit_proceeds(pending_exit_orders)
-        cash_balance += pending_proceeds
+    # Use tracked cash for backtesting, Alpaca for live
+    if Config.BACKTESTING and _backtest_cash_tracker['initialized']:
+        cash_balance = _backtest_cash_tracker['cash']
+    else:
+        cash_balance = account_broker_data.get_cash_balance(strategy)
 
     deployed_capital = portfolio_value - cash_balance
     min_reserve = portfolio_value * (SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100)
