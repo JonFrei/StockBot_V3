@@ -18,41 +18,42 @@ from config import Config
 
 _backtest_cash_tracker = {
     'initialized': False,
-    'iteration_start_cash': 0.0,  # Cash at start of iteration (from Lumibot)
-    'iteration_adjustments': 0.0   # Buy/sell adjustments within iteration
+    'iteration_start_cash': 0.0,
+    'buy_adjustments': 0.0,  # Negative values (money spent)
+    'sell_adjustments': 0.0  # Positive values (money received) - not used for deployment
 }
 
 
 def sync_backtest_cash_start_of_day(lumibot_cash):
-    """Call at START of each iteration to sync with Lumibot's cash"""
     global _backtest_cash_tracker
     _backtest_cash_tracker = {
         'initialized': True,
         'iteration_start_cash': float(lumibot_cash),
-        'iteration_adjustments': 0.0
+        'buy_adjustments': 0.0,
+        'sell_adjustments': 0.0
     }
 
 
 def update_backtest_cash_for_buy(cost):
-    """Track buy within current iteration"""
     global _backtest_cash_tracker
     if _backtest_cash_tracker['initialized']:
-        _backtest_cash_tracker['iteration_adjustments'] -= cost
+        _backtest_cash_tracker['buy_adjustments'] -= cost
 
 
 def update_backtest_cash_for_sell(proceeds):
-    """Track sell within current iteration"""
     global _backtest_cash_tracker
     if _backtest_cash_tracker['initialized']:
-        _backtest_cash_tracker['iteration_adjustments'] += proceeds
+        _backtest_cash_tracker['sell_adjustments'] += proceeds
 
 
 def get_tracked_cash():
-    """Get adjusted cash for current iteration"""
+    """Get adjusted cash for current iteration - buys only, no sell proceeds"""
     global _backtest_cash_tracker
     if _backtest_cash_tracker['initialized']:
-        return _backtest_cash_tracker['iteration_start_cash'] + _backtest_cash_tracker['iteration_adjustments']
+        # Only use start cash minus buy adjustments (sells tracked separately)
+        return _backtest_cash_tracker['iteration_start_cash'] + _backtest_cash_tracker['buy_adjustments']
     return None
+
 
 # =============================================================================
 # CONFIGURATION
@@ -295,12 +296,13 @@ def create_portfolio_context(strategy):
         'deployable_cash': deployable_cash
     }
 
+
 def debug_cash_state(label=""):
-    """Debug helper to log cash tracker state"""
     if Config.BACKTESTING:
         print(f"[CASH DEBUG] {label}")
         print(f"   initialized: {_backtest_cash_tracker['initialized']}")
         print(f"   iteration_start_cash: ${_backtest_cash_tracker['iteration_start_cash']:,.2f}")
-        print(f"   iteration_adjustments: ${_backtest_cash_tracker['iteration_adjustments']:,.2f}")
+        print(f"   buy_adjustments: ${_backtest_cash_tracker['buy_adjustments']:,.2f}")
+        print(f"   sell_adjustments: ${_backtest_cash_tracker['sell_adjustments']:,.2f}")
         tracked = get_tracked_cash()
-        print(f"   tracked_cash (calculated): ${tracked:,.2f}" if tracked else "   tracked_cash: None")
+        print(f"   tracked_cash (for buys): ${tracked:,.2f}" if tracked else "   tracked_cash: None")

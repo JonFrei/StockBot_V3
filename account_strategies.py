@@ -850,6 +850,13 @@ class SwingTradeStrategy(Strategy):
                     save_state_safe(self)
                     return
 
+                seen_tickers = {}
+                for opp in all_opportunities:
+                    if opp['score'] >= 60:
+                        ticker = opp['ticker']
+                        if ticker not in seen_tickers or opp['score'] > seen_tickers[ticker]['score']:
+                            seen_tickers[ticker] = opp
+
                 sizing_opportunities = [
                     {
                         'ticker': opp['ticker'],
@@ -859,7 +866,7 @@ class SwingTradeStrategy(Strategy):
                         'vol_metrics': opp['vol_metrics'],
                         'rotation_mult': opp['rotation_mult']
                     }
-                    for opp in all_opportunities if opp['score'] >= 60
+                    for opp in seen_tickers.values()
                 ]
 
                 regime_multiplier = regime_result['position_size_multiplier']
