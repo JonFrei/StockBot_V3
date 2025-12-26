@@ -430,6 +430,7 @@ class SwingTradeStrategy(Strategy):
 
             # Use tracked cash for backtesting display
             if Config.BACKTESTING:
+                stock_position_sizing.sync_backtest_cash_start_of_day(self.get_cash())
                 tracked_cash = stock_position_sizing.get_tracked_cash()
                 display_cash = tracked_cash if tracked_cash is not None else self.get_cash()
             else:
@@ -866,7 +867,8 @@ class SwingTradeStrategy(Strategy):
                     sizing_opportunities,
                     portfolio_context,
                     regime_multiplier,
-                    verbose=False
+                    verbose=False,
+                    strategy=self
                 )
 
                 if not allocations:
@@ -923,6 +925,9 @@ class SwingTradeStrategy(Strategy):
                     self.submit_order(order)
                     if Config.BACKTESTING:
                         stock_position_sizing.update_backtest_cash_for_buy(cost)
+                        # DEBUG: Log after each buy
+                        print(f"[BUY DEBUG] Bought {ticker}: ${cost:,.2f}")
+                        stock_position_sizing.debug_cash_state(f"After buying {ticker}")
 
                     # Record stock as traded today (live trading only)
                     if not Config.BACKTESTING:

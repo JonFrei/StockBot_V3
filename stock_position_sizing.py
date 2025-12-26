@@ -137,6 +137,15 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
     daily_limit = portfolio_value * (SimplifiedSizingConfig.MAX_DAILY_DEPLOYMENT_PCT / 100)
     max_deployment = min(cash_limit, daily_limit)
 
+    # DEBUG: Log budget constraints
+    if Config.BACKTESTING:
+        print(f"[SIZE DEBUG] === BUDGET CONSTRAINTS ===")
+        print(f"[SIZE DEBUG] deployable_cash: ${deployable_cash:,.2f}")
+        print(f"[SIZE DEBUG] cash_limit (85%): ${cash_limit:,.2f}")
+        print(f"[SIZE DEBUG] daily_limit (50% of ${portfolio_value:,.0f}): ${daily_limit:,.2f}")
+        print(f"[SIZE DEBUG] max_deployment: ${max_deployment:,.2f}")
+        print(f"[SIZE DEBUG] opportunities count: {len(opportunities)}")
+
     allocations = []
 
     for opp in opportunities:
@@ -203,8 +212,19 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
 
     # Scale if over budget
     total_cost = sum(a['cost'] for a in allocations)
+
+    # DEBUG: Log before scaling
+    if Config.BACKTESTING:
+        print(f"[SIZE DEBUG] === SCALING CHECK ===")
+        print(f"[SIZE DEBUG] total_cost before scaling: ${total_cost:,.2f}")
+        print(f"[SIZE DEBUG] max_deployment: ${max_deployment:,.2f}")
+        print(f"[SIZE DEBUG] over budget: {total_cost > max_deployment}")
+
     if total_cost > max_deployment:
         scale_factor = max_deployment / total_cost
+
+        if Config.BACKTESTING:
+            print(f"[SIZE DEBUG] SCALING DOWN by factor: {scale_factor:.3f}")
 
         scaled = []
         for alloc in allocations:
@@ -216,6 +236,11 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
                 scaled.append(alloc)
 
         allocations = scaled
+
+        # DEBUG: Log after scaling
+        if Config.BACKTESTING:
+            new_total = sum(a['cost'] for a in allocations)
+            print(f"[SIZE DEBUG] total_cost after scaling: ${new_total:,.2f}")
 
     return allocations
 
@@ -231,15 +256,33 @@ def create_portfolio_context(strategy):
     portfolio_value = strategy.portfolio_value
     existing_positions = len(strategy.get_positions())
 
+    # DEBUG: Log state before getting cash
+    if Config.BACKTESTING:
+        debug_cash_state("create_portfolio_context - START")
+        lumibot_cash = strategy.get_cash()
+        print(f"[CASH DEBUG] Lumibot get_cash(): ${lumibot_cash:,.2f}")
+
     # Use tracked cash for backtesting, Alpaca for live
     if Config.BACKTESTING and _backtest_cash_tracker['initialized']:
-        cash_balance = _backtest_cash_tracker['cash']
+        cash_balance = get_tracked_cash()
+        print(f"[CASH DEBUG] Using tracked cash: ${cash_balance:,.2f}")
+
     else:
         cash_balance = account_broker_data.get_cash_balance(strategy)
+        if Config.BACKTESTING:
+            print(f"[CASH DEBUG] Using broker cash (tracker not init): ${cash_balance:,.2f}")
 
     deployed_capital = portfolio_value - cash_balance
     min_reserve = portfolio_value * (SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100)
     deployable_cash = max(0, cash_balance - min_reserve)
+
+    # DEBUG: Log all calculated values
+    if Config.BACKTESTING:
+        print(f"[CASH DEBUG] portfolio_value: ${portfolio_value:,.2f}")
+        print(f"[CASH DEBUG] cash_balance: ${cash_balance:,.2f}")
+        print(f"[CASH DEBUG] deployed_capital: ${deployed_capital:,.2f}")
+        print(f"[CASH DEBUG] min_reserve (5%): ${min_reserve:,.2f}")
+        print(f"[CASH DEBUG] deployable_cash: ${deployable_cash:,.2f}")
 
     return {
         'total_cash': cash_balance,
@@ -252,27 +295,12 @@ def create_portfolio_context(strategy):
         'deployable_cash': deployable_cash
     }
 
-
-def calculate_pending_exit_proceeds(exit_orders):
-    """
-    Calculate expected cash proceeds from exit orders that haven't settled yet.
-    Fixes negative cash in backtesting where sell orders don't immediately update cash.
-    """
-    if not exit_orders:
-        return 0.0
-
-    proceeds = 0.0
-    for order in exit_orders:
-        exit_type = order.get('type', 'full_exit')
-        broker_quantity = order.get('broker_quantity', 0)
-        current_price = order.get('current_price', 0)
-        sell_pct = order.get('sell_pct', 100)
-
-        if exit_type in ['tier1_exit', 'tier2_exit']:
-            sell_qty = int(broker_quantity * (sell_pct / 100))
-        else:
-            sell_qty = broker_quantity
-
-        proceeds += sell_qty * current_price
-
-    return proceeds
+def debug_cash_state(label=""):
+    """Debug helper to log cash tracker state"""
+    if Config.BACKTESTING:
+        print(f"[CASH DEBUG] {label}")
+        print(f"   initialized: {_backtest_cash_tracker['initialized']}")
+        print(f"   iteration_start_cash: ${_backtest_cash_tracker['iteration_start_cash']:,.2f}")
+        print(f"   iteration_adjustments: ${_backtest_cash_tracker['iteration_adjustments']:,.2f}")
+        tracked = get_tracked_cash()
+        print(f"   tracked_cash (calculated): ${tracked:,.2f}" if tracked else "   tracked_cash: None")

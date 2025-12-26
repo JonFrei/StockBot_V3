@@ -339,7 +339,7 @@ class MarketRegimeDetector:
                     'action': 'portfolio_drawdown_exit',
                     'position_size_multiplier': 0.0,
                     'allow_new_entries': False,
-                    'exit_all': True,
+                    'exit_all': False,
                     'reason': f"PORTFOLIO DRAWDOWN: {drawdown_check['reason']}",
                     'details': details
                 }
@@ -397,7 +397,7 @@ class MarketRegimeDetector:
                 'action': 'crisis_exit',
                 'position_size_multiplier': 0.0,
                 'allow_new_entries': False,
-                'exit_all': True,  # Signal to exit everything
+                'exit_all': False,  # Signal to exit everything
                 'reason': f"CRISIS: {crisis_check['reason']}",
                 'details': details
             }
