@@ -9,6 +9,7 @@ Changes from previous version:
 - NEW: Added get_current_position_exposure() for add-on sizing
 - NEW: Returns is_addon flag and existing position details
 """
+import account_broker_data
 
 
 class SimplifiedSizingConfig:
@@ -92,6 +93,11 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
 
     portfolio_value = portfolio_context['portfolio_value']
     deployable_cash = portfolio_context['deployable_cash']
+
+    # Safety cap: Never deploy more than actual reported cash (prevents negative cash)
+    actual_cash = portfolio_context['total_cash']
+    if deployable_cash > actual_cash:
+        deployable_cash = max(0, actual_cash - portfolio_value * (SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100))
 
     cash_limit = deployable_cash * (SimplifiedSizingConfig.MAX_CASH_DEPLOYMENT_PCT / 100)
     daily_limit = portfolio_value * (SimplifiedSizingConfig.MAX_DAILY_DEPLOYMENT_PCT / 100)
@@ -188,7 +194,7 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
 
 def create_portfolio_context(strategy, pending_exit_orders=None):
     """Create portfolio context dict"""
-    cash_balance = strategy.get_cash()
+    cash_balance = account_broker_data.get_cash_balance(strategy)
     portfolio_value = strategy.portfolio_value
     existing_positions = len(strategy.get_positions())
 

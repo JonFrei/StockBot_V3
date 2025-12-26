@@ -698,3 +698,35 @@ def get_account_info() -> Optional[dict]:
     except Exception as e:
         print(f"[ERROR] Failed to get account info: {e}")
         return None
+
+
+def get_cash_balance(strategy):
+    """
+    Get cash balance - from Alpaca for live trading, tracked internally for backtesting.
+
+    In backtesting, Lumibot's get_cash() can be stale within an iteration,
+    so we track pending orders ourselves.
+    """
+    from config import Config
+
+    if Config.BACKTESTING:
+        # Use Lumibot's cash for backtesting (handled by pending_exit_orders adjustment)
+        return strategy.get_cash()
+
+    # Live trading: Get directly from Alpaca
+    try:
+        from alpaca.trading.client import TradingClient
+        import os
+
+        client = TradingClient(
+            api_key=os.getenv('ALPACA_API_KEY'),
+            secret_key=os.getenv('ALPACA_SECRET_KEY'),
+            paper=os.getenv('ALPACA_PAPER', 'true').lower() == 'true'
+        )
+
+        account = client.get_account()
+        return float(account.cash)
+
+    except Exception as e:
+        print(f"[BROKER] Failed to get Alpaca cash, falling back to Lumibot: {e}")
+        return strategy.get_cash()

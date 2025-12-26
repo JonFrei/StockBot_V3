@@ -400,7 +400,6 @@ class SwingTradeStrategy(Strategy):
                 print("[DASHBOARD] Bot paused by user via dashboard. Skipping iteration.")
                 return
 
-        exit_orders = []
         try:
             # === MARKET OPEN CHECK (Live Only) ===
             if not Config.BACKTESTING:
@@ -622,7 +621,7 @@ class SwingTradeStrategy(Strategy):
             # =============================================================
             # PROCESS EXISTING POSITIONS (Exits)
             # =============================================================
-            # exit_orders = []
+            exit_orders = []
 
             try:
                 exit_orders = stock_position_monitoring.check_positions_for_exits(
