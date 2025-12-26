@@ -18,41 +18,41 @@ from config import Config
 
 _backtest_cash_tracker = {
     'initialized': False,
-    'cash': 0.0
+    'iteration_start_cash': 0.0,  # Cash at start of iteration (from Lumibot)
+    'iteration_adjustments': 0.0   # Buy/sell adjustments within iteration
 }
 
 
-def reset_backtest_cash_tracker(initial_cash):
-    """Call this at the start of backtesting"""
+def sync_backtest_cash_start_of_day(lumibot_cash):
+    """Call at START of each iteration to sync with Lumibot's cash"""
     global _backtest_cash_tracker
     _backtest_cash_tracker = {
         'initialized': True,
-        'cash': float(initial_cash)
+        'iteration_start_cash': float(lumibot_cash),
+        'iteration_adjustments': 0.0
     }
-    print(f"[CASH TRACKER] Initialized with ${initial_cash:,.2f}")
 
 
 def update_backtest_cash_for_buy(cost):
-    """Call after each buy order in backtesting"""
+    """Track buy within current iteration"""
     global _backtest_cash_tracker
     if _backtest_cash_tracker['initialized']:
-        _backtest_cash_tracker['cash'] -= cost
+        _backtest_cash_tracker['iteration_adjustments'] -= cost
 
 
 def update_backtest_cash_for_sell(proceeds):
-    """Call after each sell order in backtesting"""
+    """Track sell within current iteration"""
     global _backtest_cash_tracker
     if _backtest_cash_tracker['initialized']:
-        _backtest_cash_tracker['cash'] += proceeds
+        _backtest_cash_tracker['iteration_adjustments'] += proceeds
 
 
 def get_tracked_cash():
-    """Get our tracked cash balance for backtesting"""
+    """Get adjusted cash for current iteration"""
     global _backtest_cash_tracker
     if _backtest_cash_tracker['initialized']:
-        return _backtest_cash_tracker['cash']
+        return _backtest_cash_tracker['iteration_start_cash'] + _backtest_cash_tracker['iteration_adjustments']
     return None
-
 
 # =============================================================================
 # CONFIGURATION
@@ -121,6 +121,10 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
     if not opportunities:
         return []
 
+    # Don't allow any buying when regime says no trading
+    if regime_multiplier == 0:
+        return []
+
     portfolio_value = portfolio_context['portfolio_value']
     deployable_cash = portfolio_context['deployable_cash']
 
@@ -154,7 +158,9 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
                 continue
 
         position_pct = SimplifiedSizingConfig.BASE_POSITION_PCT * regime_multiplier * vol_mult * rotation_mult
-        position_pct = max(0.5, min(position_pct, SimplifiedSizingConfig.MAX_POSITION_PCT))
+        position_pct = min(position_pct, SimplifiedSizingConfig.MAX_POSITION_PCT)
+        if position_pct < 0.5:
+            continue  # Skip positions that are too small
 
         if is_addon:
             remaining_room_pct = SimplifiedSizingConfig.MAX_SINGLE_POSITION_PCT - current_exposure['exposure_pct']

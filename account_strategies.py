@@ -367,9 +367,6 @@ class SwingTradeStrategy(Strategy):
         self.order_logger = account_profit_tracking.OrderLogger(self)
         self._current_regime_result = None  # Store for metrics tracking
 
-        if Config.BACKTESTING:
-            stock_position_sizing.reset_backtest_cash_tracker(self.cash)
-
         print(f"\n{'=' * 60}")
         print(f"🤖 SwingTradeStrategy Initialized")
         print(f"   Tickers: {len(self.tickers)} | Mode: {'BACKTEST' if Config.BACKTESTING else 'LIVE'}")
@@ -431,8 +428,16 @@ class SwingTradeStrategy(Strategy):
             if Config.BACKTESTING:
                 self.last_trade_date = current_date.date()
 
-            summary.set_context(current_date, self.portfolio_value, self.get_cash())
+            # Use tracked cash for backtesting display
+            if Config.BACKTESTING:
+                tracked_cash = stock_position_sizing.get_tracked_cash()
+                display_cash = tracked_cash if tracked_cash is not None else self.get_cash()
+            else:
+                display_cash = self.get_cash()
+            summary.set_context(current_date, self.portfolio_value, display_cash)
 
+            if Config.BACKTESTING:
+                stock_position_sizing.sync_backtest_cash_start_of_day(self.get_cash())
             # =============================================================
             # REFRESH ALPACA POSITION CACHE (Direct API)
             # =============================================================
@@ -560,7 +565,7 @@ class SwingTradeStrategy(Strategy):
 
                     execution_tracker.record_action('exits', count=exit_count)
 
-                    if regime_result['action'] == 'portfolio_drawdown_exit':
+                    if regime_result.get('exit_all', False):
                         execution_tracker.record_action('drawdown_protection', count=1)
 
                     # Success - reset failure counter
