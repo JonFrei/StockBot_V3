@@ -919,6 +919,16 @@ class SwingTradeStrategy(Strategy):
                     signal_score = alloc['signal_score']
                     rotation_mult = alloc.get('rotation_mult', 1.0)
 
+                    # Pre-buy cash verification (backtesting)
+                    if Config.BACKTESTING:
+                        available_cash = stock_position_sizing.get_tracked_cash()
+                        min_reserve = self.portfolio_value * (
+                                    stock_position_sizing.SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100)
+                        if available_cash is None or (available_cash - cost) < min_reserve:
+                            summary.add_warning(
+                                f"Skipped {ticker}: insufficient cash (${available_cash:,.0f} avail, ${cost:,.0f} needed)")
+                            continue
+
                     # Get tier for logging
                     tier = self.stock_rotator.get_tier(ticker)
                     tier_emoji = {'premium': '🥇', 'active': '🥈', 'probation': '⚠️',
@@ -932,7 +942,6 @@ class SwingTradeStrategy(Strategy):
                     self.submit_order(order)
                     if Config.BACKTESTING:
                         stock_position_sizing.update_backtest_cash_for_buy(cost)
-                        # DEBUG: Log after each buy
                         print(f"[BUY DEBUG] Bought {ticker}: ${cost:,.2f}")
                         stock_position_sizing.debug_cash_state(f"After buying {ticker}")
 

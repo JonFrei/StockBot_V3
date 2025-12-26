@@ -114,10 +114,14 @@ def get_current_position_exposure(strategy, ticker):
 # =============================================================================
 # POSITION SIZING
 # =============================================================================
-
 def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier=1.0, verbose=True, strategy=None):
     """
-    Position sizing with rotation multiplier support and concentration limits
+    Position sizing with equal allocation and uniform scaling.
+
+    Logic:
+    1. Each position gets BASE_POSITION_PCT of portfolio
+    2. If total exceeds daily_limit, scale ALL down equally
+    3. Return sorted by score (highest first) for execution priority
     """
     if not opportunities:
         return []
@@ -134,11 +138,11 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
     if deployable_cash > actual_cash:
         deployable_cash = max(0, actual_cash - portfolio_value * (SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100))
 
+    # Calculate limits
     cash_limit = deployable_cash * (SimplifiedSizingConfig.MAX_CASH_DEPLOYMENT_PCT / 100)
     daily_limit = portfolio_value * (SimplifiedSizingConfig.MAX_DAILY_DEPLOYMENT_PCT / 100)
     max_deployment = min(cash_limit, daily_limit)
 
-    # DEBUG: Log budget constraints
     if Config.BACKTESTING:
         print(f"[SIZE DEBUG] === BUDGET CONSTRAINTS ===")
         print(f"[SIZE DEBUG] deployable_cash: ${deployable_cash:,.2f}")
@@ -147,48 +151,41 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
         print(f"[SIZE DEBUG] max_deployment: ${max_deployment:,.2f}")
         print(f"[SIZE DEBUG] opportunities count: {len(opportunities)}")
 
+    if max_deployment <= 0:
+        return []
+
+    # Base position size (equal for all)
+    base_position_pct = SimplifiedSizingConfig.BASE_POSITION_PCT * regime_multiplier
+    base_position_dollars = portfolio_value * (base_position_pct / 100)
+
     allocations = []
 
     for opp in opportunities:
         ticker = opp['ticker']
         data = opp['data']
-        vol_mult = opp['vol_metrics'].get('position_multiplier', 1.0)
-        rotation_mult = opp.get('rotation_mult', 1.0)
+        current_price = data['close']
 
-        current_exposure = {'has_position': False, 'exposure_pct': 0, 'quantity': 0, 'market_value': 0}
-        is_addon = False
-
+        # Check concentration limits for existing positions
         if strategy is not None:
             current_exposure = get_current_position_exposure(strategy, ticker)
-            is_addon = current_exposure['has_position']
 
-            if current_exposure['exposure_pct'] >= SimplifiedSizingConfig.MAX_SINGLE_POSITION_PCT:
-                if verbose:
-                    print(f"   ⚠️ {ticker}: At max concentration ({current_exposure['exposure_pct']:.1f}%)")
-                continue
+            if current_exposure['has_position']:
+                if current_exposure['exposure_pct'] >= SimplifiedSizingConfig.MAX_SINGLE_POSITION_PCT:
+                    if verbose:
+                        print(f"   ⚠️ {ticker}: At max concentration ({current_exposure['exposure_pct']:.1f}%)")
+                    continue
 
-        position_pct = SimplifiedSizingConfig.BASE_POSITION_PCT * regime_multiplier * vol_mult * rotation_mult
-        position_pct = min(position_pct, SimplifiedSizingConfig.MAX_POSITION_PCT)
-        if position_pct < 0.5:
-            continue  # Skip positions that are too small
-
-        if is_addon:
-            remaining_room_pct = SimplifiedSizingConfig.MAX_SINGLE_POSITION_PCT - current_exposure['exposure_pct']
-            position_pct = min(position_pct, remaining_room_pct)
-
-            if position_pct <= 0.5:
-                if verbose:
-                    print(f"   ⚠️ {ticker}: Insufficient room for add-on ({remaining_room_pct:.1f}% remaining)")
-                continue
-
-        position_dollars = portfolio_value * (position_pct / 100)
-        current_price = data['close']
+                # For add-ons, limit to remaining room
+                remaining_room_pct = SimplifiedSizingConfig.MAX_SINGLE_POSITION_PCT - current_exposure['exposure_pct']
+                position_dollars = min(base_position_dollars, portfolio_value * (remaining_room_pct / 100))
+            else:
+                position_dollars = base_position_dollars
+        else:
+            position_dollars = base_position_dollars
 
         quantity = int(position_dollars / current_price)
 
         if quantity <= 0:
-            if verbose:
-                print(f"   ⚠️ {ticker}: Position too small (${position_dollars:.0f} / ${current_price:.2f} = 0 shares)")
             continue
 
         allocations.append({
@@ -196,31 +193,24 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
             'quantity': quantity,
             'price': current_price,
             'cost': quantity * current_price,
-            'pct_portfolio': (quantity * current_price / portfolio_value * 100),
-            'position_pct': position_pct,
             'signal_score': opp['score'],
             'signal_type': opp['signal_type'],
-            'regime_mult': regime_multiplier,
-            'vol_mult': vol_mult,
-            'rotation_mult': rotation_mult,
-            'is_addon': is_addon,
-            'existing_exposure_pct': current_exposure['exposure_pct'],
-            'existing_quantity': current_exposure['quantity']
+            'rotation_mult': opp.get('rotation_mult', 1.0)
         })
 
     if not allocations:
         return []
 
-    # Scale if over budget
+    # Calculate total cost
     total_cost = sum(a['cost'] for a in allocations)
 
-    # DEBUG: Log before scaling
     if Config.BACKTESTING:
         print(f"[SIZE DEBUG] === SCALING CHECK ===")
         print(f"[SIZE DEBUG] total_cost before scaling: ${total_cost:,.2f}")
         print(f"[SIZE DEBUG] max_deployment: ${max_deployment:,.2f}")
         print(f"[SIZE DEBUG] over budget: {total_cost > max_deployment}")
 
+    # Scale down uniformly if over budget
     if total_cost > max_deployment:
         scale_factor = max_deployment / total_cost
 
@@ -233,15 +223,16 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
             if scaled_qty > 0:
                 alloc['quantity'] = scaled_qty
                 alloc['cost'] = scaled_qty * alloc['price']
-                alloc['pct_portfolio'] = (alloc['cost'] / portfolio_value * 100)
                 scaled.append(alloc)
 
         allocations = scaled
 
-        # DEBUG: Log after scaling
         if Config.BACKTESTING:
             new_total = sum(a['cost'] for a in allocations)
             print(f"[SIZE DEBUG] total_cost after scaling: ${new_total:,.2f}")
+
+    # Sort by score (highest first) for execution priority
+    allocations.sort(key=lambda x: x['signal_score'], reverse=True)
 
     return allocations
 
