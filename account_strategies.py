@@ -807,8 +807,8 @@ class SwingTradeStrategy(Strategy):
                 return
 
             try:
-                portfolio_context = stock_position_sizing.create_portfolio_context(self)
-
+                portfolio_context = stock_position_sizing.create_portfolio_context(self,
+                                                                                   pending_exit_orders=exit_orders)
                 if portfolio_context['deployable_cash'] <= 0:
                     summary.add_warning("No deployable cash")
 

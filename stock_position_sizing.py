@@ -186,11 +186,15 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
     return allocations
 
 
-def create_portfolio_context(strategy):
+def create_portfolio_context(strategy, pending_exit_orders=None):
     """Create portfolio context dict"""
     cash_balance = strategy.get_cash()
     portfolio_value = strategy.portfolio_value
     existing_positions = len(strategy.get_positions())
+
+    # Add pending proceeds from unsettled exit orders
+    pending_proceeds = calculate_pending_exit_proceeds(pending_exit_orders)
+    cash_balance += pending_proceeds
 
     deployed_capital = portfolio_value - cash_balance
     min_reserve = portfolio_value * (SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100)
@@ -206,3 +210,28 @@ def create_portfolio_context(strategy):
         'reserved_cash': min_reserve,
         'deployable_cash': deployable_cash
     }
+
+
+def calculate_pending_exit_proceeds(exit_orders):
+    """
+    Calculate expected cash proceeds from exit orders that haven't settled yet.
+    Fixes negative cash in backtesting where sell orders don't immediately update cash.
+    """
+    if not exit_orders:
+        return 0.0
+
+    proceeds = 0.0
+    for order in exit_orders:
+        exit_type = order.get('type', 'full_exit')
+        broker_quantity = order.get('broker_quantity', 0)
+        current_price = order.get('current_price', 0)
+        sell_pct = order.get('sell_pct', 100)
+
+        if exit_type in ['tier1_exit', 'tier2_exit']:
+            sell_qty = int(broker_quantity * (sell_pct / 100))
+        else:
+            sell_qty = broker_quantity
+
+        proceeds += sell_qty * current_price
+
+    return proceeds
