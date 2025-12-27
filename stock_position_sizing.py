@@ -22,6 +22,7 @@ _backtest_cash_tracker = {
     'sell_adjustments': 0.0
 }
 
+
 def sync_backtest_cash_start_of_day(strategy):
     global _backtest_cash_tracker
     _backtest_cash_tracker = {
@@ -45,13 +46,15 @@ def update_backtest_cash_for_sell(proceeds):
 
 
 def get_tracked_cash():
-    """Get adjusted cash for current iteration."""
     global _backtest_cash_tracker
     if _backtest_cash_tracker['initialized']:
-        return _backtest_cash_tracker['iteration_start_cash'] + _backtest_cash_tracker['buy_adjustments']
+        return (_backtest_cash_tracker['iteration_start_cash']
+                + _backtest_cash_tracker['buy_adjustments']
+                + _backtest_cash_tracker['sell_adjustments'])  # ADD THIS
     return None
 
-def debug_cash_state(label=""):
+
+def debug_cash_state(label="", strategy=None):
     if Config.BACKTESTING:
         print(f"[CASH DEBUG] {label}")
         print(f"   initialized: {_backtest_cash_tracker['initialized']}")
@@ -60,6 +63,33 @@ def debug_cash_state(label=""):
         print(f"   sell_adjustments: ${_backtest_cash_tracker['sell_adjustments']:,.2f}")
         tracked = get_tracked_cash()
         print(f"   tracked_cash: ${tracked:,.2f}" if tracked else "   tracked_cash: None")
+
+        # Compare with Lumibot's actual cash
+        if strategy is not None:
+            lumibot_cash = strategy.get_cash()
+            print(f"   lumibot_cash: ${lumibot_cash:,.2f}")
+            if tracked is not None:
+                discrepancy = lumibot_cash - tracked
+                if abs(discrepancy) > 1:
+                    print(f"   ⚠️ DISCREPANCY: ${discrepancy:,.2f}")
+
+
+def validate_end_of_day_cash(strategy):
+    """Call at end of iteration to detect cash tracking drift"""
+    if Config.BACKTESTING and _backtest_cash_tracker['initialized']:
+        tracked = get_tracked_cash()
+        lumibot = strategy.get_cash()
+        discrepancy = lumibot - tracked if tracked else 0
+
+        print(f"[CASH VALIDATION] End of Day")
+        print(f"   Tracked: ${tracked:,.2f}" if tracked else "   Tracked: None")
+        print(f"   Lumibot: ${lumibot:,.2f}")
+        print(f"   Discrepancy: ${discrepancy:,.2f}")
+
+        if abs(discrepancy) > 100:
+            print(f"   ⚠️ SIGNIFICANT DRIFT DETECTED")
+
+
 # =============================================================================
 # CONFIGURATION
 # =============================================================================

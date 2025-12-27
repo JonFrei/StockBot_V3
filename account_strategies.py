@@ -582,6 +582,9 @@ class SwingTradeStrategy(Strategy):
                     if not Config.BACKTESTING:
                         account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
 
+                    if Config.BACKTESTING:
+                        stock_position_sizing.validate_end_of_day_cash(self)
+
                     update_end_of_day_metrics(self, current_date, self._current_regime_result)
                     save_state_safe(self)
                     return
