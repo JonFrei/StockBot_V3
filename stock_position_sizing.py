@@ -94,10 +94,10 @@ def validate_end_of_day_cash(strategy):
 
 class SimplifiedSizingConfig:
     """Position sizing configuration"""
-    BASE_POSITION_PCT = 12.0
-    MAX_POSITION_PCT = 15.0
+    BASE_POSITION_PCT = 15.0
+    MAX_POSITION_PCT = 18.0
     MAX_TOTAL_POSITIONS = 25
-    MIN_CASH_RESERVE_PCT = 5.0
+    MIN_CASH_RESERVE_PCT = 10.0
     MAX_CASH_DEPLOYMENT_PCT = 85.0
     MAX_DAILY_DEPLOYMENT_PCT = 50.0
     MAX_SINGLE_POSITION_PCT = 18.0
@@ -174,14 +174,14 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
 
     # Calculate limits
     cash_limit = deployable_cash * (SimplifiedSizingConfig.MAX_CASH_DEPLOYMENT_PCT / 100)
-    daily_limit = portfolio_value * (SimplifiedSizingConfig.MAX_DAILY_DEPLOYMENT_PCT / 100)
+    daily_limit = deployable_cash * (SimplifiedSizingConfig.MAX_DAILY_DEPLOYMENT_PCT / 100)
     max_deployment = min(cash_limit, daily_limit)
 
     if Config.BACKTESTING:
         print(f"[SIZE DEBUG] === BUDGET CONSTRAINTS ===")
         print(f"[SIZE DEBUG] deployable_cash: ${deployable_cash:,.2f}")
-        print(f"[SIZE DEBUG] cash_limit (85%): ${cash_limit:,.2f}")
-        print(f"[SIZE DEBUG] daily_limit (50% of ${portfolio_value:,.0f}): ${daily_limit:,.2f}")
+        print(f"[SIZE DEBUG] cash_limit ({SimplifiedSizingConfig.MAX_CASH_DEPLOYMENT_PCT}%): ${cash_limit:,.2f}")
+        print(f"[SIZE DEBUG] daily_limit ({SimplifiedSizingConfig.MAX_DAILY_DEPLOYMENT_PCT}% of ${portfolio_value:,.0f}): ${daily_limit:,.2f}")
         print(f"[SIZE DEBUG] max_deployment: ${max_deployment:,.2f}")
         print(f"[SIZE DEBUG] opportunities count: {len(opportunities)}")
 
