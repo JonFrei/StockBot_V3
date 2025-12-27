@@ -1,13 +1,12 @@
 """
-Position Sizing - WITH CONCENTRATION LIMITS FOR ADD-ONS
+Position Sizing - WITH SCALE FACTOR FOR BUDGET CONSTRAINTS
 
-Changes from previous version:
-- Removed MIN_SHARES enforcement (was 5)
-- Let stock_position_monitoring.py handle small positions via remnant cleanup
+Changes:
+- Added scale factor logic: if total cost exceeds budget, proportionally reduce all positions
+- Removed MIN_SHARES enforcement (handled by remnant cleanup)
 - Applies rotation multiplier from stock rotation system
-- NEW: Added MAX_SINGLE_POSITION_PCT to prevent over-concentration
-- NEW: Added get_current_position_exposure() for add-on sizing
-- NEW: Returns is_addon flag and existing position details
+- MAX_SINGLE_POSITION_PCT prevents over-concentration
+- get_current_position_exposure() for add-on sizing
 """
 import account_broker_data
 from config import Config
@@ -50,7 +49,7 @@ def get_tracked_cash():
     if _backtest_cash_tracker['initialized']:
         return (_backtest_cash_tracker['iteration_start_cash']
                 + _backtest_cash_tracker['buy_adjustments']
-                + _backtest_cash_tracker['sell_adjustments'])  # ADD THIS
+                + _backtest_cash_tracker['sell_adjustments'])
     return None
 
 
@@ -64,7 +63,6 @@ def debug_cash_state(label="", strategy=None):
         tracked = get_tracked_cash()
         print(f"   tracked_cash: ${tracked:,.2f}" if tracked else "   tracked_cash: None")
 
-        # Compare with Lumibot's actual cash
         if strategy is not None:
             lumibot_cash = strategy.get_cash()
             print(f"   lumibot_cash: ${lumibot_cash:,.2f}")
@@ -151,12 +149,14 @@ def get_current_position_exposure(strategy, ticker):
 # =============================================================================
 def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier=1.0, verbose=True, strategy=None):
     """
-    Position sizing based on available cash, not portfolio value.
+    Position sizing based on available cash with scale factor for budget constraints.
 
     Logic:
     1. Calculate max we can deploy
-    2. Divide evenly among opportunities (capped at BASE_POSITION_PCT of portfolio)
-    3. Return sorted by score (highest first) for execution priority
+    2. Size each position (capped at BASE_POSITION_PCT of portfolio)
+    3. Sum all positions and check against available cash
+    4. If sum exceeds budget, apply scale factor to reduce all positions proportionally
+    5. Return sorted by score (highest first) for execution priority
     """
     if not opportunities:
         return []
@@ -188,7 +188,7 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
     if max_deployment <= 0:
         return []
 
-    # === KEY CHANGE: Size based on available cash, not portfolio ===
+    # === Size based on available cash, not portfolio ===
     # Max per position based on portfolio (original logic)
     max_position_from_portfolio = portfolio_value * (SimplifiedSizingConfig.BASE_POSITION_PCT / 100) * regime_multiplier
 
@@ -200,8 +200,7 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
 
     if Config.BACKTESTING:
         print(f"[SIZE DEBUG] max_position_from_portfolio (12%): ${max_position_from_portfolio:,.2f}")
-        print(
-            f"[SIZE DEBUG] max_position_from_cash (${max_deployment:,.0f} / {len(opportunities)}): ${max_position_from_cash:,.2f}")
+        print(f"[SIZE DEBUG] max_position_from_cash (${max_deployment:,.0f} / {len(opportunities)}): ${max_position_from_cash:,.2f}")
         print(f"[SIZE DEBUG] position_dollars (using min): ${position_dollars:,.2f}")
 
     allocations = []
@@ -246,14 +245,63 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
     if not allocations:
         return []
 
-    # Verify total (should already be within budget, but double-check)
+    # === STEP 3 & 4: Check total and apply scale factor if needed ===
     total_cost = sum(a['cost'] for a in allocations)
+
+    if Config.BACKTESTING:
+        print(f"[SIZE DEBUG] === BUDGET CHECK ===")
+        print(f"[SIZE DEBUG] total_cost (before scaling): ${total_cost:,.2f}")
+        print(f"[SIZE DEBUG] max_deployment: ${max_deployment:,.2f}")
+
+    if total_cost > max_deployment:
+        # Calculate scale factor
+        scale_factor = max_deployment / total_cost
+
+        if Config.BACKTESTING:
+            print(f"[SIZE DEBUG] ⚠️ OVER BUDGET - applying scale factor: {scale_factor:.4f}")
+
+        # Apply scale factor to all positions
+        scaled_allocations = []
+        for alloc in allocations:
+            scaled_quantity = int(alloc['quantity'] * scale_factor)
+
+            # Skip if scaled to 0 shares
+            if scaled_quantity <= 0:
+                if Config.BACKTESTING:
+                    print(f"[SIZE DEBUG]    {alloc['ticker']}: scaled to 0 shares, skipping")
+                continue
+
+            scaled_cost = scaled_quantity * alloc['price']
+            scaled_allocations.append({
+                'ticker': alloc['ticker'],
+                'quantity': scaled_quantity,
+                'price': alloc['price'],
+                'cost': scaled_cost,
+                'signal_score': alloc['signal_score'],
+                'signal_type': alloc['signal_type'],
+                'rotation_mult': alloc['rotation_mult']
+            })
+
+            if Config.BACKTESTING:
+                print(f"[SIZE DEBUG]    {alloc['ticker']}: {alloc['quantity']} → {scaled_quantity} shares (${alloc['cost']:,.2f} → ${scaled_cost:,.2f})")
+
+        allocations = scaled_allocations
+
+        # Recalculate total after scaling
+        total_cost = sum(a['cost'] for a in allocations)
+
+        if Config.BACKTESTING:
+            print(f"[SIZE DEBUG] total_cost (after scaling): ${total_cost:,.2f}")
+
+    if not allocations:
+        return []
 
     if Config.BACKTESTING:
         print(f"[SIZE DEBUG] === FINAL CHECK ===")
         print(f"[SIZE DEBUG] total_cost: ${total_cost:,.2f}")
         print(f"[SIZE DEBUG] max_deployment: ${max_deployment:,.2f}")
         print(f"[SIZE DEBUG] within budget: {total_cost <= max_deployment}")
+        print(f"[SIZE DEBUG] positions count: {len(allocations)}")
 
     # Sort by score (highest first) for execution priority
     allocations.sort(key=lambda x: x['signal_score'], reverse=True)

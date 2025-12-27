@@ -876,6 +876,19 @@ class SwingTradeStrategy(Strategy):
                 ]
 
                 regime_multiplier = regime_result['position_size_multiplier']
+                # Skip position sizing entirely during crisis (regime_multiplier = 0)
+                if regime_multiplier == 0:
+                    summary.add_warning(f"Crisis mode active - no new positions")
+
+                    if not Config.BACKTESTING:
+                        self.failure_tracker.record_success()
+
+                    execution_tracker.complete('SUCCESS')
+                    summary.print_summary()
+                    update_end_of_day_metrics(self, current_date, self._current_regime_result)
+                    save_state_safe(self)
+                    return
+
                 allocations = stock_position_sizing.calculate_position_sizes(
                     sizing_opportunities,
                     portfolio_context,
@@ -916,12 +929,13 @@ class SwingTradeStrategy(Strategy):
             # =============================================================
             buy_failures = 0
             daily_spent = 0.0
+            '''
             max_deployment = portfolio_context['deployable_cash'] * (
                         stock_position_sizing.SimplifiedSizingConfig.MAX_CASH_DEPLOYMENT_PCT / 100)
             daily_limit = self.portfolio_value * (
                         stock_position_sizing.SimplifiedSizingConfig.MAX_DAILY_DEPLOYMENT_PCT / 100)
             max_deployment = min(max_deployment, daily_limit)
-
+            '''
             for alloc in allocations:
                 try:
                     ticker = alloc['ticker']
@@ -933,11 +947,12 @@ class SwingTradeStrategy(Strategy):
                     rotation_mult = alloc.get('rotation_mult', 1.0)
 
                     # Check 1: Would this buy exceed daily deployment limit?
+                    '''
                     if daily_spent + cost > max_deployment:
                         summary.add_warning(
                             f"Skipped {ticker}: exceeds daily limit (${daily_spent:,.0f} + ${cost:,.0f} > ${max_deployment:,.0f})")
                         continue
-
+                    '''
                     # Check 2: Do we have enough actual cash?
                     if Config.BACKTESTING:
                         available_cash = stock_position_sizing.get_tracked_cash()
@@ -978,8 +993,7 @@ class SwingTradeStrategy(Strategy):
 
                     if Config.BACKTESTING:
                         stock_position_sizing.update_backtest_cash_for_buy(cost)
-                        print(
-                            f"[BUY DEBUG] Bought {ticker}: ${cost:,.2f} | Daily spent: ${daily_spent:,.2f} / ${max_deployment:,.2f}")
+                        print(f"[BUY DEBUG] Bought {ticker}: ${cost:,.2f} | Daily spent: ${daily_spent:,.2f}")
                         stock_position_sizing.debug_cash_state(f"After buying {ticker}")
 
                     # Record stock as traded today (live trading only)
