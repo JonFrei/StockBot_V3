@@ -598,12 +598,23 @@ class MarketRegimeDetector:
                 )
 
                 if recovery_manager:
+                    spy_raw = spy_data['SPY'].get('raw')
+
+                    # Get OHLCV data
+                    spy_open = spy_raw['open'].iloc[-1] if spy_raw is not None and 'open' in spy_raw.columns else None
+                    spy_high = spy_raw['high'].iloc[-1] if spy_raw is not None and 'high' in spy_raw.columns else None
+                    spy_low = spy_raw['low'].iloc[-1] if spy_raw is not None and 'low' in spy_raw.columns else None
+
                     recovery_manager.update_spy_data(
                         date=current_date,
                         spy_close=spy_ind.get('close', 0),
+                        spy_open=spy_open,
+                        spy_high=spy_high,
+                        spy_low=spy_low,
+                        spy_volume=spy_volume,
+                        spy_avg_volume=spy_avg_volume,
                         spy_prev_close=spy_ind.get('prev_close'),
-                        spy_ema20=spy_ind.get('ema20'),
-                        spy_rsi=spy_ind.get('rsi'),
+                        spy_ema10=spy_ind.get('ema8')  # or calculate ema10
                     )
 
         except Exception as e:

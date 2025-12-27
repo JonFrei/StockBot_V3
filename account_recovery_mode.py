@@ -1,93 +1,152 @@
 """
-Recovery Mode System - Aggressive Bottom Testing
+Recovery Mode System - Structure-Based Bottom Detection
 
-AGGRESSIVE MODE (Day 0 Entry):
-- Enter IMMEDIATELY when SPY is oversold + any 1 signal fires
-- No waiting period required
-- Full position size from the start
-- Oversold = SPY >3% below 20 EMA OR RSI < 30 OR 2+ down days at 10-day low
+APPROACH: Market Structure (B) + Follow-Through (D)
+
+Phase 1: CAPITULATION DETECTION
+    - SPY down 1.5%+ on volume >=1.3x average
+    - OR 3+ consecutive down days totaling 4%+ decline
+    - Marks potential swing low
+
+Phase 2: SWING LOW CONFIRMATION (1-3 days)
+    - Price holds above capitulation low for 1-2 days
+    - Establishes the swing low point
+
+Phase 3: FOLLOW-THROUGH DAY (within 4-7 days of swing low)
+    - SPY up 1.25%+ on volume >=1.0x average
+    - OR SPY up 1.0%+ AND closes above 10 EMA
+    - Triggers recovery mode entry
+
+BONUS: HIGHER LOW = Higher conviction (vs prior swing low)
 """
 
 from datetime import timedelta
 
 
 class RecoveryModeConfig:
-    # === AGGRESSIVE SETTINGS ===
-    MIN_RECOVERY_SIGNALS = 1  # Only need 1 signal when oversold
-    MIN_LOCK_DAYS_BEFORE_RECOVERY = 0  # No waiting - enter Day 0
-    RECOVERY_POSITION_MULTIPLIER = 1.0  # Full size immediately
-    RECOVERY_MAX_POSITIONS = 8
-    RELOCK_ON_SPY_DOWN_DAYS = 3  # More tolerance - 3 down days to exit (was 2)
-    RECOVERY_MODE_MAX_DAYS = 14  # Extended window (was 10)
-    RECOVERY_PROFIT_TARGET = 5.0
-    BREADTH_UNLOCK_THRESHOLD = 25.0  # Lowered from 30% - easier to trigger
-    BREADTH_LOCK_THRESHOLD = 15.0  # Lowered from 20% - stay in longer
+    # === CAPITULATION DETECTION (Phase 1) ===
+    CAPITULATION_SINGLE_DAY_DROP = 1.5  # % drop for single-day capitulation
+    CAPITULATION_VOLUME_MULT = 1.3  # Volume must be 1.3x average
+    CAPITULATION_MULTI_DAY_DAYS = 3  # Consecutive down days
+    CAPITULATION_MULTI_DAY_DROP = 4.0  # Total % drop over multi-day
 
-    # === OVERSOLD DETECTION ===
-    OVERSOLD_EMA_DEVIATION_PCT = 3.0  # SPY >3% below 20 EMA = oversold
-    OVERSOLD_CONSECUTIVE_DOWN_DAYS = 2  # 2+ down days
-    OVERSOLD_RSI_THRESHOLD = 30  # RSI below 30
+    # === SWING LOW CONFIRMATION (Phase 2) ===
+    SWING_LOW_HOLD_DAYS = 1  # Days price must hold above low
+
+    # === FOLLOW-THROUGH DAY (Phase 3) ===
+    FOLLOW_THROUGH_MIN_GAIN = 1.25  # % gain required
+    FOLLOW_THROUGH_ALT_GAIN = 1.0  # Alternative: smaller gain + above EMA
+    FOLLOW_THROUGH_VOLUME_MULT = 1.0  # Volume must be at least average
+    FOLLOW_THROUGH_WINDOW_DAYS = 7  # Must occur within N days of swing low
+    FOLLOW_THROUGH_MIN_WAIT = 1  # Minimum days after swing low (avoid Day 0 noise)
+
+    # === HIGHER LOW DETECTION ===
+    HIGHER_LOW_LOOKBACK_DAYS = 20  # How far back to find prior swing low
+
+    # === RECOVERY MODE SETTINGS ===
+    RECOVERY_POSITION_MULTIPLIER = 1.0
+    RECOVERY_MAX_POSITIONS = 8
+    RECOVERY_MAX_POSITIONS_HIGHER_LOW = 10  # More positions if higher low confirmed
+    RELOCK_ON_SPY_DOWN_DAYS = 3  # Exit after 3 consecutive down days
+    RECOVERY_MODE_MAX_DAYS = 14
+    RECOVERY_PROFIT_TARGET = 5.0
+    BREADTH_LOCK_THRESHOLD = 15.0  # Exit if breadth collapses
 
 
 class RecoveryModeManager:
     def __init__(self):
+        # Recovery state
         self.recovery_mode_active = False
         self.recovery_mode_start_date = None
         self.lock_start_date = None
         self.activation_count = 0
-        self.spy_ema10 = 0
-        self.spy_ema21 = 0
-        self.spy_ema20 = 0  # For oversold detection
+
+        # SPY tracking
         self.spy_close = 0
         self.spy_prev_close = 0
+        self.spy_ema10 = 0
+        self.spy_ema21 = 0
         self.spy_consecutive_down_days = 0
-        self.spy_price_history = []
+        self.spy_price_history = []  # Full OHLCV history
+
+        # Breadth tracking
         self.internal_breadth = {'pct_above_20ema': 0, 'pct_above_50sma': 0, 'pct_green_today': 0}
         self.recent_accum_days = 0
         self.recent_dist_days = 0
-        self.spy_rsi = 50  # Track SPY RSI for oversold
 
-    def update_spy_data(self, date, spy_close, spy_prev_close=None, spy_ema20=None, spy_rsi=None,
-                        spy_high=None, spy_low=None, spy_volume=None, spy_avg_volume=None):
-        """Update SPY data with oversold detection"""
-        self.spy_close = spy_close
+        # === STRUCTURE TRACKING (B + D) ===
+        self.capitulation_detected = False
+        self.capitulation_date = None
+        self.capitulation_low = None  # The low price on capitulation
 
-        # Track EMA20 for oversold calculation
-        if spy_ema20:
-            self.spy_ema20 = spy_ema20
+        self.swing_low_confirmed = False
+        self.swing_low_date = None
+        self.swing_low_price = None
 
-        # Track RSI
-        if spy_rsi:
-            self.spy_rsi = spy_rsi
+        self.follow_through_detected = False
+        self.follow_through_date = None
 
-        # Track consecutive down days
+        self.prior_swing_low = None  # For higher low detection
+        self.is_higher_low = False
+
+    # =========================================================================
+    # DATA UPDATE METHODS
+    # =========================================================================
+
+    def update_spy_data(self, date, spy_close, spy_open=None, spy_high=None, spy_low=None,
+                        spy_volume=None, spy_avg_volume=None, spy_prev_close=None, spy_ema10=None):
+        """Update SPY data and run structure detection"""
+
+        # Store previous close
         if spy_prev_close:
             self.spy_prev_close = spy_prev_close
-            if spy_close < spy_prev_close:
+        elif self.spy_close > 0:
+            self.spy_prev_close = self.spy_close
+
+        self.spy_close = spy_close
+
+        # Track EMA10 for follow-through
+        if spy_ema10:
+            self.spy_ema10 = spy_ema10
+        elif self.spy_ema10 == 0:
+            self.spy_ema10 = spy_close
+        else:
+            self.spy_ema10 = spy_close * (2 / 11) + self.spy_ema10 * (9 / 11)
+
+        # Update EMA21
+        if self.spy_ema21 == 0:
+            self.spy_ema21 = spy_close
+        else:
+            self.spy_ema21 = spy_close * (2 / 22) + self.spy_ema21 * (20 / 22)
+
+        # Track consecutive down days
+        if self.spy_prev_close > 0:
+            if spy_close < self.spy_prev_close:
                 self.spy_consecutive_down_days += 1
             else:
                 self.spy_consecutive_down_days = 0
-
-        # Update EMAs
-        if self.spy_ema10 == 0:
-            self.spy_ema10 = spy_close
-            self.spy_ema21 = spy_close
-        else:
-            self.spy_ema10 = spy_close * (2 / 11) + self.spy_ema10 * (9 / 11)
-            self.spy_ema21 = spy_close * (2 / 22) + self.spy_ema21 * (20 / 22)
 
         # Normalize date
         if hasattr(date, 'tzinfo') and date.tzinfo is not None:
             date = date.replace(tzinfo=None)
 
-        # Store price history
-        self.spy_price_history.append({
+        # Store full bar data
+        bar_data = {
             'date': date,
-            'close': spy_close,
+            'open': spy_open or spy_close,
             'high': spy_high or spy_close,
-            'low': spy_low or spy_close
-        })
-        self.spy_price_history = self.spy_price_history[-30:]
+            'low': spy_low or spy_close,
+            'close': spy_close,
+            'volume': spy_volume or 0,
+            'avg_volume': spy_avg_volume or 0
+        }
+        self.spy_price_history.append(bar_data)
+        self.spy_price_history = self.spy_price_history[-50:]  # Keep 50 days
+
+        # Run structure detection
+        self._detect_capitulation(date)
+        self._detect_swing_low(date)
+        self._detect_follow_through(date)
 
     def update_breadth(self, all_stock_data):
         """Track internal breadth across portfolio"""
@@ -119,173 +178,318 @@ class RecoveryModeManager:
         self.recent_dist_days = dist_days
 
     # =========================================================================
-    # OVERSOLD DETECTION (Aggressive Entry Trigger)
+    # PHASE 1: CAPITULATION DETECTION
     # =========================================================================
 
-    def _is_spy_oversold(self):
+    def _detect_capitulation(self, current_date):
         """
-        Check if SPY is oversold - triggers immediate entry eligibility
+        Detect capitulation selling - marks potential swing low
 
-        Oversold conditions (any one triggers):
-        1. SPY >3% below 20 EMA
-        2. RSI < 30
-        3. 2+ consecutive down days AND at/near 10-day low
+        Triggers on:
+        1. Single day: Down 1.5%+ on volume 1.3x+ average
+        2. Multi-day: 3+ down days totaling 4%+ decline
         """
-        reasons = []
+        if len(self.spy_price_history) < 2:
+            return
 
-        # Condition 1: Price deviation from EMA20
-        if self.spy_ema20 > 0:
-            deviation_pct = ((self.spy_ema20 - self.spy_close) / self.spy_ema20) * 100
-            if deviation_pct >= RecoveryModeConfig.OVERSOLD_EMA_DEVIATION_PCT:
-                reasons.append(f"SPY {deviation_pct:.1f}% below 20 EMA")
+        today = self.spy_price_history[-1]
+        yesterday = self.spy_price_history[-2]
 
-        # Condition 2: RSI oversold
-        if self.spy_rsi < RecoveryModeConfig.OVERSOLD_RSI_THRESHOLD:
-            reasons.append(f"RSI {self.spy_rsi:.0f} < {RecoveryModeConfig.OVERSOLD_RSI_THRESHOLD}")
+        # Skip if already in confirmed swing low phase
+        if self.swing_low_confirmed:
+            return
 
-        # Condition 3: Consecutive down days + near 10-day low
-        if self.spy_consecutive_down_days >= RecoveryModeConfig.OVERSOLD_CONSECUTIVE_DOWN_DAYS:
-            if len(self.spy_price_history) >= 10:
-                ten_day_low = min(p['close'] for p in self.spy_price_history[-10:])
-                if self.spy_close <= ten_day_low * 1.01:  # Within 1% of 10-day low
-                    reasons.append(f"{self.spy_consecutive_down_days} down days at 10-day low")
+        # === Method 1: Single-day capitulation ===
+        if yesterday['close'] > 0:
+            daily_change_pct = ((today['close'] - yesterday['close']) / yesterday['close']) * 100
+            volume_ratio = today['volume'] / today['avg_volume'] if today['avg_volume'] > 0 else 0
 
-        return len(reasons) > 0, reasons
+            if (daily_change_pct <= -RecoveryModeConfig.CAPITULATION_SINGLE_DAY_DROP and
+                    volume_ratio >= RecoveryModeConfig.CAPITULATION_VOLUME_MULT):
+
+                self._set_capitulation(current_date, today['low'], "single-day")
+                return
+
+        # === Method 2: Multi-day capitulation ===
+        if len(self.spy_price_history) >= RecoveryModeConfig.CAPITULATION_MULTI_DAY_DAYS + 1:
+            lookback = RecoveryModeConfig.CAPITULATION_MULTI_DAY_DAYS
+            recent_bars = self.spy_price_history[-(lookback + 1):]
+
+            # Check if all recent days were down
+            all_down = True
+            for i in range(1, len(recent_bars)):
+                if recent_bars[i]['close'] >= recent_bars[i - 1]['close']:
+                    all_down = False
+                    break
+
+            if all_down:
+                start_price = recent_bars[0]['close']
+                end_price = recent_bars[-1]['close']
+                total_drop = ((start_price - end_price) / start_price) * 100
+
+                if total_drop >= RecoveryModeConfig.CAPITULATION_MULTI_DAY_DROP:
+                    # Find the lowest low in this period
+                    lowest_low = min(bar['low'] for bar in recent_bars[1:])
+                    self._set_capitulation(current_date, lowest_low, "multi-day")
+
+    def _set_capitulation(self, date, low_price, method):
+        """Record capitulation event"""
+        # Store prior swing low before overwriting
+        if self.swing_low_price is not None:
+            self.prior_swing_low = self.swing_low_price
+
+        self.capitulation_detected = True
+        self.capitulation_date = date
+        self.capitulation_low = low_price
+
+        # Reset downstream states
+        self.swing_low_confirmed = False
+        self.swing_low_date = None
+        self.swing_low_price = None
+        self.follow_through_detected = False
+        self.follow_through_date = None
+        self.is_higher_low = False
+
+        print(f"⚡ CAPITULATION DETECTED ({method}): Low ${low_price:.2f} on {date.strftime('%Y-%m-%d')}")
 
     # =========================================================================
-    # AGGRESSIVE ENTRY LOGIC (Day 0)
+    # PHASE 2: SWING LOW CONFIRMATION
+    # =========================================================================
+
+    def _detect_swing_low(self, current_date):
+        """
+        Confirm swing low - price holds above capitulation low
+
+        Requires: Price holds above the capitulation low for N days
+        """
+        if not self.capitulation_detected or self.swing_low_confirmed:
+            return
+
+        if self.capitulation_date is None or self.capitulation_low is None:
+            return
+
+        days_since_cap = (current_date - self.capitulation_date).days
+
+        # Need at least 1 day after capitulation
+        if days_since_cap < RecoveryModeConfig.SWING_LOW_HOLD_DAYS:
+            return
+
+        # Check if price has held above capitulation low
+        recent_bars = [b for b in self.spy_price_history
+                       if b['date'] > self.capitulation_date]
+
+        if len(recent_bars) < RecoveryModeConfig.SWING_LOW_HOLD_DAYS:
+            return
+
+        # All recent lows must be above capitulation low
+        held_above = all(bar['low'] >= self.capitulation_low * 0.998  # 0.2% tolerance
+                         for bar in recent_bars[-RecoveryModeConfig.SWING_LOW_HOLD_DAYS:])
+
+        if held_above:
+            self.swing_low_confirmed = True
+            self.swing_low_date = self.capitulation_date
+            self.swing_low_price = self.capitulation_low
+
+            # Check for higher low
+            if self.prior_swing_low is not None:
+                self.is_higher_low = self.swing_low_price > self.prior_swing_low
+                hl_status = "HIGHER LOW ✓" if self.is_higher_low else "Lower low"
+            else:
+                hl_status = "First swing low"
+
+            print(f"📍 SWING LOW CONFIRMED: ${self.swing_low_price:.2f} ({hl_status})")
+            print(f"   Watching for follow-through day within {RecoveryModeConfig.FOLLOW_THROUGH_WINDOW_DAYS} days...")
+
+    # =========================================================================
+    # PHASE 3: FOLLOW-THROUGH DAY DETECTION
+    # =========================================================================
+
+    def _detect_follow_through(self, current_date):
+        """
+        Detect follow-through day - confirms the bottom
+
+        Requires:
+        - Within 4-7 days of swing low
+        - SPY up 1.25%+ on volume >= average
+        - OR SPY up 1.0%+ and closes above 10 EMA
+        """
+        if not self.swing_low_confirmed or self.follow_through_detected:
+            return
+
+        if self.swing_low_date is None:
+            return
+
+        days_since_swing = (current_date - self.swing_low_date).days
+
+        # Must wait minimum days (avoid noise)
+        if days_since_swing < RecoveryModeConfig.FOLLOW_THROUGH_MIN_WAIT:
+            return
+
+        # Must be within window
+        if days_since_swing > RecoveryModeConfig.FOLLOW_THROUGH_WINDOW_DAYS:
+            # Window expired - reset and wait for new capitulation
+            print(f"⏰ Follow-through window expired ({days_since_swing} days). Resetting...")
+            self._reset_structure_state()
+            return
+
+        if len(self.spy_price_history) < 2:
+            return
+
+        today = self.spy_price_history[-1]
+        yesterday = self.spy_price_history[-2]
+
+        if yesterday['close'] <= 0:
+            return
+
+        daily_gain_pct = ((today['close'] - yesterday['close']) / yesterday['close']) * 100
+        volume_ratio = today['volume'] / today['avg_volume'] if today['avg_volume'] > 0 else 0
+
+        # === Method 1: Strong follow-through (1.25%+ on volume) ===
+        if (daily_gain_pct >= RecoveryModeConfig.FOLLOW_THROUGH_MIN_GAIN and
+                volume_ratio >= RecoveryModeConfig.FOLLOW_THROUGH_VOLUME_MULT):
+
+            self._set_follow_through(current_date, daily_gain_pct, volume_ratio, "strong")
+            return
+
+        # === Method 2: Moderate follow-through (1.0%+ and above EMA10) ===
+        if (daily_gain_pct >= RecoveryModeConfig.FOLLOW_THROUGH_ALT_GAIN and
+                today['close'] > self.spy_ema10):
+
+            self._set_follow_through(current_date, daily_gain_pct, volume_ratio, "ema_reclaim")
+            return
+
+    def _set_follow_through(self, date, gain_pct, volume_ratio, method):
+        """Record follow-through day"""
+        self.follow_through_detected = True
+        self.follow_through_date = date
+
+        hl_bonus = " [HIGHER LOW]" if self.is_higher_low else ""
+        print(f"🚀 FOLLOW-THROUGH DAY ({method}){hl_bonus}")
+        print(f"   Gain: +{gain_pct:.2f}% | Volume: {volume_ratio:.1f}x avg")
+
+    def _reset_structure_state(self):
+        """Reset structure tracking (keep prior swing low for higher low detection)"""
+        # Preserve prior swing low
+        if self.swing_low_price is not None:
+            self.prior_swing_low = self.swing_low_price
+
+        self.capitulation_detected = False
+        self.capitulation_date = None
+        self.capitulation_low = None
+        self.swing_low_confirmed = False
+        self.swing_low_date = None
+        self.swing_low_price = None
+        self.follow_through_detected = False
+        self.follow_through_date = None
+        self.is_higher_low = False
+
+    # =========================================================================
+    # RECOVERY MODE ENTRY/EXIT
     # =========================================================================
 
     def check_recovery_mode_entry(self, current_date):
         """
-        AGGRESSIVE: Enter immediately when oversold + 1 signal
-        No waiting period required.
+        Enter recovery mode when follow-through day confirms the bottom
+
+        Structure-based entry:
+        1. Capitulation detected (Phase 1) ✓
+        2. Swing low confirmed (Phase 2) ✓
+        3. Follow-through day (Phase 3) ✓
         """
-        if not self.lock_start_date or self.recovery_mode_active:
+        if self.recovery_mode_active:
             return False
 
-        signals = self.count_recovery_signals()
-        is_oversold, oversold_reasons = self._is_spy_oversold()
+        if not self.lock_start_date:
+            return False
 
-        # AGGRESSIVE: If oversold, only need 1 signal
-        if is_oversold and signals['total'] >= RecoveryModeConfig.MIN_RECOVERY_SIGNALS:
-            print(f"⚡ AGGRESSIVE ENTRY TRIGGERED")
-            print(f"   Oversold: {', '.join(oversold_reasons)}")
-            print(f"   Signals: {signals['total']}/{RecoveryModeConfig.MIN_RECOVERY_SIGNALS}")
-            return True
-
-        # Fallback: Even if not oversold, allow entry with stronger signals (3+)
-        days_locked = (current_date - self.lock_start_date).days
-        if days_locked >= 1 and signals['total'] >= 3:
-            print(f"✅ Standard recovery entry: {signals['total']} signals on day {days_locked}")
+        # All three phases must be complete
+        if self.follow_through_detected:
+            print(f"✅ STRUCTURE CONFIRMED: Capitulation → Swing Low → Follow-Through")
             return True
 
         return False
 
+    def enter_recovery_mode(self, current_date):
+        """Enter recovery mode after structure confirmation"""
+        self.activation_count += 1
+        self.recovery_mode_active = True
+        self.recovery_mode_start_date = current_date
+
+        # Determine position limits based on higher low
+        max_positions = (RecoveryModeConfig.RECOVERY_MAX_POSITIONS_HIGHER_LOW
+                         if self.is_higher_low
+                         else RecoveryModeConfig.RECOVERY_MAX_POSITIONS)
+
+        print(f"\n{'=' * 60}")
+        print(f"🔓 RECOVERY MODE ACTIVATED (#{self.activation_count})")
+        print(f"   Method: Structure (Capitulation → Swing Low → Follow-Through)")
+        if self.is_higher_low:
+            print(f"   Higher Low: YES (increased conviction)")
+        print(f"   Swing Low: ${self.swing_low_price:.2f} on {self.swing_low_date.strftime('%Y-%m-%d')}")
+        print(f"   Max Positions: {max_positions}")
+        print(f"{'=' * 60}\n")
+
+    def check_recovery_mode_exit(self, current_date):
+        """Check if recovery mode should exit"""
+        if not self.recovery_mode_active:
+            return False, None
+
+        # Max duration
+        days_active = (current_date - self.recovery_mode_start_date).days
+        if days_active > RecoveryModeConfig.RECOVERY_MODE_MAX_DAYS:
+            return True, f"Max duration ({RecoveryModeConfig.RECOVERY_MODE_MAX_DAYS} days)"
+
+        # Consecutive down days
+        if self.spy_consecutive_down_days >= RecoveryModeConfig.RELOCK_ON_SPY_DOWN_DAYS:
+            return True, f"SPY down {self.spy_consecutive_down_days} consecutive days"
+
+        # Breadth collapse
+        if self.internal_breadth.get('pct_above_20ema', 0) < RecoveryModeConfig.BREADTH_LOCK_THRESHOLD:
+            return True, f"Breadth collapsed ({self.internal_breadth.get('pct_above_20ema', 0):.0f}%)"
+
+        # Price breaks swing low (structure failed)
+        if self.swing_low_price and self.spy_close < self.swing_low_price * 0.99:
+            return True, f"Price broke swing low (${self.spy_close:.2f} < ${self.swing_low_price:.2f})"
+
+        return False, None
+
+    def exit_recovery_mode(self, reason):
+        """Exit recovery mode and reset structure state"""
+        if self.recovery_mode_active:
+            self.recovery_mode_active = False
+            self.recovery_mode_start_date = None
+            self._reset_structure_state()
+            print(f"🔒 RECOVERY MODE EXITED: {reason}")
+            return True
+        return False
+
     # =========================================================================
-    # ORIGINAL METHODS (preserved)
+    # LOCK MANAGEMENT
     # =========================================================================
-
-    def count_recovery_signals(self):
-        signals = {
-            'breadth_improving': False,
-            'spy_above_ema10': False,
-            'spy_above_ema21': False,
-            'ema10_above_ema21': False,
-            'accumulation_dominant': False,
-            'higher_low_forming': False
-        }
-
-        if self.internal_breadth.get('pct_above_20ema', 0) > RecoveryModeConfig.BREADTH_UNLOCK_THRESHOLD:
-            signals['breadth_improving'] = True
-        if self.spy_close > self.spy_ema10:
-            signals['spy_above_ema10'] = True
-        if self.spy_close > self.spy_ema21:
-            signals['spy_above_ema21'] = True
-        if self.spy_ema10 > self.spy_ema21:
-            signals['ema10_above_ema21'] = True
-
-        ad_ratio = (self.recent_accum_days / self.recent_dist_days) if self.recent_dist_days > 0 else (
-            10.0 if self.recent_accum_days > 0 else 1.0)
-        if ad_ratio > 1.0:
-            signals['accumulation_dominant'] = True
-
-        if self._check_higher_low():
-            signals['higher_low_forming'] = True
-
-        signals['total'] = sum(1 for k, v in signals.items() if k != 'total' and v is True)
-        return signals
-
-    def _check_higher_low(self):
-        if len(self.spy_price_history) < 15:
-            return False
-        prices = [p['close'] for p in self.spy_price_history[-15:]]
-        lows = []
-        for i in range(2, len(prices) - 2):
-            if prices[i] < prices[i - 1] and prices[i] < prices[i - 2] and prices[i] < prices[i + 1] and prices[i] < \
-                    prices[i + 2]:
-                lows.append(prices[i])
-        return len(lows) >= 2 and lows[-1] > lows[-2]
 
     def start_lock(self, current_date):
+        """Start lock when SPY drops below 200 SMA"""
         if not self.lock_start_date:
             self.lock_start_date = current_date
             print(f"🔒 LOCK STARTED: SPY below 200 SMA")
 
     def clear_lock(self):
+        """Clear lock when SPY recovers above 200 SMA"""
         if self.lock_start_date or self.recovery_mode_active:
             print(f"🔓 LOCK CLEARED: SPY above 200 SMA")
         self.lock_start_date = None
         self.recovery_mode_active = False
         self.recovery_mode_start_date = None
+        self._reset_structure_state()
 
-    def enter_recovery_mode(self, current_date):
-        self.activation_count += 1
-        self.recovery_mode_active = True
-        self.recovery_mode_start_date = current_date
-        signals = self.count_recovery_signals()
-        is_oversold, oversold_reasons = self._is_spy_oversold()
-
-        print(f"\n{'=' * 60}")
-        print(f"🔓 RECOVERY MODE ACTIVATED (#{self.activation_count}) - AGGRESSIVE")
-        if is_oversold:
-            print(f"   Oversold: {', '.join(oversold_reasons)}")
-        print(
-            f"   Signals: {signals['total']}/{RecoveryModeConfig.MIN_RECOVERY_SIGNALS} | Size: {RecoveryModeConfig.RECOVERY_POSITION_MULTIPLIER * 100:.0f}% | Max: {RecoveryModeConfig.RECOVERY_MAX_POSITIONS}")
-        print(f"{'=' * 60}\n")
-
-    def check_recovery_mode_exit(self, current_date):
-        if not self.recovery_mode_active:
-            return False, None
-
-        days = (current_date - self.recovery_mode_start_date).days
-        if days > RecoveryModeConfig.RECOVERY_MODE_MAX_DAYS:
-            return True, f"Max duration ({RecoveryModeConfig.RECOVERY_MODE_MAX_DAYS}d)"
-
-        if self.spy_consecutive_down_days >= RecoveryModeConfig.RELOCK_ON_SPY_DOWN_DAYS:
-            return True, f"SPY down {self.spy_consecutive_down_days}d"
-
-        signals = self.count_recovery_signals()
-        if signals['total'] < RecoveryModeConfig.MIN_RECOVERY_SIGNALS:
-            return True, f"Signals weak ({signals['total']}/{RecoveryModeConfig.MIN_RECOVERY_SIGNALS})"
-
-        if self.internal_breadth.get('pct_above_20ema', 0) < RecoveryModeConfig.BREADTH_LOCK_THRESHOLD:
-            return True, f"Breadth collapsed"
-
-        return False, None
-
-    def exit_recovery_mode(self, reason):
-        if self.recovery_mode_active:
-            self.recovery_mode_active = False
-            self.recovery_mode_start_date = None
-            print(f"🔒 RECOVERY MODE TERMINATED: {reason}")
-            return True
-        return False
-
-    def trigger_relock(self, current_date, reason):
-        return self.exit_recovery_mode(reason)
+    # =========================================================================
+    # MAIN EVALUATION
+    # =========================================================================
 
     def evaluate(self, current_date, spy_below_200):
+        """Main evaluation - called each trading day"""
+
+        # If SPY above 200 SMA, clear everything and return normal
         if not spy_below_200:
             self.clear_lock()
             return {
@@ -295,64 +499,113 @@ class RecoveryModeManager:
                 'allow_entries': True,
                 'profit_target': 10.0,
                 'signals': {},
-                'reason': 'Normal'
+                'reason': 'Normal (SPY > 200 SMA)'
             }
 
+        # Start lock if not already locked
         self.start_lock(current_date)
 
+        # Check for recovery mode exit
         if self.recovery_mode_active:
             should_exit, exit_reason = self.check_recovery_mode_exit(current_date)
             if should_exit:
                 self.exit_recovery_mode(exit_reason)
 
+        # Check for recovery mode entry
         if not self.recovery_mode_active and self.check_recovery_mode_entry(current_date):
             self.enter_recovery_mode(current_date)
 
-        signals = self.count_recovery_signals()
+        # Build status
+        structure_status = self._get_structure_status()
 
         if self.recovery_mode_active:
+            max_positions = (RecoveryModeConfig.RECOVERY_MAX_POSITIONS_HIGHER_LOW
+                             if self.is_higher_low
+                             else RecoveryModeConfig.RECOVERY_MAX_POSITIONS)
             return {
                 'recovery_mode_active': True,
                 'position_multiplier': RecoveryModeConfig.RECOVERY_POSITION_MULTIPLIER,
-                'max_positions': RecoveryModeConfig.RECOVERY_MAX_POSITIONS,
+                'max_positions': max_positions,
                 'allow_entries': True,
                 'profit_target': RecoveryModeConfig.RECOVERY_PROFIT_TARGET,
-                'signals': signals,
-                'reason': f"Recovery: {signals['total']} signals"
+                'signals': structure_status,
+                'reason': f"Recovery Mode (Higher Low: {self.is_higher_low})"
             }
 
-        days_locked = (current_date - self.lock_start_date).days if self.lock_start_date else 0
-        is_oversold, oversold_reasons = self._is_spy_oversold()
-
-        # Enhanced reason with oversold status
-        reason_parts = [
-            f"Locked: {signals['total']}/{RecoveryModeConfig.MIN_RECOVERY_SIGNALS} signals, day {days_locked}"]
-        if is_oversold:
-            reason_parts.append(f"⚡OVERSOLD")
-
+        # Locked but not in recovery
         return {
             'recovery_mode_active': False,
             'position_multiplier': 0.0,
             'max_positions': 0,
             'allow_entries': False,
             'profit_target': 10.0,
-            'signals': signals,
-            'reason': " | ".join(reason_parts)
+            'signals': structure_status,
+            'reason': self._get_waiting_reason()
         }
 
+    def _get_structure_status(self):
+        """Get current structure detection status"""
+        return {
+            'capitulation_detected': self.capitulation_detected,
+            'capitulation_date': self.capitulation_date,
+            'capitulation_low': self.capitulation_low,
+            'swing_low_confirmed': self.swing_low_confirmed,
+            'swing_low_price': self.swing_low_price,
+            'follow_through_detected': self.follow_through_detected,
+            'is_higher_low': self.is_higher_low,
+            'prior_swing_low': self.prior_swing_low
+        }
+
+    def _get_waiting_reason(self):
+        """Get human-readable status of what we're waiting for"""
+        if not self.capitulation_detected:
+            return "Locked: Waiting for capitulation (selloff)"
+        elif not self.swing_low_confirmed:
+            return f"Locked: Capitulation at ${self.capitulation_low:.2f}, waiting for swing low confirmation"
+        elif not self.follow_through_detected:
+            days_since = (self.spy_price_history[-1]['date'] - self.swing_low_date).days if self.swing_low_date else 0
+            return f"Locked: Swing low ${self.swing_low_price:.2f}, waiting for follow-through (day {days_since}/{RecoveryModeConfig.FOLLOW_THROUGH_WINDOW_DAYS})"
+        else:
+            return "Locked: Structure complete, entering recovery"
+
+    # =========================================================================
+    # STATISTICS / COMPATIBILITY
+    # =========================================================================
+
     def get_statistics(self):
-        is_oversold, oversold_reasons = self._is_spy_oversold()
+        """Get current state for logging and persistence"""
         return {
             'recovery_mode_active': self.recovery_mode_active,
             'activation_count': self.activation_count,
             'lock_start_date': self.lock_start_date,
             'spy_ema10': round(self.spy_ema10, 2),
             'spy_ema21': round(self.spy_ema21, 2),
-            'spy_ema20': round(self.spy_ema20, 2),
-            'spy_rsi': round(self.spy_rsi, 1),
             'spy_consecutive_down_days': self.spy_consecutive_down_days,
             'internal_breadth': self.internal_breadth,
-            'recovery_signals': self.count_recovery_signals(),
-            'is_oversold': is_oversold,
-            'oversold_reasons': oversold_reasons,
+            # Structure state
+            'capitulation_detected': self.capitulation_detected,
+            'capitulation_date': self.capitulation_date,
+            'capitulation_low': self.capitulation_low,
+            'swing_low_confirmed': self.swing_low_confirmed,
+            'swing_low_price': self.swing_low_price,
+            'follow_through_detected': self.follow_through_detected,
+            'is_higher_low': self.is_higher_low,
+            'prior_swing_low': self.prior_swing_low,
         }
+
+    def count_recovery_signals(self):
+        """Compatibility method - returns structure status as signals"""
+        signals = {
+            'capitulation': self.capitulation_detected,
+            'swing_low': self.swing_low_confirmed,
+            'follow_through': self.follow_through_detected,
+            'higher_low': self.is_higher_low,
+            'breadth_improving': self.internal_breadth.get('pct_above_20ema', 0) > 25,
+            'spy_above_ema10': self.spy_close > self.spy_ema10 if self.spy_ema10 > 0 else False,
+        }
+        signals['total'] = sum(1 for v in signals.values() if v is True)
+        return signals
+
+    def trigger_relock(self, current_date, reason):
+        """Compatibility method"""
+        return self.exit_recovery_mode(reason)
