@@ -596,6 +596,16 @@ class MarketRegimeDetector:
                     spy_volume=spy_volume,
                     spy_avg_volume=spy_avg_volume
                 )
+
+                if recovery_manager:
+                    recovery_manager.update_spy_data(
+                        date=current_date,
+                        spy_close=spy_ind.get('close', 0),
+                        spy_prev_close=spy_ind.get('prev_close'),
+                        spy_ema20=spy_ind.get('ema20'),
+                        spy_rsi=spy_ind.get('rsi'),
+                    )
+
         except Exception as e:
             print(f"[REGIME] Warning: Could not fetch SPY data: {e}")
 

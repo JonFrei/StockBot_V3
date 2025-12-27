@@ -94,12 +94,12 @@ def validate_end_of_day_cash(strategy):
 
 class SimplifiedSizingConfig:
     """Position sizing configuration"""
-    BASE_POSITION_PCT = 18.0
-    MAX_POSITION_PCT = 20.0
+    BASE_POSITION_PCT = 15.0
+    MAX_POSITION_PCT = 18.0
     MAX_TOTAL_POSITIONS = 25
     MIN_CASH_RESERVE_PCT = 10.0
     MAX_CASH_DEPLOYMENT_PCT = 85.0
-    MAX_DAILY_DEPLOYMENT_PCT = 50.0
+    MAX_DAILY_DEPLOYMENT_PCT = 75.0
     MAX_SINGLE_POSITION_PCT = 20.0
 
 
@@ -206,41 +206,49 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
     allocations = []
 
     for opp in opportunities:
-        ticker = opp['ticker']
-        data = opp['data']
-        current_price = data['close']
+        try:
+            ticker = opp['ticker']
+            data = opp['data']
+            current_price = data['close']
 
-        # Adjust for existing positions (add-ons)
-        this_position_dollars = position_dollars
+            # Adjust for existing positions (add-ons)
+            this_position_dollars = position_dollars
 
-        if strategy is not None:
-            current_exposure = get_current_position_exposure(strategy, ticker)
+            if strategy is not None:
+                current_exposure = get_current_position_exposure(strategy, ticker)
 
-            if current_exposure['has_position']:
-                if current_exposure['exposure_pct'] >= SimplifiedSizingConfig.MAX_SINGLE_POSITION_PCT:
-                    if verbose:
-                        print(f"   ⚠️ {ticker}: At max concentration ({current_exposure['exposure_pct']:.1f}%)")
-                    continue
+                if current_exposure['has_position']:
+                    if current_exposure['exposure_pct'] >= SimplifiedSizingConfig.MAX_SINGLE_POSITION_PCT:
+                        if verbose:
+                            print(f"   ⚠️ {ticker}: At max concentration ({current_exposure['exposure_pct']:.1f}%)")
+                        continue
 
-                # For add-ons, limit to remaining room
-                remaining_room_pct = SimplifiedSizingConfig.MAX_SINGLE_POSITION_PCT - current_exposure['exposure_pct']
-                remaining_room_dollars = portfolio_value * (remaining_room_pct / 100)
-                this_position_dollars = min(position_dollars, remaining_room_dollars)
+                    # For add-ons, limit to remaining room
+                    remaining_room_pct = SimplifiedSizingConfig.MAX_SINGLE_POSITION_PCT - current_exposure[
+                        'exposure_pct']
+                    remaining_room_dollars = portfolio_value * (remaining_room_pct / 100)
+                    this_position_dollars = min(position_dollars, remaining_room_dollars)
 
-        quantity = int(this_position_dollars / current_price)
+            quantity = int(this_position_dollars / current_price)
 
-        if quantity <= 0:
+            if quantity <= 0:
+                continue
+
+            allocations.append({
+                'ticker': ticker,
+                'quantity': quantity,
+                'price': current_price,
+                'cost': quantity * current_price,
+                'signal_score': opp['score'],
+                'signal_type': opp['signal_type'],
+                'rotation_mult': opp.get('rotation_mult', 1.0)
+            })
+
+        except Exception as e:
+            ticker_name = opp.get('ticker', 'unknown')
+            if verbose:
+                print(f"   ⚠️ {ticker_name}: Sizing failed - {e}")
             continue
-
-        allocations.append({
-            'ticker': ticker,
-            'quantity': quantity,
-            'price': current_price,
-            'cost': quantity * current_price,
-            'signal_score': opp['score'],
-            'signal_type': opp['signal_type'],
-            'rotation_mult': opp.get('rotation_mult', 1.0)
-        })
 
     if not allocations:
         return []
