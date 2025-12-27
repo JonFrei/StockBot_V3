@@ -17,73 +17,49 @@ from config import Config
 # =============================================================================
 _backtest_cash_tracker = {
     'initialized': False,
-    'absolute_cash': 0.0,  # Our own running cash balance
-    'daily_spent': 0.0,    # Reset each day
-    'daily_received': 0.0  # Reset each day
+    'iteration_start_cash': 0.0,
+    'buy_adjustments': 0.0,
+    'sell_adjustments': 0.0
 }
 
-
-def init_backtest_cash(initial_capital):
-    """Call once at strategy start with initial capital"""
+def sync_backtest_cash_start_of_day(strategy):
     global _backtest_cash_tracker
     _backtest_cash_tracker = {
         'initialized': True,
-        'absolute_cash': float(initial_capital),
-        'daily_spent': 0.0,
-        'daily_received': 0.0
+        'iteration_start_cash': float(strategy.get_cash()),
+        'buy_adjustments': 0.0,
+        'sell_adjustments': 0.0
     }
 
 
-def sync_backtest_cash_start_of_day():
-    """Call at start of each iteration - just reset daily counters"""
-    global _backtest_cash_tracker
-    if _backtest_cash_tracker['initialized']:
-        # Apply yesterday's activity to absolute cash
-        _backtest_cash_tracker['absolute_cash'] += _backtest_cash_tracker['daily_received']
-        # daily_spent already subtracted in update_backtest_cash_for_buy
-        _backtest_cash_tracker['daily_spent'] = 0.0
-        _backtest_cash_tracker['daily_received'] = 0.0
-
-
 def update_backtest_cash_for_buy(cost):
-    """Track buy - immediately subtract from absolute cash"""
     global _backtest_cash_tracker
     if _backtest_cash_tracker['initialized']:
-        _backtest_cash_tracker['absolute_cash'] -= cost
-        _backtest_cash_tracker['daily_spent'] += cost
+        _backtest_cash_tracker['buy_adjustments'] -= cost
 
 
 def update_backtest_cash_for_sell(proceeds):
-    """Track sell - add to daily received (settles next day)"""
     global _backtest_cash_tracker
     if _backtest_cash_tracker['initialized']:
-        _backtest_cash_tracker['daily_received'] += proceeds
+        _backtest_cash_tracker['sell_adjustments'] += proceeds
 
 
 def get_tracked_cash():
-    """Get our tracked cash balance (excludes unsettled sells)"""
+    """Get adjusted cash for current iteration."""
     global _backtest_cash_tracker
     if _backtest_cash_tracker['initialized']:
-        return _backtest_cash_tracker['absolute_cash']
+        return _backtest_cash_tracker['iteration_start_cash'] + _backtest_cash_tracker['buy_adjustments']
     return None
-
-
-def get_daily_spent():
-    """Get amount spent today"""
-    global _backtest_cash_tracker
-    if _backtest_cash_tracker['initialized']:
-        return _backtest_cash_tracker['daily_spent']
-    return 0.0
-
 
 def debug_cash_state(label=""):
     if Config.BACKTESTING:
         print(f"[CASH DEBUG] {label}")
         print(f"   initialized: {_backtest_cash_tracker['initialized']}")
-        print(f"   absolute_cash: ${_backtest_cash_tracker['absolute_cash']:,.2f}")
-        print(f"   daily_spent: ${_backtest_cash_tracker['daily_spent']:,.2f}")
-        print(f"   daily_received: ${_backtest_cash_tracker['daily_received']:,.2f}")
-
+        print(f"   iteration_start_cash: ${_backtest_cash_tracker['iteration_start_cash']:,.2f}")
+        print(f"   buy_adjustments: ${_backtest_cash_tracker['buy_adjustments']:,.2f}")
+        print(f"   sell_adjustments: ${_backtest_cash_tracker['sell_adjustments']:,.2f}")
+        tracked = get_tracked_cash()
+        print(f"   tracked_cash: ${tracked:,.2f}" if tracked else "   tracked_cash: None")
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
@@ -304,5 +280,3 @@ def create_portfolio_context(strategy):
         'reserved_cash': min_reserve,
         'deployable_cash': deployable_cash
     }
-
-

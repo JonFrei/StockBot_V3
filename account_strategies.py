@@ -367,9 +367,6 @@ class SwingTradeStrategy(Strategy):
         self.order_logger = account_profit_tracking.OrderLogger(self)
         self._current_regime_result = None  # Store for metrics tracking
 
-        if Config.BACKTESTING:
-            stock_position_sizing.init_backtest_cash(self.portfolio_value)  # Usually 100000
-
         print(f"\n{'=' * 60}")
         print(f"🤖 SwingTradeStrategy Initialized")
         print(f"   Tickers: {len(self.tickers)} | Mode: {'BACKTEST' if Config.BACKTESTING else 'LIVE'}")
@@ -436,7 +433,7 @@ class SwingTradeStrategy(Strategy):
 
             # Use tracked cash for backtesting display
             if Config.BACKTESTING:
-                stock_position_sizing.sync_backtest_cash_start_of_day()
+                stock_position_sizing.sync_backtest_cash_start_of_day(self)
                 tracked_cash = stock_position_sizing.get_tracked_cash()
                 display_cash = tracked_cash if tracked_cash is not None else self.get_cash()
             else:
