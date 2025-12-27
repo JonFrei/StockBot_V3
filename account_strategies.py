@@ -430,7 +430,7 @@ class SwingTradeStrategy(Strategy):
 
             # Use tracked cash for backtesting display
             if Config.BACKTESTING:
-                stock_position_sizing.sync_backtest_cash_start_of_day(self.get_cash())
+                stock_position_sizing.sync_backtest_cash_start_of_day(self)
                 tracked_cash = stock_position_sizing.get_tracked_cash()
                 display_cash = tracked_cash if tracked_cash is not None else self.get_cash()
             else:
@@ -438,7 +438,7 @@ class SwingTradeStrategy(Strategy):
             summary.set_context(current_date, self.portfolio_value, display_cash)
 
             if Config.BACKTESTING:
-                stock_position_sizing.sync_backtest_cash_start_of_day(self.get_cash())
+                stock_position_sizing.sync_backtest_cash_start_of_day(self)
             # =============================================================
             # REFRESH ALPACA POSITION CACHE (Direct API)
             # =============================================================
@@ -909,6 +909,13 @@ class SwingTradeStrategy(Strategy):
             # EXECUTE BUYS
             # =============================================================
             buy_failures = 0
+            daily_spent = 0.0
+            max_deployment = portfolio_context['deployable_cash'] * (
+                        stock_position_sizing.SimplifiedSizingConfig.MAX_CASH_DEPLOYMENT_PCT / 100)
+            daily_limit = self.portfolio_value * (
+                        stock_position_sizing.SimplifiedSizingConfig.MAX_DAILY_DEPLOYMENT_PCT / 100)
+            max_deployment = min(max_deployment, daily_limit)
+
             for alloc in allocations:
                 try:
                     ticker = alloc['ticker']
@@ -919,14 +926,20 @@ class SwingTradeStrategy(Strategy):
                     signal_score = alloc['signal_score']
                     rotation_mult = alloc.get('rotation_mult', 1.0)
 
-                    # Pre-buy cash verification (backtesting)
+                    # Check 1: Would this buy exceed daily deployment limit?
+                    if daily_spent + cost > max_deployment:
+                        summary.add_warning(
+                            f"Skipped {ticker}: exceeds daily limit (${daily_spent:,.0f} + ${cost:,.0f} > ${max_deployment:,.0f})")
+                        continue
+
+                    # Check 2: Do we have enough actual cash?
                     if Config.BACKTESTING:
                         available_cash = stock_position_sizing.get_tracked_cash()
                         min_reserve = self.portfolio_value * (
                                     stock_position_sizing.SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100)
                         if available_cash is None or (available_cash - cost) < min_reserve:
                             summary.add_warning(
-                                f"Skipped {ticker}: insufficient cash (${available_cash:,.0f} avail, ${cost:,.0f} needed)")
+                                f"Skipped {ticker}: insufficient cash (${available_cash:,.0f} - ${cost:,.0f} < ${min_reserve:,.0f} reserve)")
                             continue
 
                     # Get tier for logging
@@ -940,9 +953,14 @@ class SwingTradeStrategy(Strategy):
 
                     order = self.create_order(ticker, quantity, 'buy')
                     self.submit_order(order)
+
+                    # Track spending
+                    daily_spent += cost
+
                     if Config.BACKTESTING:
                         stock_position_sizing.update_backtest_cash_for_buy(cost)
-                        print(f"[BUY DEBUG] Bought {ticker}: ${cost:,.2f}")
+                        print(
+                            f"[BUY DEBUG] Bought {ticker}: ${cost:,.2f} | Daily spent: ${daily_spent:,.2f} / ${max_deployment:,.2f}")
                         stock_position_sizing.debug_cash_state(f"After buying {ticker}")
 
                     # Record stock as traded today (live trading only)

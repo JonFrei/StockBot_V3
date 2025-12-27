@@ -24,11 +24,41 @@ _backtest_cash_tracker = {
 }
 
 
-def sync_backtest_cash_start_of_day(lumibot_cash):
+def sync_backtest_cash_start_of_day(strategy):
+    """
+    Sync cash at START of each iteration.
+    Calculate actual cash from portfolio value minus positions (avoids margin/buying power issues).
+    """
     global _backtest_cash_tracker
+
+    portfolio_value = strategy.portfolio_value
+
+    # Calculate actual cash = portfolio_value - total position value
+    positions = strategy.get_positions()
+    total_position_value = 0
+
+    for position in positions:
+        try:
+            qty = abs(int(position.quantity))
+            price = strategy.get_last_price(position.symbol)
+            total_position_value += qty * price
+        except:
+            continue
+
+    calculated_cash = portfolio_value - total_position_value
+    lumibot_cash = strategy.get_cash()
+
+    # Use calculated cash (more reliable than get_cash which may include margin)
+    actual_cash = calculated_cash
+
+    if Config.BACKTESTING:
+        if abs(calculated_cash - lumibot_cash) > 100:
+            print(
+                f"[CASH WARNING] Lumibot cash: ${lumibot_cash:,.2f} | Calculated cash: ${calculated_cash:,.2f} | Using calculated")
+
     _backtest_cash_tracker = {
         'initialized': True,
-        'iteration_start_cash': float(lumibot_cash),
+        'iteration_start_cash': float(actual_cash),
         'buy_adjustments': 0.0,
         'sell_adjustments': 0.0
     }
