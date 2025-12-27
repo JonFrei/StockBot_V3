@@ -367,6 +367,9 @@ class SwingTradeStrategy(Strategy):
         self.order_logger = account_profit_tracking.OrderLogger(self)
         self._current_regime_result = None  # Store for metrics tracking
 
+        if Config.BACKTESTING:
+            stock_position_sizing.init_backtest_cash(self.portfolio_value)  # Usually 100000
+
         print(f"\n{'=' * 60}")
         print(f"🤖 SwingTradeStrategy Initialized")
         print(f"   Tickers: {len(self.tickers)} | Mode: {'BACKTEST' if Config.BACKTESTING else 'LIVE'}")
@@ -400,6 +403,9 @@ class SwingTradeStrategy(Strategy):
                 print("[DASHBOARD] Bot paused by user via dashboard. Skipping iteration.")
                 return
 
+        #if Config.BACKTESTING:
+        #    stock_position_sizing.sync_backtest_cash_start_of_day()  # No parameter needed
+
         try:
             # === MARKET OPEN CHECK (Live Only) ===
             if not Config.BACKTESTING:
@@ -430,15 +436,15 @@ class SwingTradeStrategy(Strategy):
 
             # Use tracked cash for backtesting display
             if Config.BACKTESTING:
-                stock_position_sizing.sync_backtest_cash_start_of_day(self)
+                stock_position_sizing.sync_backtest_cash_start_of_day()
                 tracked_cash = stock_position_sizing.get_tracked_cash()
                 display_cash = tracked_cash if tracked_cash is not None else self.get_cash()
             else:
                 display_cash = self.get_cash()
             summary.set_context(current_date, self.portfolio_value, display_cash)
 
-            if Config.BACKTESTING:
-                stock_position_sizing.sync_backtest_cash_start_of_day(self)
+            # if Config.BACKTESTING:
+            #    stock_position_sizing.sync_backtest_cash_start_of_day()
             # =============================================================
             # REFRESH ALPACA POSITION CACHE (Direct API)
             # =============================================================
@@ -940,6 +946,19 @@ class SwingTradeStrategy(Strategy):
                         if available_cash is None or (available_cash - cost) < min_reserve:
                             summary.add_warning(
                                 f"Skipped {ticker}: insufficient cash (${available_cash:,.0f} - ${cost:,.0f} < ${min_reserve:,.0f} reserve)")
+                            continue
+                    else:
+                        # LIVE TRADING: Verify cash before each buy
+                        try:
+                            current_cash = account_broker_data.get_cash_balance(self)
+                            min_reserve = self.portfolio_value * (
+                                    stock_position_sizing.SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100)
+                            if (current_cash - daily_spent - cost) < min_reserve:
+                                summary.add_warning(
+                                    f"Skipped {ticker}: insufficient cash (${current_cash - daily_spent:,.0f} - ${cost:,.0f} < ${min_reserve:,.0f} reserve)")
+                                continue
+                        except Exception as e:
+                            summary.add_warning(f"Skipped {ticker}: cash check failed ({e})")
                             continue
 
                     # Get tier for logging

@@ -15,75 +15,74 @@ from config import Config
 # =============================================================================
 # BACKTEST CASH TRACKER
 # =============================================================================
-
 _backtest_cash_tracker = {
     'initialized': False,
-    'iteration_start_cash': 0.0,
-    'buy_adjustments': 0.0,  # Negative values (money spent)
-    'sell_adjustments': 0.0  # Positive values (money received) - not used for deployment
+    'absolute_cash': 0.0,  # Our own running cash balance
+    'daily_spent': 0.0,    # Reset each day
+    'daily_received': 0.0  # Reset each day
 }
 
 
-def sync_backtest_cash_start_of_day(strategy):
-    """
-    Sync cash at START of each iteration.
-    Calculate actual cash from portfolio value minus positions (avoids margin/buying power issues).
-    """
+def init_backtest_cash(initial_capital):
+    """Call once at strategy start with initial capital"""
     global _backtest_cash_tracker
-
-    portfolio_value = strategy.portfolio_value
-
-    # Calculate actual cash = portfolio_value - total position value
-    positions = strategy.get_positions()
-    total_position_value = 0
-
-    for position in positions:
-        try:
-            qty = abs(int(position.quantity))
-            price = strategy.get_last_price(position.symbol)
-            total_position_value += qty * price
-        except:
-            continue
-
-    calculated_cash = portfolio_value - total_position_value
-    lumibot_cash = strategy.get_cash()
-
-    # Use calculated cash (more reliable than get_cash which may include margin)
-    actual_cash = calculated_cash
-
-    if Config.BACKTESTING:
-        if abs(calculated_cash - lumibot_cash) > 100:
-            print(
-                f"[CASH WARNING] Lumibot cash: ${lumibot_cash:,.2f} | Calculated cash: ${calculated_cash:,.2f} | Using calculated")
-
     _backtest_cash_tracker = {
         'initialized': True,
-        'iteration_start_cash': float(actual_cash),
-        'buy_adjustments': 0.0,
-        'sell_adjustments': 0.0
+        'absolute_cash': float(initial_capital),
+        'daily_spent': 0.0,
+        'daily_received': 0.0
     }
 
 
-def update_backtest_cash_for_buy(cost):
+def sync_backtest_cash_start_of_day():
+    """Call at start of each iteration - just reset daily counters"""
     global _backtest_cash_tracker
     if _backtest_cash_tracker['initialized']:
-        _backtest_cash_tracker['buy_adjustments'] -= cost
+        # Apply yesterday's activity to absolute cash
+        _backtest_cash_tracker['absolute_cash'] += _backtest_cash_tracker['daily_received']
+        # daily_spent already subtracted in update_backtest_cash_for_buy
+        _backtest_cash_tracker['daily_spent'] = 0.0
+        _backtest_cash_tracker['daily_received'] = 0.0
+
+
+def update_backtest_cash_for_buy(cost):
+    """Track buy - immediately subtract from absolute cash"""
+    global _backtest_cash_tracker
+    if _backtest_cash_tracker['initialized']:
+        _backtest_cash_tracker['absolute_cash'] -= cost
+        _backtest_cash_tracker['daily_spent'] += cost
 
 
 def update_backtest_cash_for_sell(proceeds):
+    """Track sell - add to daily received (settles next day)"""
     global _backtest_cash_tracker
     if _backtest_cash_tracker['initialized']:
-        _backtest_cash_tracker['sell_adjustments'] += proceeds
+        _backtest_cash_tracker['daily_received'] += proceeds
 
 
 def get_tracked_cash():
-    """Get adjusted cash for current iteration - buys only, no sell proceeds"""
+    """Get our tracked cash balance (excludes unsettled sells)"""
     global _backtest_cash_tracker
     if _backtest_cash_tracker['initialized']:
-        # Only use start cash minus buy adjustments (sells tracked separately)
-        return _backtest_cash_tracker['iteration_start_cash'] + _backtest_cash_tracker['buy_adjustments']
+        return _backtest_cash_tracker['absolute_cash']
     return None
 
+
+def get_daily_spent():
+    """Get amount spent today"""
+    global _backtest_cash_tracker
+    if _backtest_cash_tracker['initialized']:
+        return _backtest_cash_tracker['daily_spent']
+    return 0.0
+
+
+def debug_cash_state(label=""):
+    if Config.BACKTESTING:
+        print(f"[CASH DEBUG] {label}")
+        print(f"   initialized: {_backtest_cash_tracker['initialized']}")
+        print(f"   absolute_cash: ${_backtest_cash_tracker['absolute_cash']:,.2f}")
+        print(f"   daily_spent: ${_backtest_cash_tracker['daily_spent']:,.2f}")
+        print(f"   daily_received: ${_backtest_cash_tracker['daily_received']:,.2f}")
 
 # =============================================================================
 # CONFIGURATION
@@ -146,24 +145,23 @@ def get_current_position_exposure(strategy, ticker):
 # =============================================================================
 def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier=1.0, verbose=True, strategy=None):
     """
-    Position sizing with equal allocation and uniform scaling.
+    Position sizing based on available cash, not portfolio value.
 
     Logic:
-    1. Each position gets BASE_POSITION_PCT of portfolio
-    2. If total exceeds daily_limit, scale ALL down equally
+    1. Calculate max we can deploy
+    2. Divide evenly among opportunities (capped at BASE_POSITION_PCT of portfolio)
     3. Return sorted by score (highest first) for execution priority
     """
     if not opportunities:
         return []
 
-    # Don't allow any buying when regime says no trading
     if regime_multiplier == 0:
         return []
 
     portfolio_value = portfolio_context['portfolio_value']
     deployable_cash = portfolio_context['deployable_cash']
 
-    # Safety cap: Never deploy more than actual reported cash
+    # Safety cap
     actual_cash = portfolio_context['total_cash']
     if deployable_cash > actual_cash:
         deployable_cash = max(0, actual_cash - portfolio_value * (SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100))
@@ -184,9 +182,21 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
     if max_deployment <= 0:
         return []
 
-    # Base position size (equal for all)
-    base_position_pct = SimplifiedSizingConfig.BASE_POSITION_PCT * regime_multiplier
-    base_position_dollars = portfolio_value * (base_position_pct / 100)
+    # === KEY CHANGE: Size based on available cash, not portfolio ===
+    # Max per position based on portfolio (original logic)
+    max_position_from_portfolio = portfolio_value * (SimplifiedSizingConfig.BASE_POSITION_PCT / 100) * regime_multiplier
+
+    # Max per position based on dividing available deployment evenly
+    max_position_from_cash = max_deployment / len(opportunities)
+
+    # Use the SMALLER of the two
+    position_dollars = min(max_position_from_portfolio, max_position_from_cash)
+
+    if Config.BACKTESTING:
+        print(f"[SIZE DEBUG] max_position_from_portfolio (12%): ${max_position_from_portfolio:,.2f}")
+        print(
+            f"[SIZE DEBUG] max_position_from_cash (${max_deployment:,.0f} / {len(opportunities)}): ${max_position_from_cash:,.2f}")
+        print(f"[SIZE DEBUG] position_dollars (using min): ${position_dollars:,.2f}")
 
     allocations = []
 
@@ -195,7 +205,9 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
         data = opp['data']
         current_price = data['close']
 
-        # Check concentration limits for existing positions
+        # Adjust for existing positions (add-ons)
+        this_position_dollars = position_dollars
+
         if strategy is not None:
             current_exposure = get_current_position_exposure(strategy, ticker)
 
@@ -207,13 +219,10 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
 
                 # For add-ons, limit to remaining room
                 remaining_room_pct = SimplifiedSizingConfig.MAX_SINGLE_POSITION_PCT - current_exposure['exposure_pct']
-                position_dollars = min(base_position_dollars, portfolio_value * (remaining_room_pct / 100))
-            else:
-                position_dollars = base_position_dollars
-        else:
-            position_dollars = base_position_dollars
+                remaining_room_dollars = portfolio_value * (remaining_room_pct / 100)
+                this_position_dollars = min(position_dollars, remaining_room_dollars)
 
-        quantity = int(position_dollars / current_price)
+        quantity = int(this_position_dollars / current_price)
 
         if quantity <= 0:
             continue
@@ -231,35 +240,14 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
     if not allocations:
         return []
 
-    # Calculate total cost
+    # Verify total (should already be within budget, but double-check)
     total_cost = sum(a['cost'] for a in allocations)
 
     if Config.BACKTESTING:
-        print(f"[SIZE DEBUG] === SCALING CHECK ===")
-        print(f"[SIZE DEBUG] total_cost before scaling: ${total_cost:,.2f}")
+        print(f"[SIZE DEBUG] === FINAL CHECK ===")
+        print(f"[SIZE DEBUG] total_cost: ${total_cost:,.2f}")
         print(f"[SIZE DEBUG] max_deployment: ${max_deployment:,.2f}")
-        print(f"[SIZE DEBUG] over budget: {total_cost > max_deployment}")
-
-    # Scale down uniformly if over budget
-    if total_cost > max_deployment:
-        scale_factor = max_deployment / total_cost
-
-        if Config.BACKTESTING:
-            print(f"[SIZE DEBUG] SCALING DOWN by factor: {scale_factor:.3f}")
-
-        scaled = []
-        for alloc in allocations:
-            scaled_qty = int(alloc['quantity'] * scale_factor)
-            if scaled_qty > 0:
-                alloc['quantity'] = scaled_qty
-                alloc['cost'] = scaled_qty * alloc['price']
-                scaled.append(alloc)
-
-        allocations = scaled
-
-        if Config.BACKTESTING:
-            new_total = sum(a['cost'] for a in allocations)
-            print(f"[SIZE DEBUG] total_cost after scaling: ${new_total:,.2f}")
+        print(f"[SIZE DEBUG] within budget: {total_cost <= max_deployment}")
 
     # Sort by score (highest first) for execution priority
     allocations.sort(key=lambda x: x['signal_score'], reverse=True)
@@ -318,12 +306,3 @@ def create_portfolio_context(strategy):
     }
 
 
-def debug_cash_state(label=""):
-    if Config.BACKTESTING:
-        print(f"[CASH DEBUG] {label}")
-        print(f"   initialized: {_backtest_cash_tracker['initialized']}")
-        print(f"   iteration_start_cash: ${_backtest_cash_tracker['iteration_start_cash']:,.2f}")
-        print(f"   buy_adjustments: ${_backtest_cash_tracker['buy_adjustments']:,.2f}")
-        print(f"   sell_adjustments: ${_backtest_cash_tracker['sell_adjustments']:,.2f}")
-        tracked = get_tracked_cash()
-        print(f"   tracked_cash (for buys): ${tracked:,.2f}" if tracked else "   tracked_cash: None")
