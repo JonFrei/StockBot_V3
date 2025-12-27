@@ -94,13 +94,13 @@ def validate_end_of_day_cash(strategy):
 
 class SimplifiedSizingConfig:
     """Position sizing configuration"""
-    BASE_POSITION_PCT = 15.0
-    MAX_POSITION_PCT = 18.0
+    BASE_POSITION_PCT = 18.0
+    MAX_POSITION_PCT = 20.0
     MAX_TOTAL_POSITIONS = 25
     MIN_CASH_RESERVE_PCT = 10.0
     MAX_CASH_DEPLOYMENT_PCT = 85.0
     MAX_DAILY_DEPLOYMENT_PCT = 50.0
-    MAX_SINGLE_POSITION_PCT = 18.0
+    MAX_SINGLE_POSITION_PCT = 20.0
 
 
 # =============================================================================

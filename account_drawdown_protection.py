@@ -26,7 +26,7 @@ class SafeguardConfig:
     """Safeguard configuration"""
 
     # Layer 0: Portfolio Drawdown Protection
-    PORTFOLIO_DRAWDOWN_THRESHOLD = 15.0  # Exit all at 15% drawdown
+    PORTFOLIO_DRAWDOWN_THRESHOLD = 10.0  # Exit all at 15% drawdown
     PORTFOLIO_DRAWDOWN_LOOKBACK = 30  # Rolling 30-day peak
     PORTFOLIO_DRAWDOWN_COOLDOWN_DAYS = 5  # Lockout after trigger
 
