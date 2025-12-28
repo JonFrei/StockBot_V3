@@ -1,124 +1,212 @@
+"""
+Stock Position Monitoring - Structure-Anchored Trailing Exit System
+
+CORE PHILOSOPHY: One primary mechanism, structure-based stops, let position sizing handle risk.
+
+EXIT SYSTEM:
+1. Initial Stop: Structure-based (lowest low of 10 bars - 0.5% buffer)
+2. Trailing Stop: Chandelier Exit (highest close - 3×ATR10)
+3. Profit Take: Sell 50% at +2R
+4. Dead Money Filter: 5 consecutive closes below EMA50
+5. Hard Stop: 10% max loss (circuit breaker)
+
+PHASES:
+- Entry: Stop = structure-based (lowest low)
+- Breakeven Lock: When price reaches +2×ATR, stop moves to entry
+- Profit Lock: When price reaches +3.5×ATR, stop moves to entry + 1.5×ATR
+- Trailing: After profit lock, Chandelier trailing (peak - 2.5×ATR)
+"""
+
 import stock_indicators
 from config import Config
 import stock_position_sizing
+import account_broker_data
+
 
 class ExitConfig:
-    """Tiered exit configuration"""
+    """Structure-Anchored Trailing Exit Configuration"""
 
-    # Initial stop loss (Level 0)
-    INITIAL_STOP_ATR_MULT = 2.75 # switched to 2.5 from 2.75 12/27/25
+    # Structure-based initial stop
+    STRUCTURE_LOOKBACK_BARS = 10  # Bars for lowest low
+    STRUCTURE_BUFFER_PCT = 0.5  # Buffer below lowest low (%)
+    MAX_INITIAL_STOP_PCT = 8.0  # Maximum initial stop distance (%)
 
-    # Tier 1: First profit target
-    TIER1_TARGET_PCT = 12.0  # +12% from entry
-    TIER1_SELL_PCT = 33.0  # Sell 33% of position
-    TIER1_EMERGENCY_ATR_MULT = 2.5  # Emergency stop = Tier1_Lock - (2.5 × ATR)
+    # ATR settings
+    ATR_PERIOD = 10  # Faster ATR for adaptation
 
-    # Tier 2: Second profit target
-    TIER2_TARGET_PCT = 25.0  # +25% from entry
-    TIER2_SELL_PCT = 66.0  # Sell 66% of REMAINING position (44.22% of original)
-    TIER2_TRAILING_ATR_MULT = 3.5  # Trailing stop = Peak - (3.5 × ATR)
+    # Chandelier trailing
+    CHANDELIER_MULTIPLIER = 3.0  # Peak - (3.0 × ATR)
 
-    # Kill Switch (active after Tier 1 OR min hold days)
-    KILL_SWITCH_ACTIVE_AFTER_TIER1 = True
-    KILL_SWITCH_MIN_HOLD_DAYS = 10  # Kill switch activates after this many days
+    # Phase transitions (in ATR multiples from entry)
+    BREAKEVEN_LOCK_ATR = 2.0  # Move stop to entry at +2×ATR
+    PROFIT_LOCK_ATR = 3.5  # Move stop to entry + 1.5×ATR at +3.5×ATR
+    PROFIT_LOCK_STOP_ATR = 1.5  # Stop level after profit lock
 
-    # Maximum Loss Hard Stop (by volatility) - Emergency backstop
-    MAX_LOSS_LOW_VOL = 15.0  # Low volatility stocks # 15
-    MAX_LOSS_MEDIUM_VOL = 18.0  # Medium volatility # 18
-    MAX_LOSS_HIGH_VOL = 22.0  # High volatility # 22
-    MAX_LOSS_VERY_HIGH_VOL = 25.0  # Very high volatility # 25
+    # Trailing multiplier after profit lock
+    TRAILING_ATR_MULT = 2.5  # Peak - (2.5 × current ATR)
 
-    # Stagnant position check
-    STAGNANT_MAX_DAYS = 60 # Changed from 90
-    STAGNANT_MIN_GAIN_PCT = 5
-    STAGNANT_ENABLED = True
+    # Profit taking
+    PROFIT_TAKE_R_MULTIPLE = 2.0  # Take profit at 2R
+    PROFIT_TAKE_PCT = 50.0  # Sell 50% at profit target
+
+    # Dead money filter
+    DEAD_MONEY_EMA_PERIOD = 50  # EMA period for dead money check
+    DEAD_MONEY_BARS_BELOW = 5  # Consecutive bars below EMA to trigger
+    DEAD_MONEY_MAX_LOSS_R = 1.0  # Only trigger if loss < 1R
+
+    # Hard stop (circuit breaker)
+    HARD_STOP_PCT = 10.0  # Maximum loss percentage
+
+    # Regime adjustment
+    REGIME_TIGHTENING_PCT = 20.0  # Reduce multipliers by 20% when SPY < 50 SMA
 
     # Remnant cleanup
     MIN_REMNANT_SHARES = 5
-    MIN_REMNANT_VALUE = 500.0
+    MIN_REMNANT_VALUE = 300.0
 
 
 class PositionMonitor:
-    """Tracks position state for tiered exits"""
+    """Tracks position state for structure-anchored trailing exits"""
 
     def __init__(self, strategy):
         self.strategy = strategy
         self.positions_metadata = {}
 
-    def track_position(self, ticker, entry_date, entry_signal='unknown', entry_score=0, is_addon=False,
-                       entry_price=None):
+    def track_position(self, ticker, entry_date, entry_signal='unknown', entry_score=0,
+                       is_addon=False, entry_price=None, raw_df=None, atr=None):
         """
-        Initialize or update position tracking
-
-        For new positions: Creates Level 0 state
-        For add-ons: Preserves existing tier state (no reset)
+        Initialize or update position tracking with structure-based stop
 
         Args:
             ticker: Stock symbol
             entry_date: Entry datetime
             entry_signal: Entry signal name
             entry_score: Entry quality score
-            is_addon: True if adding to existing position (NEW)
+            is_addon: True if adding to existing position
+            entry_price: Entry price
+            raw_df: DataFrame with OHLC for structure calculation
+            atr: ATR value for R calculation
         """
+        current_price = entry_price if entry_price and entry_price > 0 else self._get_current_price(ticker)
+
         if ticker not in self.positions_metadata:
-            # New position - initialize tracking
-            current_price = entry_price if entry_price and entry_price > 0 else self._get_current_price(ticker)
+            # Calculate structure-based initial stop
+            initial_stop = self._calculate_structure_stop(current_price, raw_df)
+
+            # Calculate R (initial risk)
+            R = current_price - initial_stop if initial_stop > 0 else current_price * 0.05
+
+            # Store ATR at entry for reference
+            entry_atr = atr if atr and atr > 0 else R / 2.5  # Fallback estimate
 
             self.positions_metadata[ticker] = {
                 'entry_date': entry_date,
                 'entry_signal': entry_signal,
                 'entry_score': entry_score,
-                'entry_price': current_price,  # For profit calculations (will be overwritten by broker avg)
-                'profit_level': 0,  # 0=Entry, 1=Tier1, 2=Tier2
-                'tier1_lock_price': None,  # Price at Tier 1 execution
-                'peak_price': None,  # Peak after Tier 2
-                'kill_switch_active': False,  # Activated after Tier 1
-                'add_count': 0  # NEW: Track number of add-ons
+                'entry_price': current_price,
+                'initial_stop': initial_stop,
+                'R': R,
+                'entry_atr': entry_atr,
+                'highest_close': current_price,
+                'current_stop': initial_stop,
+                'phase': 'entry',  # entry, breakeven, profit_lock, trailing
+                'partial_taken': False,
+                'bars_below_ema50': 0,
+                'add_count': 0
             }
         elif is_addon:
-            # NEW: Add-on to existing position - preserve tier state, increment add count
+            # Add-on: preserve phase state, increment add count
             self.positions_metadata[ticker]['add_count'] = self.positions_metadata[ticker].get('add_count', 0) + 1
-            # NOTE: Tier state, kill_switch, lock prices all preserved - no reset
-            # Entry price will be updated by broker's avg_entry_price automatically
+            # Entry price will be updated by broker's avg_entry_price
 
-    def advance_to_tier1(self, ticker, tier1_price):
+    def _calculate_structure_stop(self, entry_price, raw_df):
         """
-        Advance position to Tier 1 (33% sold)
+        Calculate structure-based initial stop
 
-        Args:
-            ticker: Stock symbol
-            tier1_price: Price at which Tier 1 executed
+        Stop = Lowest low of past 10 bars minus 0.5% buffer
+        Capped at 8% from entry
         """
+        if raw_df is None or len(raw_df) < ExitConfig.STRUCTURE_LOOKBACK_BARS:
+            # Fallback: 5% stop
+            return entry_price * 0.95
+
+        # Get lowest low of lookback period
+        lookback_lows = raw_df['low'].tail(ExitConfig.STRUCTURE_LOOKBACK_BARS)
+        lowest_low = lookback_lows.min()
+
+        # Apply buffer
+        structure_stop = lowest_low * (1 - ExitConfig.STRUCTURE_BUFFER_PCT / 100)
+
+        # Cap at maximum stop distance
+        min_stop = entry_price * (1 - ExitConfig.MAX_INITIAL_STOP_PCT / 100)
+        structure_stop = max(structure_stop, min_stop)
+
+        return structure_stop
+
+    def update_position_state(self, ticker, current_close, current_atr, ema50, regime_bearish=False):
+        """
+        Update position state each bar
+
+        Updates highest_close, phase transitions, current_stop, bars_below_ema50
+        """
+        if ticker not in self.positions_metadata:
+            return
+
+        meta = self.positions_metadata[ticker]
+        entry_price = meta['entry_price']
+        R = meta['R']
+        entry_atr = meta['entry_atr']
+
+        # Update highest close
+        if current_close > meta['highest_close']:
+            meta['highest_close'] = current_close
+
+        # Calculate current gain in ATR terms
+        gain_atr = (current_close - entry_price) / entry_atr if entry_atr > 0 else 0
+
+        # Apply regime tightening if bearish
+        regime_mult = 1.0 - (ExitConfig.REGIME_TIGHTENING_PCT / 100) if regime_bearish else 1.0
+
+        # Phase transitions (only advance, never retreat)
+        current_phase = meta['phase']
+
+        if current_phase == 'entry':
+            if gain_atr >= ExitConfig.BREAKEVEN_LOCK_ATR:
+                meta['phase'] = 'breakeven'
+                meta['current_stop'] = entry_price  # Move to breakeven
+
+        if current_phase in ['entry', 'breakeven']:
+            if gain_atr >= ExitConfig.PROFIT_LOCK_ATR:
+                meta['phase'] = 'profit_lock'
+                profit_lock_stop = entry_price + (ExitConfig.PROFIT_LOCK_STOP_ATR * entry_atr)
+                meta['current_stop'] = max(meta['current_stop'], profit_lock_stop)
+
+        # Trailing stop calculation (after profit lock)
+        if meta['phase'] == 'profit_lock':
+            # Use current ATR for trailing, with regime adjustment
+            trailing_mult = ExitConfig.TRAILING_ATR_MULT * regime_mult
+            chandelier_stop = meta['highest_close'] - (trailing_mult * current_atr)
+
+            # Stop only moves up
+            if chandelier_stop > meta['current_stop']:
+                meta['current_stop'] = chandelier_stop
+                meta['phase'] = 'trailing'
+
+        if meta['phase'] == 'trailing':
+            trailing_mult = ExitConfig.TRAILING_ATR_MULT * regime_mult
+            chandelier_stop = meta['highest_close'] - (trailing_mult * current_atr)
+            meta['current_stop'] = max(meta['current_stop'], chandelier_stop)
+
+        # Update bars below EMA50 counter
+        if ema50 and current_close < ema50:
+            meta['bars_below_ema50'] = meta.get('bars_below_ema50', 0) + 1
+        else:
+            meta['bars_below_ema50'] = 0
+
+    def record_partial_taken(self, ticker):
+        """Record that partial profit was taken"""
         if ticker in self.positions_metadata:
-            self.positions_metadata[ticker]['profit_level'] = 1
-            self.positions_metadata[ticker]['tier1_lock_price'] = tier1_price
-            self.positions_metadata[ticker]['kill_switch_active'] = True
-
-    def advance_to_tier2(self, ticker, tier2_price):
-        """
-        Advance position to Tier 2 (66% of remaining sold, trailing active)
-
-        Args:
-            ticker: Stock symbol
-            tier2_price: Price at which Tier 2 executed
-        """
-        if ticker in self.positions_metadata:
-            self.positions_metadata[ticker]['profit_level'] = 2
-            self.positions_metadata[ticker]['peak_price'] = tier2_price  # Initialize peak
-
-    def update_peak_price(self, ticker, current_price):
-        """
-        Update peak price for Level 2 trailing stop
-
-        Args:
-            ticker: Stock symbol
-            current_price: Current price
-        """
-        if ticker in self.positions_metadata:
-            meta = self.positions_metadata[ticker]
-            if meta['profit_level'] == 2:
-                if meta['peak_price'] is None or current_price > meta['peak_price']:
-                    meta['peak_price'] = current_price
+            self.positions_metadata[ticker]['partial_taken'] = True
 
     def clean_position_metadata(self, ticker):
         """Remove position metadata after full exit"""
@@ -141,286 +229,106 @@ class PositionMonitor:
 # EXIT CONDITION CHECKS
 # =============================================================================
 
-def check_initial_stop(entry_price, current_close, atr):
+def check_hard_stop(entry_price, current_price):
     """
-    Check Level 0 initial ATR stop
+    Check hard stop (10% max loss circuit breaker)
 
-    Stop = Entry - (2.75 × ATR)
-    Requires CLOSE below stop (not intraday breach) to filter noise
-
-    Args:
-        entry_price: Original entry price
-        current_close: Current bar's close price
-        atr: ATR(14) value
-
-    Returns:
-        dict or None: Exit signal if triggered
-    """
-    if not atr or atr <= 0 or entry_price <= 0:
-        return None
-
-    stop_price = entry_price - (ExitConfig.INITIAL_STOP_ATR_MULT * atr)
-
-    if current_close <= stop_price:
-        return {
-            'type': 'full_exit',
-            'reason': 'initial_atr_stop',
-            'sell_pct': 100.0,
-            'message': f'Initial stop @ ${stop_price:.2f} (Entry: ${entry_price:.2f}, Close: ${current_close:.2f})'
-        }
-
-    return None
-
-
-def check_tier1_target(pnl_pct):
-    """
-    Check if Tier 1 profit target reached (+12%)
-
-    Args:
-        pnl_pct: Current P&L percentage
-
-    Returns:
-        dict or None: Tier 1 exit signal
-    """
-    if pnl_pct >= ExitConfig.TIER1_TARGET_PCT:
-        return {
-            'type': 'tier1_exit',
-            'reason': 'tier1_profit',
-            'sell_pct': ExitConfig.TIER1_SELL_PCT,
-            'tier': 1,
-            'message': f'Tier 1 @ +{pnl_pct:.1f}% (target: +{ExitConfig.TIER1_TARGET_PCT}%)'
-        }
-
-    return None
-
-
-def check_emergency_stop(tier1_lock_price, current_close, atr):
-    """
-    Check Level 1 emergency stop after Tier 1
-
-    Stop = Tier1_Lock - (2.5 × ATR)
-    Requires CLOSE below stop (not intraday breach) to filter noise
-
-    Args:
-        tier1_lock_price: Price at which Tier 1 executed
-        current_close: Current bar's close price
-        atr: ATR(14) value
-
-    Returns:
-        dict or None: Exit signal if triggered
-    """
-    if not tier1_lock_price or not atr or atr <= 0:
-        return None
-
-    emergency_stop = tier1_lock_price - (ExitConfig.TIER1_EMERGENCY_ATR_MULT * atr)
-
-    if current_close <= emergency_stop:
-        return {
-            'type': 'full_exit',
-            'reason': 'emergency_stop_tier1',
-            'sell_pct': 100.0,
-            'message': f'Emergency stop @ ${emergency_stop:.2f} (Lock: ${tier1_lock_price:.2f}, Close: ${current_close:.2f})'
-        }
-
-    return None
-
-
-def check_tier2_target(pnl_pct, current_profit_level):
-    """
-    Check if Tier 2 profit target reached (+25%)
-
-    Args:
-        pnl_pct: Current P&L percentage
-        current_profit_level: Current position level (must be 1)
-
-    Returns:
-        dict or None: Tier 2 exit signal
-    """
-    if current_profit_level != 1:
-        return None
-
-    if pnl_pct >= ExitConfig.TIER2_TARGET_PCT:
-        return {
-            'type': 'tier2_exit',
-            'reason': 'tier2_profit',
-            'sell_pct': ExitConfig.TIER2_SELL_PCT,  # 66% of remaining
-            'tier': 2,
-            'message': f'Tier 2 @ +{pnl_pct:.1f}% (target: +{ExitConfig.TIER2_TARGET_PCT}%)'
-        }
-
-    return None
-
-
-def check_trailing_stop(peak_price, current_close, atr):
-    """
-    Check Level 2 trailing stop after Tier 2
-
-    Stop = Peak - (3.5 × ATR)
-    Requires CLOSE below stop (not intraday breach) to filter noise
-
-    Args:
-        peak_price: Highest price since Tier 2
-        current_close: Current bar's close price
-        atr: ATR(14) value
-
-    Returns:
-        dict or None: Exit signal if triggered
-    """
-    if not peak_price or not atr or atr <= 0:
-        return None
-
-    trailing_stop = peak_price - (ExitConfig.TIER2_TRAILING_ATR_MULT * atr)
-
-    if current_close <= trailing_stop:
-        return {
-            'type': 'full_exit',
-            'reason': 'trailing_stop_tier2',
-            'sell_pct': 100.0,
-            'message': f'Trailing stop @ ${trailing_stop:.2f} (Peak: ${peak_price:.2f}, Close: ${current_close:.2f})'
-        }
-
-    return None
-
-
-def check_kill_switch(raw_df, indicators, kill_switch_active, entry_date=None, current_date=None, profit_level=0):
-    """
-    Check Kill Switch: Momentum Fade + Price Confirmation
-
-    Active after Tier 1 OR after minimum hold days (whichever comes first)
-    Overrides all other exits
-
-    Args:
-        raw_df: DataFrame with OHLC data
-        indicators: Dict with current indicators
-        kill_switch_active: Bool - is kill switch armed via Tier 1?
-        entry_date: Position entry date (optional)
-        current_date: Current date (optional)
-        profit_level: Current profit level (0, 1, or 2)
-
-    Returns:
-        dict or None: Kill switch exit signal
-    """
-    # Determine if kill switch should be active
-    is_active = False
-
-    # Method 1: Active after Tier 1
-    if kill_switch_active or profit_level >= 1:
-        is_active = True
-
-    # Method 2: Active after minimum hold days
-    if not is_active and entry_date is not None and current_date is not None:
-        try:
-            entry = entry_date.replace(tzinfo=None) if hasattr(entry_date,
-                                                               'tzinfo') and entry_date.tzinfo else entry_date
-            current = current_date.replace(tzinfo=None) if hasattr(current_date,
-                                                                   'tzinfo') and current_date.tzinfo else current_date
-            days_held = (current - entry).days
-
-            if days_held >= ExitConfig.KILL_SWITCH_MIN_HOLD_DAYS:
-                is_active = True
-        except:
-            pass
-
-    if not is_active:
-        return None
-
-    if raw_df is None or len(raw_df) < 10:
-        return None
-
-    # Check momentum fade
-    fade_result = stock_indicators.detect_momentum_fade(raw_df, indicators)
-
-    if not fade_result['fade_detected']:
-        return None
-
-    # Check price confirmation
-    confirm_result = stock_indicators.detect_price_confirmation(raw_df, indicators)
-
-    if confirm_result['confirmed']:
-        fade_signals = ', '.join(fade_result['signals'])
-
-        return {
-            'type': 'full_exit',
-            'reason': 'kill_switch',
-            'sell_pct': 100.0,
-            'message': f'KILL SWITCH: Fade [{fade_signals}] + Confirmation [{confirm_result["reason"]}]'
-        }
-
-    return None
-
-
-def check_max_loss_stop(entry_price, current_price, volatility_metrics):
-    """
-    Check maximum loss hard stop (emergency backstop)
-
-    Triggers on gap-downs that skip ATR stops.
-    Thresholds vary by volatility tier.
-
-    Args:
-        entry_price: Original entry price
-        current_price: Current price
-        volatility_metrics: Dict with 'risk_class' key
-
-    Returns:
-        dict or None: Exit signal if triggered
+    This is the absolute backstop - no exceptions.
     """
     if entry_price <= 0 or current_price <= 0:
         return None
 
     pnl_pct = ((current_price - entry_price) / entry_price) * 100
 
-    # Get threshold based on volatility
-    risk_class = volatility_metrics.get('risk_class', 'medium') if volatility_metrics else 'medium'
-
-    thresholds = {
-        'low': ExitConfig.MAX_LOSS_LOW_VOL,
-        'medium': ExitConfig.MAX_LOSS_MEDIUM_VOL,
-        'high': ExitConfig.MAX_LOSS_HIGH_VOL,
-        'very_high': ExitConfig.MAX_LOSS_VERY_HIGH_VOL,
-        'extreme': ExitConfig.MAX_LOSS_VERY_HIGH_VOL
-    }
-
-    max_loss_threshold = thresholds.get(risk_class, ExitConfig.MAX_LOSS_MEDIUM_VOL)
-
-    if pnl_pct <= -max_loss_threshold:
+    if pnl_pct <= -ExitConfig.HARD_STOP_PCT:
         return {
             'type': 'full_exit',
-            'reason': 'max_loss_stop',
+            'reason': 'hard_stop',
             'sell_pct': 100.0,
-            'message': f'Max loss stop @ {pnl_pct:.1f}% (threshold: -{max_loss_threshold}% for {risk_class} vol)'
+            'message': f'HARD STOP: {pnl_pct:.1f}% loss (limit: -{ExitConfig.HARD_STOP_PCT}%)'
         }
 
     return None
 
 
-def check_stagnant_position(entry_date, current_date, pnl_pct):
+def check_trailing_stop(current_stop, current_close, phase):
     """
-    Check for stagnant position (90 days, <5% gain)
+    Check if trailing/structure stop hit
 
-    Args:
-        entry_date: Entry datetime
-        current_date: Current datetime
-        pnl_pct: Current P&L percentage
-
-    Returns:
-        dict or None: Exit signal if stagnant
+    Uses close price, not intraday low, to filter noise.
     """
-    if not ExitConfig.STAGNANT_ENABLED or entry_date is None or current_date is None:
+    if not current_stop or current_stop <= 0:
         return None
 
-    # Normalize dates
-    entry = entry_date.replace(tzinfo=None) if hasattr(entry_date, 'tzinfo') and entry_date.tzinfo else entry_date
-    current = current_date.replace(tzinfo=None) if hasattr(current_date,
-                                                           'tzinfo') and current_date.tzinfo else current_date
+    if current_close <= current_stop:
+        reason_map = {
+            'entry': 'structure_stop',
+            'breakeven': 'breakeven_stop',
+            'profit_lock': 'profit_lock_stop',
+            'trailing': 'chandelier_stop'
+        }
+        reason = reason_map.get(phase, 'trailing_stop')
 
-    days_held = (current - entry).days
-
-    if days_held >= ExitConfig.STAGNANT_MAX_DAYS and pnl_pct < ExitConfig.STAGNANT_MIN_GAIN_PCT:
         return {
             'type': 'full_exit',
-            'reason': 'stagnant_exit',
+            'reason': reason,
             'sell_pct': 100.0,
-            'message': f'Stagnant {days_held}d with only {pnl_pct:+.1f}%'
+            'message': f'{reason.upper()}: Close ${current_close:.2f} <= Stop ${current_stop:.2f}'
+        }
+
+    return None
+
+
+def check_dead_money(bars_below_ema50, pnl_pct, R, entry_price, current_price):
+    """
+    Check dead money filter
+
+    Exit if:
+    - 5+ consecutive closes below EMA50
+    - Loss is less than 1R (not already deep in the hole)
+    """
+    if bars_below_ema50 < ExitConfig.DEAD_MONEY_BARS_BELOW:
+        return None
+
+    # Calculate loss in R terms
+    loss_dollars = entry_price - current_price
+    loss_R = loss_dollars / R if R > 0 else 0
+
+    # Only trigger if not already at a large loss
+    if loss_R <= ExitConfig.DEAD_MONEY_MAX_LOSS_R:
+        return {
+            'type': 'full_exit',
+            'reason': 'dead_money',
+            'sell_pct': 100.0,
+            'message': f'DEAD MONEY: {bars_below_ema50} bars below EMA50, {pnl_pct:+.1f}%'
+        }
+
+    return None
+
+
+def check_profit_take(entry_price, current_price, R, partial_taken):
+    """
+    Check profit take at 2R
+
+    Sells 50% of position at 2R profit.
+    Only triggers once per position.
+    """
+    if partial_taken:
+        return None
+
+    if R <= 0 or entry_price <= 0:
+        return None
+
+    gain = current_price - entry_price
+    gain_R = gain / R
+
+    if gain_R >= ExitConfig.PROFIT_TAKE_R_MULTIPLE:
+        pnl_pct = (gain / entry_price) * 100
+        return {
+            'type': 'profit_take',
+            'reason': 'profit_take_2R',
+            'sell_pct': ExitConfig.PROFIT_TAKE_PCT,
+            'message': f'PROFIT TAKE: +{gain_R:.1f}R (+{pnl_pct:.1f}%)'
         }
 
     return None
@@ -429,13 +337,6 @@ def check_stagnant_position(entry_date, current_date, pnl_pct):
 def check_remnant_position(remaining_shares, current_price):
     """
     Check for remnant position cleanup
-
-    Args:
-        remaining_shares: Current position size
-        current_price: Current price
-
-    Returns:
-        dict or None: Exit signal if remnant
     """
     remaining_value = remaining_shares * current_price
 
@@ -467,140 +368,122 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
     Check all positions for exit signals
 
     Priority order:
-    1. Kill Switch (if active)
-    1.5. Max Loss Hard Stop (emergency backstop)
-    2. Tier 1 target
-    3. Tier 2 target
-    4. Stops (initial, emergency, or trailing based on level)
-    5. Stagnant/Remnant
+    1. Hard Stop (10% max loss)
+    2. Trailing/Structure Stop
+    3. Dead Money Filter
+    4. Profit Take (2R)
+    5. Remnant Cleanup (handled in execution)
 
     Args:
         strategy: Lumibot Strategy instance
         current_date: Current datetime
-        all_stock_data: Dict of ticker -> stock data
+        all_stock_data: Dict of {ticker: {'indicators': {...}, 'raw': DataFrame}}
         position_monitor: PositionMonitor instance
 
     Returns:
-        list: Exit orders
+        list: Exit orders to execute
     """
-    import account_broker_data
-
     exit_orders = []
     positions = strategy.get_positions()
 
-    if not positions:
-        return exit_orders
+    # Check if in bearish regime (SPY < 50 SMA)
+    regime_bearish = False
+    if 'SPY' in all_stock_data:
+        spy_data = all_stock_data['SPY']['indicators']
+        spy_close = spy_data.get('close', 0)
+        spy_sma50 = spy_data.get('sma50', 0)
+        if spy_close > 0 and spy_sma50 > 0:
+            regime_bearish = spy_close < spy_sma50
 
     for position in positions:
         ticker = position.symbol
 
-        # Get broker data - ALWAYS use broker's avg_entry_price for P&L calculations
-        broker_entry_price = account_broker_data.get_broker_entry_price(position, strategy, ticker)
-        if not account_broker_data.validate_entry_price(broker_entry_price, ticker):
+        if ticker in account_broker_data.SKIP_SYMBOLS:
             continue
 
         broker_quantity = account_broker_data.get_position_quantity(position, ticker)
-        if broker_quantity <= 0 or ticker not in all_stock_data:
+        if broker_quantity <= 0:
             continue
 
-        # Get market data
+        # Get price data
+        if ticker not in all_stock_data:
+            continue
+
         data = all_stock_data[ticker]['indicators']
         raw_df = all_stock_data[ticker].get('raw')
 
         current_price = data.get('close', 0)
-        atr = data.get('atr_14', None)
-
         if current_price <= 0:
             continue
 
-        # Get or create position metadata
+        # Get ATR (use ATR10 if available, else ATR14)
+        current_atr = stock_indicators.get_atr(raw_df, period=ExitConfig.ATR_PERIOD) if raw_df is not None else 0
+        if current_atr <= 0:
+            current_atr = data.get('atr_14', 0)
+
+        # Get EMA50
+        ema50 = data.get('ema50', 0)
+
+        # Get metadata
         metadata = position_monitor.get_position_metadata(ticker)
         if not metadata:
-            position_monitor.track_position(ticker, current_date, 'pre_existing', entry_score=0)
-            metadata = position_monitor.get_position_metadata(ticker)
+            # Orphan position - skip (will be adopted by sync)
+            continue
 
-        # IMPORTANT: Use broker's avg_entry_price for P&L calculations
-        # This handles add-ons correctly since broker averages automatically
-        # entry_price = broker_entry_price
-        # entry_date = metadata.get('entry_date')
+        # Get entry price (prefer broker avg, fallback to metadata)
+        broker_entry_price = account_broker_data.get_broker_entry_price(position, strategy, ticker)
+        entry_price = broker_entry_price if broker_entry_price > 0 else metadata.get('entry_price', 0)
 
-        if Config.BACKTESTING:
-            # In backtesting, use the stored price (matches split-adjusted data feed)
-            stored_entry = metadata.get('entry_price')
-            entry_price = stored_entry if stored_entry and stored_entry > 0 else broker_entry_price
-        else:
-            # In live trading, broker handles splits and add-ons correctly
-            entry_price = broker_entry_price
+        if entry_price <= 0:
+            continue
 
-        entry_date = metadata.get('entry_date')
+        # Update position state
+        position_monitor.update_position_state(
+            ticker=ticker,
+            current_close=current_price,
+            current_atr=current_atr,
+            ema50=ema50,
+            regime_bearish=regime_bearish
+        )
 
-        # Calculate P&L using broker's averaged entry price
-        pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+        # Refresh metadata after update
+        metadata = position_monitor.get_position_metadata(ticker)
+
+        # Calculate P&L
         pnl_dollars = (current_price - entry_price) * broker_quantity
+        pnl_pct = ((current_price - entry_price) / entry_price * 100)
 
         # Get position state
-        profit_level = metadata.get('profit_level', 0)
-        tier1_lock_price = metadata.get('tier1_lock_price')
-        peak_price = metadata.get('peak_price')
-        kill_switch_active = metadata.get('kill_switch_active', False)
+        R = metadata.get('R', entry_price * 0.05)
+        current_stop = metadata.get('current_stop', 0)
+        phase = metadata.get('phase', 'entry')
+        partial_taken = metadata.get('partial_taken', False)
+        bars_below_ema50 = metadata.get('bars_below_ema50', 0)
 
         exit_signal = None
 
         # =====================================================================
-        # PRIORITY 1: KILL SWITCH (after Tier 1 OR after 5 days)
+        # PRIORITY 1: HARD STOP (10% max loss)
         # =====================================================================
-        if ExitConfig.KILL_SWITCH_ACTIVE_AFTER_TIER1:
-            exit_signal = check_kill_switch(
-                raw_df, data, kill_switch_active,
-                entry_date=entry_date,
-                current_date=current_date,
-                profit_level=profit_level
-            )
+        exit_signal = check_hard_stop(entry_price, current_price)
 
         # =====================================================================
-        # PRIORITY 1.5: MAX LOSS HARD STOP (emergency backstop)
+        # PRIORITY 2: TRAILING/STRUCTURE STOP
         # =====================================================================
         if not exit_signal:
-            vol_metrics = data.get('volatility_metrics', {})
-            exit_signal = check_max_loss_stop(entry_price, current_price, vol_metrics)
+            exit_signal = check_trailing_stop(current_stop, current_price, phase)
 
         # =====================================================================
-        # PRIORITY 2: TIER PROFIT TARGETS
+        # PRIORITY 3: DEAD MONEY FILTER
         # =====================================================================
         if not exit_signal:
-            if profit_level == 0:
-                exit_signal = check_tier1_target(pnl_pct)
-            elif profit_level == 1:
-                exit_signal = check_tier2_target(pnl_pct, profit_level)
+            exit_signal = check_dead_money(bars_below_ema50, pnl_pct, R, entry_price, current_price)
 
         # =====================================================================
-        # PRIORITY 3: STOPS (based on current level) - Uses CLOSE not intraday low
+        # PRIORITY 4: PROFIT TAKE (2R)
         # =====================================================================
         if not exit_signal:
-            if profit_level == 0:
-                # Level 0: Initial ATR stop
-                exit_signal = check_initial_stop(entry_price, current_price, atr)
-
-            elif profit_level == 1:
-                # Level 1: Emergency stop
-                exit_signal = check_emergency_stop(tier1_lock_price, current_price, atr)
-
-            elif profit_level == 2:
-                # Level 2: Trailing stop
-                exit_signal = check_trailing_stop(peak_price, current_price, atr)
-
-        # =====================================================================
-        # PRIORITY 4: STAGNANT POSITION
-        # =====================================================================
-        if not exit_signal:
-            entry_date = metadata.get('entry_date')
-            exit_signal = check_stagnant_position(entry_date, current_date, pnl_pct)
-
-        # =====================================================================
-        # NO EXIT: UPDATE PEAK PRICE IF LEVEL 2
-        # =====================================================================
-        if not exit_signal and profit_level == 2:
-            position_monitor.update_peak_price(ticker, current_price)
+            exit_signal = check_profit_take(entry_price, current_price, R, partial_taken)
 
         # =====================================================================
         # PACKAGE EXIT ORDER
@@ -615,7 +498,8 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
             exit_signal['pnl_pct'] = pnl_pct
             exit_signal['entry_signal'] = metadata.get('entry_signal', 'pre_existing')
             exit_signal['entry_score'] = metadata.get('entry_score', 0)
-            exit_signal['current_profit_level'] = profit_level
+            exit_signal['phase'] = phase
+            exit_signal['R'] = R
             exit_orders.append(exit_signal)
 
     return exit_orders
@@ -628,7 +512,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
 def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, profit_tracker,
                         summary=None, recovery_manager=None):
     """
-    Execute exit orders with tier-specific handling
+    Execute exit orders
 
     Args:
         strategy: Lumibot Strategy instance
@@ -650,14 +534,12 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
         current_price = order['current_price']
         entry_signal = order.get('entry_signal', 'pre_existing')
         entry_score = order.get('entry_score', 0)
-        current_profit_level = order.get('current_profit_level', 0)
+        phase = order.get('phase', 'entry')
 
         # Calculate sell quantity
-        if exit_type in ['tier1_exit', 'tier2_exit']:
-            # Tier exits: percentage of CURRENT position
+        if exit_type == 'profit_take':
             sell_quantity = int(broker_quantity * (sell_pct / 100))
         else:
-            # Full exits: 100% of position
             sell_quantity = broker_quantity
 
         if sell_quantity <= 0 or entry_price <= 0:
@@ -669,9 +551,9 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
         pnl_pct = (pnl_per_share / entry_price * 100)
 
         # =====================================================================
-        # TIER 1 EXIT: Partial exit + activate emergency stop
+        # PROFIT TAKE: Partial exit (50%)
         # =====================================================================
-        if exit_type == 'tier1_exit':
+        if exit_type == 'profit_take':
             remaining_shares = broker_quantity - sell_quantity
 
             # Check if remaining position too small
@@ -704,71 +586,12 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
                     stock_position_sizing.update_backtest_cash_for_sell(sell_quantity * current_price)
                 continue
 
-            # Normal Tier 1 exit
+            # Normal profit take
             if summary:
                 summary.add_profit_take(ticker, 1, sell_quantity, total_pnl, pnl_pct)
 
-            # Advance to Level 1 (emergency stop active)
-            position_monitor.advance_to_tier1(ticker, current_price)
-
-            profit_tracker.record_trade(
-                ticker=ticker,
-                quantity_sold=sell_quantity,
-                entry_price=entry_price,
-                exit_price=current_price,
-                exit_date=current_date,
-                entry_signal=entry_signal,
-                exit_signal=order,
-                entry_score=entry_score
-            )
-
-            sell_order = strategy.create_order(ticker, sell_quantity, 'sell')
-            strategy.submit_order(sell_order)
-            if Config.BACKTESTING:
-                stock_position_sizing.update_backtest_cash_for_sell(sell_quantity * current_price)
-
-        # =====================================================================
-        # TIER 2 EXIT: Partial exit + activate trailing stop
-        # =====================================================================
-        elif exit_type == 'tier2_exit':
-            remaining_shares = broker_quantity - sell_quantity
-
-            # Check if remaining position too small
-            remnant_check = check_remnant_position(remaining_shares, current_price)
-            if remnant_check:
-                # Too small - exit everything instead
-                sell_quantity = broker_quantity
-                total_pnl = pnl_per_share * sell_quantity
-                reason = f"{reason}+remnant"
-
-                if summary:
-                    summary.add_exit(ticker, sell_quantity, total_pnl, pnl_pct, reason)
-
-                profit_tracker.record_trade(
-                    ticker=ticker,
-                    quantity_sold=sell_quantity,
-                    entry_price=entry_price,
-                    exit_price=current_price,
-                    exit_date=current_date,
-                    entry_signal=entry_signal,
-                    exit_signal=order,
-                    entry_score=entry_score
-                )
-
-                position_monitor.clean_position_metadata(ticker)
-
-                sell_order = strategy.create_order(ticker, sell_quantity, 'sell')
-                strategy.submit_order(sell_order)
-                if Config.BACKTESTING:
-                    stock_position_sizing.update_backtest_cash_for_sell(sell_quantity * current_price)
-                continue
-
-            # Normal Tier 2 exit
-            if summary:
-                summary.add_profit_take(ticker, 2, sell_quantity, total_pnl, pnl_pct)
-
-            # Advance to Level 2 (trailing stop active)
-            position_monitor.advance_to_tier2(ticker, current_price)
+            # Record partial taken
+            position_monitor.record_partial_taken(ticker)
 
             profit_tracker.record_trade(
                 ticker=ticker,
@@ -807,7 +630,7 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
             position_monitor.clean_position_metadata(ticker)
 
             # Record stop loss to regime detector
-            is_stop_loss = any(kw in reason for kw in ['stop', 'emergency', 'trailing', 'kill_switch', 'max_loss'])
+            is_stop_loss = any(kw in reason for kw in ['stop', 'hard_stop', 'chandelier', 'structure', 'breakeven', 'dead_money'])
             if is_stop_loss and hasattr(strategy, 'regime_detector'):
                 strategy.regime_detector.record_stop_loss(current_date, ticker, pnl_pct)
 

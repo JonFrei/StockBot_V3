@@ -136,7 +136,10 @@ def sync_positions_with_broker(strategy, current_date, position_monitor):
                 entry_date=current_date,
                 entry_signal='adopted_orphan',
                 entry_score=0,
-                entry_price=entry_price if entry_price > 0 else None
+                is_addon=True,
+                entry_price=entry_price if entry_price > 0 else None,
+                raw_df=None,  # Will use fallback 5% stop
+                atr=None
             )
             result['orphaned_adopted'].append(ticker)
 
@@ -982,8 +985,17 @@ class SwingTradeStrategy(Strategy):
                                   'rehabilitation': '🔄', 'frozen': '❄️'}.get(tier, '❓')
 
                     summary.add_entry(ticker, quantity, price, cost, f"{signal_type} {tier_emoji}", signal_score)
-                    self.position_monitor.track_position(ticker, current_date, signal_type, entry_score=signal_score,
-                                                         entry_price=price)
+
+                    ticker_data = all_stock_data.get(ticker, {})
+                    self.position_monitor.track_position(
+                        ticker=ticker,
+                        entry_date=current_date,
+                        entry_signal=signal_type,
+                        entry_score=signal_score,
+                        entry_price=price,
+                        raw_df=ticker_data.get('raw'),
+                        atr=ticker_data.get('indicators', {}).get('atr_14', 0)
+                    )
 
                     order = self.create_order(ticker, quantity, 'buy')
                     self.submit_order(order)
