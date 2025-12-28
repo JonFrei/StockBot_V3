@@ -67,6 +67,7 @@ class RecoveryModeConfig:
     # =========================================================================
     # SHARED EXIT CONDITIONS
     # =========================================================================
+    RECOVERY_GRACE_PERIOD_DAYS = 2  # Days before exit conditions are checked (allow positions to be opened)
     RELOCK_ON_SPY_DOWN_DAYS = 3  # Exit after 3 consecutive down days
     RECOVERY_MODE_MAX_DAYS = 14  # Max days in recovery without graduating
     BREADTH_LOCK_THRESHOLD = 15.0  # Exit if breadth collapses below 15%
@@ -587,14 +588,14 @@ class RecoveryModeManager:
             print(f"   Stop Multiplier: {RecoveryModeConfig.CAUTIOUS_STOP_MULTIPLIER}x (tighter)")
         print(f"{'=' * 60}\n")
 
-    def check_recovery_mode_exit(self, current_date, portfolio_value=None):
+    def check_recovery_mode_exit(self, current_date, portfolio_value=None, deployed_capital=0):
         """
         Check if recovery mode should exit
 
         Exit conditions:
         1. Max duration exceeded (14 days)
         2. 3 consecutive down days
-        3. Breadth collapse
+        3. Breadth collapse (only when positions are open)
         4. Price breaks swing low (structure) or new 10-day low
         5. Portfolio drops 3% from entry (if tracking)
         """
@@ -605,33 +606,40 @@ class RecoveryModeManager:
         if portfolio_value and self.portfolio_value_at_entry is None:
             self.portfolio_value_at_entry = portfolio_value
 
-        # Condition 1: Max duration
+        # Calculate days active
         days_active = (current_date - self.recovery_mode_start_date).days
+
+        # Condition 1: Max duration
         if days_active > RecoveryModeConfig.RECOVERY_MODE_MAX_DAYS:
             return True, f"Max duration ({RecoveryModeConfig.RECOVERY_MODE_MAX_DAYS} days)"
 
-        # Condition 2: Consecutive down days
-        if self.spy_consecutive_down_days >= RecoveryModeConfig.RELOCK_ON_SPY_DOWN_DAYS:
-            return True, f"SPY down {self.spy_consecutive_down_days} consecutive days"
+        # Condition 2: Consecutive down days (only after grace period)
+        if days_active >= RecoveryModeConfig.RECOVERY_GRACE_PERIOD_DAYS:
+            if self.spy_consecutive_down_days >= RecoveryModeConfig.RELOCK_ON_SPY_DOWN_DAYS:
+                return True, f"SPY down {self.spy_consecutive_down_days} consecutive days"
 
         # Condition 3: Breadth collapse
-        if self.internal_breadth.get('pct_above_20ema', 0) < RecoveryModeConfig.BREADTH_LOCK_THRESHOLD:
-            return True, f"Breadth collapsed ({self.internal_breadth.get('pct_above_20ema', 0):.0f}%)"
+        # Skip if: no positions deployed OR within grace period
+        if deployed_capital > 0 and days_active >= RecoveryModeConfig.RECOVERY_GRACE_PERIOD_DAYS:
+            breadth_pct = self.internal_breadth.get('pct_above_20ema', 100)  # Default to 100 if not set
+            if breadth_pct < RecoveryModeConfig.BREADTH_LOCK_THRESHOLD:
+                return True, f"Breadth collapsed ({breadth_pct:.0f}%)"
 
         # Condition 4a: Price breaks swing low (structure-based)
         if self.recovery_entry_method == 'structure' and self.swing_low_price:
             if self.spy_close < self.swing_low_price * 0.99:
                 return True, f"Price broke swing low (${self.spy_close:.2f} < ${self.swing_low_price:.2f})"
 
-        # Condition 4b: New 10-day low (both methods)
-        if len(self.spy_price_history) >= 10:
-            ten_day_lows = [b['low'] for b in self.spy_price_history[-10:]]
-            ten_day_low = min(ten_day_lows)
-            if self.spy_close < ten_day_low * 0.999:
-                return True, f"SPY made new 10-day low (${self.spy_close:.2f})"
+        # Condition 4b: New 10-day low (both methods) - only after grace period
+        if days_active >= RecoveryModeConfig.RECOVERY_GRACE_PERIOD_DAYS:
+            if len(self.spy_price_history) >= 10:
+                ten_day_lows = [b['low'] for b in self.spy_price_history[-10:]]
+                ten_day_low = min(ten_day_lows)
+                if self.spy_close < ten_day_low * 0.999:
+                    return True, f"SPY made new 10-day low (${self.spy_close:.2f})"
 
-        # Condition 5: Portfolio drop from entry
-        if portfolio_value and self.portfolio_value_at_entry:
+        # Condition 5: Portfolio drop from entry (only when positions are open)
+        if deployed_capital > 0 and portfolio_value and self.portfolio_value_at_entry:
             drop_pct = (self.portfolio_value_at_entry - portfolio_value) / self.portfolio_value_at_entry * 100
             if drop_pct >= RecoveryModeConfig.RELOCK_ON_PORTFOLIO_DROP_PCT:
                 return True, f"Portfolio dropped {drop_pct:.1f}% from recovery entry"
@@ -685,7 +693,7 @@ class RecoveryModeManager:
     # MAIN EVALUATION
     # =========================================================================
 
-    def evaluate(self, current_date, spy_below_200, lockout_type=None, lockout_active=False):
+    def evaluate(self, current_date, spy_below_200, lockout_type=None, lockout_active=False, deployed_capital=0):
         """
         Main evaluation - called each trading day
 
@@ -694,6 +702,7 @@ class RecoveryModeManager:
             spy_below_200: Whether SPY is below 200 SMA
             lockout_type: Type of lockout ('crisis', 'trend_block', etc.)
             lockout_active: Whether any lockout is currently active
+            deployed_capital: Current deployed capital (for breadth check)
 
         Returns:
             dict with recovery mode settings
@@ -721,9 +730,12 @@ class RecoveryModeManager:
         lock_reason = lockout_type or ('SPY below 200 SMA' if spy_below_200 else 'Lockout active')
         self.start_lock(current_date, lock_reason)
 
-        # Check for recovery mode exit
+        # Check for recovery mode exit (pass deployed_capital for breadth check)
         if self.recovery_mode_active:
-            should_exit, exit_reason = self.check_recovery_mode_exit(current_date)
+            should_exit, exit_reason = self.check_recovery_mode_exit(
+                current_date,
+                deployed_capital=deployed_capital
+            )
             if should_exit:
                 self.exit_recovery_mode(exit_reason)
 

@@ -515,12 +515,22 @@ class MarketRegimeDetector:
             lockout_active = initial_result['action'] in ['crisis_lockout', 'trend_block', 'crisis_exit']
             spy_below_200 = self._is_spy_below_200()
 
+            # Calculate deployed capital for breadth check
+            deployed_capital = 0
+            try:
+                cash = strategy.get_cash()
+                if portfolio_value and cash:
+                    deployed_capital = portfolio_value - cash
+            except Exception:
+                pass
+
             # Evaluate recovery mode with full context
             recovery_result = recovery_manager.evaluate(
                 current_date=current_date,
                 spy_below_200=spy_below_200,
                 lockout_type=lockout_type,
-                lockout_active=lockout_active
+                lockout_active=lockout_active,
+                deployed_capital=deployed_capital
             )
 
             # Update portfolio value in recovery manager for exit tracking
