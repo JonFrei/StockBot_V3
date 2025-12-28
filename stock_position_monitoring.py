@@ -1,25 +1,29 @@
 """
-Stock Position Monitoring - Structure-Anchored Trailing Exit System (V3)
+Stock Position Monitoring - Structure-Anchored Trailing Exit System (V4)
 
-CORE PHILOSOPHY: One primary mechanism, structure-based stops, let position sizing handle risk.
+CORE PHILOSOPHY: Return closer to V1's original parameters. V2/V3 over-tightened.
 
 EXIT SYSTEM:
-1. Initial Stop: Tighter of structure-based OR ATR-based (max 5% from entry)
+1. Initial Stop: Tighter of structure-based OR ATR-based (max 7% from entry)
 2. Trailing Stop: Chandelier Exit (highest close - 2.5×ATR after profit lock)
 3. Profit Take: Sell 50% at +2R
 4. Dead Money Filter: 5 consecutive closes below EMA50
-5. Hard Stop: 7% max loss (circuit breaker)
+5. Hard Stop: 8% max loss (circuit breaker)
 
 PHASES:
-- Entry: Stop = tighter of (lowest low - 0.5%) or (entry - 2.5×ATR)
-- Breakeven Lock: When price reaches +1.5×ATR, stop moves to entry
-- Profit Lock: When price reaches +2.5×ATR, stop moves to entry + 1×ATR
+- Entry: Stop = tighter of (lowest low - 0.5%) or (entry - 3.0×ATR)
+- Breakeven Lock: When price reaches +2.0×ATR, stop moves to entry
+- Profit Lock: When price reaches +3.0×ATR, stop moves to entry + 1.25×ATR
 - Trailing: After profit lock, Chandelier trailing (peak - 2.5×ATR)
 
-V3 CHANGES (from V2):
-- Profit take: 1.5R → 2R (let winners run)
-- Trailing mult: 2.0 → 2.5×ATR (looser trailing)
-- Hard stop: 6% → 7% (small cushion)
+V4 CHANGES (from V3) - Loosening toward V1:
+- Max initial stop: 5% → 7%
+- ATR stop multiplier: 2.5 → 3.0×ATR
+- Breakeven lock: 1.5 → 2.0×ATR
+- Profit lock: 2.5 → 3.0×ATR
+- Profit lock stop: 1.0 → 1.25×ATR
+- Hard stop: 7% → 8%
+- Regime tightening: 25% → 20%
 """
 
 import stock_indicators
@@ -29,16 +33,21 @@ import account_broker_data
 
 
 class ExitConfig:
-    """Structure-Anchored Trailing Exit Configuration - V3"""
+    """Structure-Anchored Trailing Exit Configuration - V4
 
-    # Structure-based initial stop
+    V4 Philosophy: Return closer to V1 original parameters.
+    V2/V3 over-tightened the initial stops. This version loosens them
+    while keeping the bug fix and ATR fallback safety net.
+    """
+
+    # Structure-based initial stop - V4: LOOSENED
     STRUCTURE_LOOKBACK_BARS = 10  # Bars for lowest low
     STRUCTURE_BUFFER_PCT = 0.5  # Buffer below lowest low (%)
-    MAX_INITIAL_STOP_PCT = 5.0  # Maximum initial stop distance (%)
+    MAX_INITIAL_STOP_PCT = 7.0  # V4: 7% (was 5% in V2/V3, 8% in V1)
 
-    # ATR-based stop fallback (when structure is too wide)
-    ATR_STOP_MULTIPLIER = 2.5  # Entry - (2.5 × ATR) as fallback
-    USE_TIGHTER_OF_STRUCTURE_OR_ATR = True  # Use whichever is tighter
+    # ATR-based stop fallback - V4: LOOSENED
+    ATR_STOP_MULTIPLIER = 3.0  # V4: 3.0×ATR (was 2.5 in V2/V3)
+    USE_TIGHTER_OF_STRUCTURE_OR_ATR = True  # Keep safety net
 
     # ATR settings
     ATR_PERIOD = 10  # Faster ATR for adaptation
@@ -46,16 +55,16 @@ class ExitConfig:
     # Chandelier trailing
     CHANDELIER_MULTIPLIER = 3.0  # Peak - (3.0 × ATR)
 
-    # Phase transitions (in ATR multiples from entry)
-    BREAKEVEN_LOCK_ATR = 1.5  # Move stop to entry at +1.5×ATR (keep tight)
-    PROFIT_LOCK_ATR = 2.5  # Move stop to entry + 1×ATR at +2.5×ATR (keep tight)
-    PROFIT_LOCK_STOP_ATR = 1.0  # Stop level after profit lock (keep tight)
+    # Phase transitions - V4: LOOSENED back toward V1
+    BREAKEVEN_LOCK_ATR = 2.0  # V4: 2.0 (was 1.5 in V2/V3, 2.0 in V1)
+    PROFIT_LOCK_ATR = 3.0  # V4: 3.0 (was 2.5 in V2/V3, 3.5 in V1)
+    PROFIT_LOCK_STOP_ATR = 1.25  # V4: 1.25 (was 1.0 in V2/V3, 1.5 in V1)
 
-    # Trailing multiplier after profit lock - V3: LOOSENED
-    TRAILING_ATR_MULT = 2.5  # Peak - (2.5 × current ATR) - was 2.0
+    # Trailing multiplier after profit lock
+    TRAILING_ATR_MULT = 2.5  # Keep at 2.5 (working well in V3)
 
-    # Profit taking - V3: LOOSENED
-    PROFIT_TAKE_R_MULTIPLE = 2.0  # Take profit at 2R - was 1.5
+    # Profit taking
+    PROFIT_TAKE_R_MULTIPLE = 2.0  # Keep at 2R (working well)
     PROFIT_TAKE_PCT = 50.0  # Sell 50% at profit target
 
     # Dead money filter
@@ -63,11 +72,11 @@ class ExitConfig:
     DEAD_MONEY_BARS_BELOW = 5  # Consecutive bars below EMA to trigger
     DEAD_MONEY_MAX_LOSS_R = 1.0  # Only trigger if loss < 1R
 
-    # Hard stop (circuit breaker) - V3: SLIGHTLY LOOSENED
-    HARD_STOP_PCT = 7.0  # Maximum loss percentage - was 6.0
+    # Hard stop (circuit breaker) - V4: LOOSENED
+    HARD_STOP_PCT = 8.0  # V4: 8% (was 6% V2, 7% V3, 10% V1)
 
     # Regime adjustment
-    REGIME_TIGHTENING_PCT = 25.0  # Reduce multipliers by 25% when SPY < 50 SMA
+    REGIME_TIGHTENING_PCT = 20.0  # V4: Back to 20% (was 25% in V2/V3)
 
     # Remnant cleanup
     MIN_REMNANT_SHARES = 5
