@@ -29,7 +29,11 @@ class ExitConfig:
     # Structure-based initial stop
     STRUCTURE_LOOKBACK_BARS = 10  # Bars for lowest low
     STRUCTURE_BUFFER_PCT = 0.5  # Buffer below lowest low (%)
-    MAX_INITIAL_STOP_PCT = 8.0  # Maximum initial stop distance (%)
+    MAX_INITIAL_STOP_PCT = 5.0  # Maximum initial stop distance (%) - TIGHTENED from 8%
+
+    # ATR-based stop fallback (when structure is too wide)
+    ATR_STOP_MULTIPLIER = 2.5  # Entry - (2.5 × ATR) as fallback
+    USE_TIGHTER_OF_STRUCTURE_OR_ATR = True  # Use whichever is tighter
 
     # ATR settings
     ATR_PERIOD = 10  # Faster ATR for adaptation
@@ -38,15 +42,15 @@ class ExitConfig:
     CHANDELIER_MULTIPLIER = 3.0  # Peak - (3.0 × ATR)
 
     # Phase transitions (in ATR multiples from entry)
-    BREAKEVEN_LOCK_ATR = 2.0  # Move stop to entry at +2×ATR
-    PROFIT_LOCK_ATR = 3.5  # Move stop to entry + 1.5×ATR at +3.5×ATR
-    PROFIT_LOCK_STOP_ATR = 1.5  # Stop level after profit lock
+    BREAKEVEN_LOCK_ATR = 1.5  # Move stop to entry at +1.5×ATR - TIGHTENED from 2.0
+    PROFIT_LOCK_ATR = 2.5  # Move stop to entry + 1×ATR at +2.5×ATR - TIGHTENED from 3.5
+    PROFIT_LOCK_STOP_ATR = 1.0  # Stop level after profit lock - TIGHTENED from 1.5
 
     # Trailing multiplier after profit lock
-    TRAILING_ATR_MULT = 2.5  # Peak - (2.5 × current ATR)
+    TRAILING_ATR_MULT = 2.0  # Peak - (2.0 × current ATR) - TIGHTENED from 2.5
 
     # Profit taking
-    PROFIT_TAKE_R_MULTIPLE = 2.0  # Take profit at 2R
+    PROFIT_TAKE_R_MULTIPLE = 1.5  # Take profit at 1.5R - TIGHTENED from 2.0
     PROFIT_TAKE_PCT = 50.0  # Sell 50% at profit target
 
     # Dead money filter
@@ -54,11 +58,11 @@ class ExitConfig:
     DEAD_MONEY_BARS_BELOW = 5  # Consecutive bars below EMA to trigger
     DEAD_MONEY_MAX_LOSS_R = 1.0  # Only trigger if loss < 1R
 
-    # Hard stop (circuit breaker)
-    HARD_STOP_PCT = 10.0  # Maximum loss percentage
+    # Hard stop (circuit breaker) - TIGHTENED
+    HARD_STOP_PCT = 6.0  # Maximum loss percentage - TIGHTENED from 10%
 
     # Regime adjustment
-    REGIME_TIGHTENING_PCT = 20.0  # Reduce multipliers by 20% when SPY < 50 SMA
+    REGIME_TIGHTENING_PCT = 25.0  # Reduce multipliers by 25% when SPY < 50 SMA
 
     # Remnant cleanup
     MIN_REMNANT_SHARES = 5
@@ -90,8 +94,8 @@ class PositionMonitor:
         current_price = entry_price if entry_price and entry_price > 0 else self._get_current_price(ticker)
 
         if ticker not in self.positions_metadata:
-            # Calculate structure-based initial stop
-            initial_stop = self._calculate_structure_stop(current_price, raw_df)
+            # Calculate structure-based initial stop (uses tighter of structure or ATR)
+            initial_stop = self._calculate_structure_stop(current_price, raw_df, atr)
 
             # Calculate R (initial risk)
             R = current_price - initial_stop if initial_stop > 0 else current_price * 0.05
@@ -119,29 +123,55 @@ class PositionMonitor:
             self.positions_metadata[ticker]['add_count'] = self.positions_metadata[ticker].get('add_count', 0) + 1
             # Entry price will be updated by broker's avg_entry_price
 
-    def _calculate_structure_stop(self, entry_price, raw_df):
+    def _calculate_structure_stop(self, entry_price, raw_df, atr=None):
         """
         Calculate structure-based initial stop
 
         Stop = Lowest low of past 10 bars minus 0.5% buffer
-        Capped at 8% from entry
+        Also calculates ATR-based stop and uses the TIGHTER of the two
+        Capped at MAX_INITIAL_STOP_PCT from entry
         """
-        if raw_df is None or len(raw_df) < ExitConfig.STRUCTURE_LOOKBACK_BARS:
-            # Fallback: 5% stop
+        if entry_price <= 0:
             return entry_price * 0.95
 
-        # Get lowest low of lookback period
-        lookback_lows = raw_df['low'].tail(ExitConfig.STRUCTURE_LOOKBACK_BARS)
-        lowest_low = lookback_lows.min()
+        # Calculate structure-based stop
+        structure_stop = None
+        if raw_df is not None and len(raw_df) >= ExitConfig.STRUCTURE_LOOKBACK_BARS:
+            lookback_lows = raw_df['low'].tail(ExitConfig.STRUCTURE_LOOKBACK_BARS)
+            lowest_low = lookback_lows.min()
+            structure_stop = lowest_low * (1 - ExitConfig.STRUCTURE_BUFFER_PCT / 100)
 
-        # Apply buffer
-        structure_stop = lowest_low * (1 - ExitConfig.STRUCTURE_BUFFER_PCT / 100)
+        # Calculate ATR-based stop
+        atr_stop = None
+        if atr and atr > 0:
+            atr_stop = entry_price - (ExitConfig.ATR_STOP_MULTIPLIER * atr)
+        elif raw_df is not None and len(raw_df) >= 14:
+            # Calculate ATR if not provided
+            calculated_atr = stock_indicators.get_atr(raw_df, period=ExitConfig.ATR_PERIOD)
+            if calculated_atr and calculated_atr > 0:
+                atr_stop = entry_price - (ExitConfig.ATR_STOP_MULTIPLIER * calculated_atr)
+
+        # Determine which stop to use
+        if ExitConfig.USE_TIGHTER_OF_STRUCTURE_OR_ATR and structure_stop and atr_stop:
+            # Use the HIGHER (tighter) of the two stops
+            initial_stop = max(structure_stop, atr_stop)
+        elif structure_stop:
+            initial_stop = structure_stop
+        elif atr_stop:
+            initial_stop = atr_stop
+        else:
+            # Fallback: 4% stop
+            initial_stop = entry_price * 0.96
 
         # Cap at maximum stop distance
         min_stop = entry_price * (1 - ExitConfig.MAX_INITIAL_STOP_PCT / 100)
-        structure_stop = max(structure_stop, min_stop)
+        initial_stop = max(initial_stop, min_stop)
 
-        return structure_stop
+        # Ensure stop is below entry
+        if initial_stop >= entry_price:
+            initial_stop = entry_price * 0.96
+
+        return initial_stop
 
     def update_position_state(self, ticker, current_close, current_atr, ema50, regime_bearish=False):
         """
@@ -430,9 +460,17 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
             # Orphan position - skip (will be adopted by sync)
             continue
 
-        # Get entry price (prefer broker avg, fallback to metadata)
+        # Get entry price - CRITICAL: Handle backtesting vs live trading differently
         broker_entry_price = account_broker_data.get_broker_entry_price(position, strategy, ticker)
-        entry_price = broker_entry_price if broker_entry_price > 0 else metadata.get('entry_price', 0)
+
+        if Config.BACKTESTING:
+            # In backtesting, use the stored price (matches split-adjusted data feed)
+            # Lumibot's position.avg_entry_price can be unreliable in backtests
+            stored_entry = metadata.get('entry_price', 0)
+            entry_price = stored_entry if stored_entry and stored_entry > 0 else broker_entry_price
+        else:
+            # In live trading, broker handles splits and add-ons correctly
+            entry_price = broker_entry_price if broker_entry_price > 0 else metadata.get('entry_price', 0)
 
         if entry_price <= 0:
             continue
@@ -630,7 +668,8 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
             position_monitor.clean_position_metadata(ticker)
 
             # Record stop loss to regime detector
-            is_stop_loss = any(kw in reason for kw in ['stop', 'hard_stop', 'chandelier', 'structure', 'breakeven', 'dead_money'])
+            is_stop_loss = any(
+                kw in reason for kw in ['stop', 'hard_stop', 'chandelier', 'structure', 'breakeven', 'dead_money'])
             if is_stop_loss and hasattr(strategy, 'regime_detector'):
                 strategy.regime_detector.record_stop_loss(current_date, ticker, pnl_pct)
 
