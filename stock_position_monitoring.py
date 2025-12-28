@@ -7,7 +7,7 @@ activate kill switch earlier to catch failures before they become large losses.
 EXIT SYSTEM:
 1. Initial Stop: Tighter of structure-based OR ATR-based (max 5% from entry)
 2. Trailing Stop: Chandelier Exit (highest close - 2.5×ATR after profit lock)
-3. Kill Switch: Momentum fade detection after 3 days held (with strength override)
+3. Kill Switch: Momentum fade detection after 3 days held (with restrictive override)
 4. Profit Take: Sell 50% at +2R
 5. Dead Money Filter: 5 consecutive closes below EMA50
 6. Hard Stop: 6% max loss (circuit breaker)
@@ -28,7 +28,11 @@ KILL SWITCH (Momentum Fade Detection):
 - Price Confirmation required (ANY triggers):
   * Close below EMA(8) or EMA(10)
   * Break previous 2-bar swing low
-- Strength Override: If trend strength signals >= threshold, suppress kill switch
+- Strength Override (RESTRICTIVE - all required):
+  * Position must be at least +1R profitable
+  * MUST be above EMA50
+  * MUST have bullish EMA stack OR outperforming SPY by 2%+
+  * Score >= 3/6 on strength signals
 - EXIT = Momentum Fade + Price Confirmation - Strength Override
 
 V5 CHANGES (from V4):
@@ -37,7 +41,10 @@ V5 CHANGES (from V4):
 - Max initial stop: 7% → 5% (must be inside hard stop)
 
 V5.1 CHANGES:
-- Added kill switch strength override to prevent exiting strong positions
+- Added kill switch strength override with RESTRICTIVE requirements:
+  * Profit requirement: +1R minimum (positions below this always trigger kill switch)
+  * Mandatory signals: above EMA50 + (bullish stack OR RS > 2%)
+  * Tightened criteria: ADX > 30, RS lookback 20 bars, RS outperformance 2%+
 """
 
 import stock_indicators
@@ -102,11 +109,17 @@ class ExitConfig:
     KILL_SWITCH_ENABLED = True
     KILL_SWITCH_MIN_HOLD_DAYS = 3  # V5: 3 days (was 5 in V4) - catch failures earlier
 
-    # Kill Switch Strength Override - V5.1
+    # Kill Switch Strength Override - V5.1 (RESTRICTIVE)
     KILL_SWITCH_STRENGTH_OVERRIDE_ENABLED = True
     KILL_SWITCH_STRENGTH_THRESHOLD = 3  # Minimum score to override kill switch (0-6)
-    KILL_SWITCH_RS_LOOKBACK = 10  # Bars for relative strength calculation
-    KILL_SWITCH_ADX_THRESHOLD = 25  # ADX above this = strong trend
+
+    # Tightened criteria
+    KILL_SWITCH_ADX_THRESHOLD = 30  # Was 25 - require stronger trend
+    KILL_SWITCH_RS_LOOKBACK = 20  # Was 10 - longer-term outperformance
+    KILL_SWITCH_RS_MIN_OUTPERFORM = 2.0  # Must beat SPY by 2%+, not just any positive
+
+    # Profit requirement
+    KILL_SWITCH_OVERRIDE_MIN_PROFIT_R = 1.0  # Must be at least +1R to override
 
 
 class PositionMonitor:
@@ -404,43 +417,79 @@ def check_profit_take(entry_price, current_price, R, partial_taken):
     return None
 
 
-def check_strength_override(raw_df, indicators, spy_df=None):
+def check_strength_override(raw_df, indicators, spy_df=None, entry_price=0, current_price=0, R=0):
     """
     Check if position has sufficient trend strength to override kill switch.
 
-    Scores multiple strength signals. If score meets threshold, kill switch
-    is suppressed even if momentum fade + price confirmation triggered.
+    RESTRICTIVE VERSION - Requires ALL of:
+    1. Position must be at least +1R profitable
+    2. Mandatory signals (above EMA50 + bullish stack OR outperforming SPY by 2%+)
+    3. Minimum score threshold (3/6)
 
     Signals checked (each worth 1 point):
     1. Price above EMA21
-    2. Price above EMA50
+    2. Price above EMA50 (MANDATORY)
     3. Bullish EMA stack (EMA8 > EMA21 > EMA50)
-    4. ADX > 25 (strong trend)
-    5. Outperforming SPY over lookback period
+    4. ADX > 30 (strong trend)
+    5. Outperforming SPY by 2%+ over 20 bars
     6. Higher lows intact (price structure bullish)
 
     Args:
         raw_df: DataFrame with OHLC data for the stock
         indicators: Dict with current indicators (from all_stock_data)
         spy_df: DataFrame with SPY OHLC data (optional, for RS calc)
+        entry_price: Position entry price (for profit check)
+        current_price: Current price (for profit check)
+        R: Position R value (for profit check)
 
     Returns:
         dict: {
             'override': bool,
             'score': int (0-6),
             'signals': list of triggered signal names,
-            'details': dict with signal details
+            'details': dict with signal details,
+            'rejection_reason': str or None
         }
     """
+    result = {
+        'override': False,
+        'score': 0,
+        'signals': [],
+        'details': {},
+        'rejection_reason': None
+    }
+
     if not ExitConfig.KILL_SWITCH_STRENGTH_OVERRIDE_ENABLED:
-        return {'override': False, 'score': 0, 'signals': [], 'details': {}}
+        result['rejection_reason'] = 'override_disabled'
+        return result
 
     if raw_df is None or len(raw_df) < 50:
-        return {'override': False, 'score': 0, 'signals': [], 'details': {}}
+        result['rejection_reason'] = 'insufficient_data'
+        return result
+
+    # =========================================================================
+    # Profit Requirement Check (FIRST - fail fast)
+    # Must be at least +1R to even consider override
+    # =========================================================================
+    if entry_price > 0 and current_price > 0 and R > 0:
+        gain = current_price - entry_price
+        gain_R = gain / R
+
+        if gain_R < ExitConfig.KILL_SWITCH_OVERRIDE_MIN_PROFIT_R:
+            result[
+                'rejection_reason'] = f'insufficient_profit ({gain_R:.1f}R < {ExitConfig.KILL_SWITCH_OVERRIDE_MIN_PROFIT_R}R)'
+            result['details']['gain_R'] = gain_R
+            return result
+
+        result['details']['gain_R'] = gain_R
+    else:
+        # If we can't calculate profit, don't allow override
+        result['rejection_reason'] = 'cannot_calculate_profit'
+        return result
 
     score = 0
     signals = []
-    details = {}
+    details = result['details']
 
     current_close = indicators.get('close', 0)
     ema8 = indicators.get('ema8', 0)
@@ -451,87 +500,121 @@ def check_strength_override(raw_df, indicators, spy_df=None):
     # -------------------------------------------------------------------------
     # Signal 1: Price above EMA21
     # -------------------------------------------------------------------------
-    if current_close > 0 and ema21 > 0 and current_close > ema21:
+    above_ema21 = current_close > 0 and ema21 > 0 and current_close > ema21
+    if above_ema21:
         score += 1
         signals.append('above_ema21')
-    details['above_ema21'] = current_close > ema21 if (current_close > 0 and ema21 > 0) else False
+    details['above_ema21'] = above_ema21
 
     # -------------------------------------------------------------------------
-    # Signal 2: Price above EMA50
+    # Signal 2: Price above EMA50 (MANDATORY)
     # -------------------------------------------------------------------------
-    if current_close > 0 and ema50 > 0 and current_close > ema50:
+    above_ema50 = current_close > 0 and ema50 > 0 and current_close > ema50
+    if above_ema50:
         score += 1
         signals.append('above_ema50')
-    details['above_ema50'] = current_close > ema50 if (current_close > 0 and ema50 > 0) else False
+    details['above_ema50'] = above_ema50
 
     # -------------------------------------------------------------------------
     # Signal 3: Bullish EMA stack (EMA8 > EMA21 > EMA50)
     # -------------------------------------------------------------------------
+    bullish_stack = False
     if ema8 > 0 and ema21 > 0 and ema50 > 0:
         if ema8 > ema21 > ema50:
+            bullish_stack = True
             score += 1
             signals.append('bullish_ema_stack')
-            details['bullish_ema_stack'] = True
-        else:
-            details['bullish_ema_stack'] = False
-    else:
-        details['bullish_ema_stack'] = False
+    details['bullish_ema_stack'] = bullish_stack
 
     # -------------------------------------------------------------------------
-    # Signal 4: ADX > threshold (strong trend)
+    # Signal 4: ADX > 30 (strong trend) - TIGHTENED from 25
     # -------------------------------------------------------------------------
-    if adx > ExitConfig.KILL_SWITCH_ADX_THRESHOLD:
+    strong_adx = adx > ExitConfig.KILL_SWITCH_ADX_THRESHOLD
+    if strong_adx:
         score += 1
         signals.append('strong_trend_adx')
     details['adx'] = adx
-    details['strong_trend_adx'] = adx > ExitConfig.KILL_SWITCH_ADX_THRESHOLD
+    details['strong_trend_adx'] = strong_adx
 
     # -------------------------------------------------------------------------
-    # Signal 5: Outperforming SPY
+    # Signal 5: Outperforming SPY by 2%+ over 20 bars - TIGHTENED
     # -------------------------------------------------------------------------
+    outperforming_spy = False
     if spy_df is not None and len(spy_df) >= ExitConfig.KILL_SWITCH_RS_LOOKBACK + 1:
         rs_result = stock_indicators.get_relative_strength(
             raw_df, spy_df,
             lookback=ExitConfig.KILL_SWITCH_RS_LOOKBACK
         )
-        if rs_result.get('outperforming', False):
+        # Must outperform by minimum threshold, not just any positive amount
+        outperformance = rs_result.get('outperformance', 0)
+        if outperformance >= ExitConfig.KILL_SWITCH_RS_MIN_OUTPERFORM:
+            outperforming_spy = True
             score += 1
             signals.append('outperforming_spy')
         details['relative_strength'] = rs_result
+        details['rs_outperformance'] = outperformance
     else:
         details['relative_strength'] = {'outperforming': False, 'outperformance': 0}
+        details['rs_outperformance'] = 0
 
     # -------------------------------------------------------------------------
     # Signal 6: Higher lows intact
     # -------------------------------------------------------------------------
+    higher_lows_ok = False
     swing_result = stock_indicators.find_swing_lows(raw_df, lookback=10, swing_size=2)
     if swing_result.get('higher_lows', False) and swing_result.get('current_above_last_swing', False):
+        higher_lows_ok = True
         score += 1
         signals.append('higher_lows_intact')
     details['swing_analysis'] = swing_result
+    details['higher_lows_intact'] = higher_lows_ok
 
-    # -------------------------------------------------------------------------
-    # Determine override
-    # -------------------------------------------------------------------------
+    # =========================================================================
+    # Mandatory Signal Check
+    # MUST be above EMA50 AND (bullish stack OR outperforming SPY by 2%+)
+    # =========================================================================
+    mandatory_met = above_ema50 and (bullish_stack or outperforming_spy)
+    details['mandatory_signals_met'] = mandatory_met
+
+    if not mandatory_met:
+        result['score'] = score
+        result['signals'] = signals
+        result['details'] = details
+
+        missing = []
+        if not above_ema50:
+            missing.append('above_ema50')
+        if not bullish_stack and not outperforming_spy:
+            missing.append('bullish_stack OR outperforming_spy')
+
+        result['rejection_reason'] = f'mandatory_signals_missing ({", ".join(missing)})'
+        return result
+
+    # =========================================================================
+    # Final Score Check
+    # =========================================================================
     override = score >= ExitConfig.KILL_SWITCH_STRENGTH_THRESHOLD
 
-    return {
-        'override': override,
-        'score': score,
-        'signals': signals,
-        'details': details
-    }
+    result['override'] = override
+    result['score'] = score
+    result['signals'] = signals
+    result['details'] = details
+
+    if not override:
+        result['rejection_reason'] = f'score_below_threshold ({score}/{ExitConfig.KILL_SWITCH_STRENGTH_THRESHOLD})'
+
+    return result
 
 
-def check_kill_switch(raw_df, indicators, entry_date, current_date, spy_df=None):
+def check_kill_switch(raw_df, indicators, entry_date, current_date, spy_df=None, entry_price=0, current_price=0, R=0):
     """
     Check Kill Switch: Momentum Fade + Price Confirmation - Strength Override
 
     Only active after minimum holding period (default 3 days).
     Detects momentum fade via multiple signals, then confirms with price action.
 
-    NEW: If strength signals are strong enough, kill switch is overridden
-    even when fade + confirmation triggers.
+    Strength Override: If position is +1R profitable AND has strong trend signals,
+    kill switch is overridden.
 
     Args:
         raw_df: DataFrame with OHLC data
@@ -539,6 +622,9 @@ def check_kill_switch(raw_df, indicators, entry_date, current_date, spy_df=None)
         entry_date: Position entry date
         current_date: Current date
         spy_df: DataFrame with SPY data (optional, for relative strength)
+        entry_price: Position entry price (for profit check)
+        current_price: Current price (for profit check)
+        R: Position R value (for profit check)
 
     Returns:
         dict or None: Kill switch exit signal
@@ -553,7 +639,8 @@ def check_kill_switch(raw_df, indicators, entry_date, current_date, spy_df=None)
     try:
         # Normalize dates for comparison
         entry = entry_date.replace(tzinfo=None) if hasattr(entry_date, 'tzinfo') and entry_date.tzinfo else entry_date
-        current = current_date.replace(tzinfo=None) if hasattr(current_date, 'tzinfo') and current_date.tzinfo else current_date
+        current = current_date.replace(tzinfo=None) if hasattr(current_date,
+                                                               'tzinfo') and current_date.tzinfo else current_date
         days_held = (current - entry).days
 
         if days_held < ExitConfig.KILL_SWITCH_MIN_HOLD_DAYS:
@@ -577,14 +664,22 @@ def check_kill_switch(raw_df, indicators, entry_date, current_date, spy_df=None)
         return None
 
     # =========================================================================
-    # NEW: Check strength override BEFORE triggering exit
+    # Check strength override BEFORE triggering exit
+    # Requires: +1R profit, above EMA50, (bullish stack OR RS > 2%), score >= 3
     # =========================================================================
-    strength_result = check_strength_override(raw_df, indicators, spy_df)
+    strength_result = check_strength_override(
+        raw_df, indicators, spy_df,
+        entry_price=entry_price,
+        current_price=current_price,
+        R=R
+    )
 
     if strength_result.get('override', False):
         # Strength signals are strong enough - suppress kill switch
         strength_signals = ', '.join(strength_result.get('signals', []))
-        print(f"[KILL SWITCH OVERRIDE] Score {strength_result['score']}/{ExitConfig.KILL_SWITCH_STRENGTH_THRESHOLD} - Signals: {strength_signals}")
+        gain_R = strength_result.get('details', {}).get('gain_R', 0)
+        print(
+            f"[KILL SWITCH OVERRIDE] +{gain_R:.1f}R | Score {strength_result['score']}/{ExitConfig.KILL_SWITCH_STRENGTH_THRESHOLD} | Signals: {strength_signals}")
         return None
 
     # =========================================================================
@@ -592,6 +687,10 @@ def check_kill_switch(raw_df, indicators, entry_date, current_date, spy_df=None)
     # =========================================================================
     fade_signals = ', '.join(fade_result.get('signals', []))
     confirm_reason = confirm_result.get('reason', 'price_break')
+
+    # Log why override was rejected (for debugging)
+    rejection = strength_result.get('rejection_reason', 'unknown')
+    print(f"[KILL SWITCH] Override rejected: {rejection}")
 
     return {
         'type': 'full_exit',
@@ -755,10 +854,16 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
 
         # =====================================================================
         # PRIORITY 3: KILL SWITCH (momentum fade after 3 days)
-        # Now with strength override - pass spy_df for relative strength
+        # With strength override - requires +1R profit + strong trend signals
         # =====================================================================
         if not exit_signal:
-            exit_signal = check_kill_switch(raw_df, data, entry_date, current_date, spy_df=spy_df)
+            exit_signal = check_kill_switch(
+                raw_df, data, entry_date, current_date,
+                spy_df=spy_df,
+                entry_price=entry_price,
+                current_price=current_price,
+                R=R
+            )
 
         # =====================================================================
         # PRIORITY 4: DEAD MONEY FILTER

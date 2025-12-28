@@ -53,8 +53,9 @@ def get_tracked_cash():
                 + _backtest_cash_tracker['sell_adjustments'])
     return None
 
-
+'''
 def debug_cash_state(label="", strategy=None):
+    
     if Config.BACKTESTING:
         print(f"[CASH DEBUG] {label}")
         print(f"   initialized: {_backtest_cash_tracker['initialized']}")
@@ -71,7 +72,7 @@ def debug_cash_state(label="", strategy=None):
                 discrepancy = lumibot_cash - tracked
                 if abs(discrepancy) > 1:
                     print(f"   ⚠️ DISCREPANCY: ${discrepancy:,.2f}")
-
+'''
 
 def validate_end_of_day_cash(strategy):
     """Call at end of iteration to detect cash tracking drift"""
@@ -95,14 +96,14 @@ def validate_end_of_day_cash(strategy):
 
 class SimplifiedSizingConfig:
     """Position sizing configuration"""
-    BASE_POSITION_PCT = 12.0
-    MAX_POSITION_PCT = 15.0
+    BASE_POSITION_PCT = 15.0
+    MAX_POSITION_PCT = 18.0
     MAX_TOTAL_POSITIONS = 30
     MIN_CASH_RESERVE_PCT = 10.0
 
     MAX_CASH_DEPLOYMENT_PCT = 85.0
     MAX_DAILY_DEPLOYMENT_PCT = 70.0
-    MAX_SINGLE_POSITION_PCT = 18.0
+    MAX_SINGLE_POSITION_PCT = 20.0
 
 
 # =============================================================================
@@ -188,6 +189,7 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
     daily_limit = deployable_cash * (SimplifiedSizingConfig.MAX_DAILY_DEPLOYMENT_PCT / 100)
     max_deployment = min(cash_limit, daily_limit)
 
+    '''
     if Config.BACKTESTING:
         print(f"[SIZE DEBUG] === BUDGET CONSTRAINTS ===")
         print(f"[SIZE DEBUG] total_cash: ${total_cash:,.2f}")
@@ -197,7 +199,7 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
             f"[SIZE DEBUG] daily_limit ({SimplifiedSizingConfig.MAX_DAILY_DEPLOYMENT_PCT}% of deployable): ${daily_limit:,.2f}")
         print(f"[SIZE DEBUG] max_deployment: ${max_deployment:,.2f}")
         print(f"[SIZE DEBUG] opportunities count: {len(opportunities)}")
-
+    '''
     if max_deployment <= 0:
         return []
 
@@ -210,13 +212,14 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
 
     # Use the SMALLER of the two
     position_dollars = min(max_position_from_cash_pct, max_position_from_deployment)
-
+    '''
     if Config.BACKTESTING:
         print(
             f"[SIZE DEBUG] max_position_from_cash_pct ({SimplifiedSizingConfig.BASE_POSITION_PCT}% of cash): ${max_position_from_cash_pct:,.2f}")
         print(
             f"[SIZE DEBUG] max_position_from_deployment (${max_deployment:,.0f} / {len(opportunities)}): ${max_position_from_deployment:,.2f}")
         print(f"[SIZE DEBUG] position_dollars (using min): ${position_dollars:,.2f}")
+    '''
 
     allocations = []
 
@@ -271,17 +274,21 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
     # === STEP 3 & 4: Check total and apply scale factor if needed ===
     total_cost = sum(a['cost'] for a in allocations)
 
+    '''
     if Config.BACKTESTING:
         print(f"[SIZE DEBUG] === BUDGET CHECK ===")
         print(f"[SIZE DEBUG] total_cost (before scaling): ${total_cost:,.2f}")
         print(f"[SIZE DEBUG] max_deployment: ${max_deployment:,.2f}")
+    '''
 
     if total_cost > max_deployment:
         # Calculate scale factor
         scale_factor = max_deployment / total_cost
 
+        '''
         if Config.BACKTESTING:
             print(f"[SIZE DEBUG] ⚠️ OVER BUDGET - applying scale factor: {scale_factor:.4f}")
+        '''
 
         # Apply scale factor to all positions
         scaled_allocations = []
@@ -290,8 +297,10 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
 
             # Skip if scaled to 0 shares
             if scaled_quantity <= 0:
+                '''
                 if Config.BACKTESTING:
                     print(f"[SIZE DEBUG]    {alloc['ticker']}: scaled to 0 shares, skipping")
+                '''
                 continue
 
             scaled_cost = scaled_quantity * alloc['price']
@@ -305,28 +314,29 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
                 'rotation_mult': alloc['rotation_mult']
             })
 
+            '''
             if Config.BACKTESTING:
                 print(
                     f"[SIZE DEBUG]    {alloc['ticker']}: {alloc['quantity']} → {scaled_quantity} shares (${alloc['cost']:,.2f} → ${scaled_cost:,.2f})")
-
+            '''
         allocations = scaled_allocations
 
         # Recalculate total after scaling
         total_cost = sum(a['cost'] for a in allocations)
-
+        '''
         if Config.BACKTESTING:
             print(f"[SIZE DEBUG] total_cost (after scaling): ${total_cost:,.2f}")
-
+        '''
     if not allocations:
         return []
-
+    '''
     if Config.BACKTESTING:
         print(f"[SIZE DEBUG] === FINAL CHECK ===")
         print(f"[SIZE DEBUG] total_cost: ${total_cost:,.2f}")
         print(f"[SIZE DEBUG] max_deployment: ${max_deployment:,.2f}")
         print(f"[SIZE DEBUG] within budget: {total_cost <= max_deployment}")
         print(f"[SIZE DEBUG] positions count: {len(allocations)}")
-
+    '''
     # Sort by score (highest first) for execution priority
     allocations.sort(key=lambda x: x['signal_score'], reverse=True)
 
@@ -346,32 +356,41 @@ def create_portfolio_context(strategy):
 
     # DEBUG: Log state before getting cash
     if Config.BACKTESTING:
+        '''
         debug_cash_state("create_portfolio_context - START")
+        '''
         lumibot_cash = strategy.get_cash()
+        '''
         print(f"[CASH DEBUG] Lumibot get_cash(): ${lumibot_cash:,.2f}")
+        '''
 
     # Use tracked cash for backtesting, Alpaca for live
     if Config.BACKTESTING and _backtest_cash_tracker['initialized']:
         cash_balance = get_tracked_cash()
+        '''
         print(f"[CASH DEBUG] Using tracked cash: ${cash_balance:,.2f}")
+        '''
 
     else:
         cash_balance = account_broker_data.get_cash_balance(strategy)
         if Config.BACKTESTING:
+            '''
             print(f"[CASH DEBUG] Using broker cash (tracker not init): ${cash_balance:,.2f}")
-
+            '''
     deployed_capital = portfolio_value - cash_balance
     # MIN_CASH_RESERVE now based on cash_balance, not portfolio_value
     min_reserve = cash_balance * (SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100)
     deployable_cash = max(0, cash_balance - min_reserve)
 
     # DEBUG: Log all calculated values
+    '''
     if Config.BACKTESTING:
         print(f"[CASH DEBUG] portfolio_value: ${portfolio_value:,.2f}")
         print(f"[CASH DEBUG] cash_balance: ${cash_balance:,.2f}")
         print(f"[CASH DEBUG] deployed_capital: ${deployed_capital:,.2f}")
         print(f"[CASH DEBUG] min_reserve ({SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT}% of cash): ${min_reserve:,.2f}")
         print(f"[CASH DEBUG] deployable_cash: ${deployable_cash:,.2f}")
+    '''
 
     return {
         'total_cash': cash_balance,

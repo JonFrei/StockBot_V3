@@ -1037,8 +1037,10 @@ class SwingTradeStrategy(Strategy):
 
                     if Config.BACKTESTING:
                         stock_position_sizing.update_backtest_cash_for_buy(cost)
+                        '''
                         print(f"[BUY DEBUG] Bought {ticker}: ${cost:,.2f} | Daily spent: ${daily_spent:,.2f}")
                         stock_position_sizing.debug_cash_state(f"After buying {ticker}")
+                        '''
 
                     # Record stock as traded today (live trading only)
                     if not Config.BACKTESTING:
