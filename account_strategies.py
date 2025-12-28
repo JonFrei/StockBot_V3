@@ -334,6 +334,20 @@ def enter_paused_state(strategy, failure_tracker, execution_tracker=None):
             last_log_time = time.time()
 
 
+class EntryFilterConfig:
+    """
+       Strength-Based Entry Filter Configuration (V5)
+
+       Philosophy: Don't block "risky" setups - require STRONG setups.
+       Strong momentum justifies wider stops and higher volatility.
+       """
+
+    # Minimum trend strength (ADX)
+    MIN_ADX = 20  # Must have a real trend
+
+    # Minimum volume confirmation
+    MIN_VOLUME_RATIO = 1.0  # At least average volume
+
 class SwingTradeStrategy(Strategy):
 
     def initialize(self, send_emails=True):
@@ -773,6 +787,24 @@ class SwingTradeStrategy(Strategy):
                             except:
                                 pass
 
+                    # =============================================================
+                    # UNIVERSAL ENTRY FILTERS (V5)
+                    # Catches risk factors that individual signals miss
+                    # =============================================================
+                    '''
+                    # Filter 1: Minimum Trend Strength (ADX)
+                    adx = data.get('adx', 0)
+                    if adx < EntryFilterConfig.MIN_ADX:
+                        summary.add_skip(ticker, f"Weak trend: ADX {adx:.1f} < {EntryFilterConfig.MIN_ADX}")
+                        continue
+
+                    # Filter 2: Minimum Volume Confirmation
+                    volume_ratio = data.get('volume_ratio', 0)
+                    if volume_ratio < EntryFilterConfig.MIN_VOLUME_RATIO:
+                        summary.add_skip(ticker,
+                                         f"Low volume: {volume_ratio:.2f}x < {EntryFilterConfig.MIN_VOLUME_RATIO}x")
+                        continue
+                    '''
                     signal_result = self.signal_processor.process_ticker(ticker, data, None)
 
                     if signal_result['action'] == 'buy':

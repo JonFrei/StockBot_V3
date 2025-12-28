@@ -5,7 +5,7 @@ CORE PHILOSOPHY: Kill switch proved highly effective. Tighten hard stop and
 activate kill switch earlier to catch failures before they become large losses.
 
 EXIT SYSTEM:
-1. Initial Stop: Tighter of structure-based OR ATR-based (max 7% from entry)
+1. Initial Stop: Tighter of structure-based OR ATR-based (max 5% from entry)
 2. Trailing Stop: Chandelier Exit (highest close - 2.5×ATR after profit lock)
 3. Kill Switch: Momentum fade detection after 3 days held
 4. Profit Take: Sell 50% at +2R
@@ -19,7 +19,7 @@ PHASES:
 - Trailing: After profit lock, Chandelier trailing (peak - 2.5×ATR)
 
 KILL SWITCH (Momentum Fade Detection):
-- Activates after: 3 days holding period (reduced from 5)
+- Activates after: 3 days holding period
 - Momentum Fade signals (ANY triggers):
   * MACD histogram divergence (price higher high, histogram lower high)
   * RSI(5) break (higher high then breaks swing low)
@@ -33,6 +33,7 @@ KILL SWITCH (Momentum Fade Detection):
 V5 CHANGES (from V4):
 - Hard stop: 8% → 6% (cap catastrophic losses)
 - Kill switch activation: 5 days → 3 days (catch failures earlier)
+- Max initial stop: 7% → 5% (must be inside hard stop)
 """
 
 import stock_indicators
@@ -45,14 +46,16 @@ class ExitConfig:
     """Structure-Anchored Trailing Exit Configuration - V5
 
     V5 Philosophy: Kill switch proved highly effective (+$87K in V4).
-    Tighten hard stop and activate kill switch earlier to reduce losses
-    from positions that fail before momentum detection kicks in.
+    Tighten hard stop and activate kill switch earlier to reduce losses.
+
+    Key insight: Hard stop triggers when initial stop is outside hard stop.
+    Solution: Ensure initial stop (5%) is always inside hard stop (6%).
     """
 
-    # Structure-based initial stop - V4: LOOSENED
+    # Structure-based initial stop - V5: TIGHTENED to stay inside hard stop
     STRUCTURE_LOOKBACK_BARS = 10  # Bars for lowest low
     STRUCTURE_BUFFER_PCT = 0.5  # Buffer below lowest low (%)
-    MAX_INITIAL_STOP_PCT = 7.0  # V4: 7% (was 5% in V2/V3, 8% in V1)
+    MAX_INITIAL_STOP_PCT = 5.0  # V5: 5% (was 7% in V4) - must be inside hard stop
 
     # ATR-based stop fallback - V4: LOOSENED
     ATR_STOP_MULTIPLIER = 3.0  # V4: 3.0×ATR (was 2.5 in V2/V3)
@@ -66,8 +69,8 @@ class ExitConfig:
 
     # Phase transitions - V4: LOOSENED back toward V1
     BREAKEVEN_LOCK_ATR = 2.0  # V4: 2.0 (was 1.5 in V2/V3, 2.0 in V1)
-    PROFIT_LOCK_ATR = 3.0  # V4: 3.0 (was 2.5 in V2/V3, 3.5 in V1)
-    PROFIT_LOCK_STOP_ATR = 1.25  # V4: 1.25 (was 1.0 in V2/V3, 1.5 in V1)
+    PROFIT_LOCK_ATR = 3.5  # V4: 3.0 (was 2.5 in V2/V3, 3.5 in V1)
+    PROFIT_LOCK_STOP_ATR = 1.5  # V4: 1.25 (was 1.0 in V2/V3, 1.5 in V1)
 
     # Trailing multiplier after profit lock
     TRAILING_ATR_MULT = 2.5  # Keep at 2.5 (working well in V3)
@@ -288,7 +291,7 @@ class PositionMonitor:
 
 def check_hard_stop(entry_price, current_price):
     """
-    Check hard stop (10% max loss circuit breaker)
+    Check hard stop (6% max loss circuit breaker)
 
     This is the absolute backstop - no exceptions.
     """
