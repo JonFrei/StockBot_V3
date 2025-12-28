@@ -399,6 +399,29 @@ class MarketRegimeDetector:
         pass
 
     # =========================================================================
+    # STATISTICS / COMPATIBILITY
+    # =========================================================================
+
+    def get_statistics(self):
+        """Get current state for logging and persistence"""
+        return {
+            'spy_close': self.spy_close,
+            'spy_20_ema': self.spy_20_ema,
+            'spy_50_sma': self.spy_50_sma,
+            'spy_200_sma': self.spy_200_sma,
+            'spy_below_200': self._is_spy_below_200(),
+            'crisis_active': self.crisis_active,
+            'crisis_trigger_date': self.crisis_trigger_date,
+            'crisis_trigger_reason': self.crisis_trigger_reason,
+            'lockout_end_date': self.lockout_end_date,
+            'portfolio_drawdown_active': self.portfolio_drawdown_active,
+            'portfolio_drawdown_trigger_date': self.portfolio_drawdown_trigger_date,
+            'portfolio_drawdown_lockout_end': self.portfolio_drawdown_lockout_end,
+            'portfolio_rolling_peak': self._get_rolling_peak(),
+            'twenty_day_low': self._get_20_day_low(),
+        }
+
+    # =========================================================================
     # HIGH-LEVEL REGIME EVALUATION
     # =========================================================================
 

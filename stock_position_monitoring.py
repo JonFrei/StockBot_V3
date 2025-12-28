@@ -23,10 +23,10 @@ class ExitConfig:
     KILL_SWITCH_MIN_HOLD_DAYS = 10  # Kill switch activates after this many days
 
     # Maximum Loss Hard Stop (by volatility) - Emergency backstop
-    MAX_LOSS_LOW_VOL = 15.0  # Low volatility stocks
-    MAX_LOSS_MEDIUM_VOL = 18.0  # Medium volatility
-    MAX_LOSS_HIGH_VOL = 22.0  # High volatility
-    MAX_LOSS_VERY_HIGH_VOL = 25.0  # Very high volatility
+    MAX_LOSS_LOW_VOL = 15.0  # Low volatility stocks # 15
+    MAX_LOSS_MEDIUM_VOL = 18.0  # Medium volatility # 18
+    MAX_LOSS_HIGH_VOL = 22.0  # High volatility # 22
+    MAX_LOSS_VERY_HIGH_VOL = 25.0  # Very high volatility # 25
 
     # Stagnant position check
     STAGNANT_MAX_DAYS = 60 # Changed from 90
