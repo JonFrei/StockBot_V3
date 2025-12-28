@@ -805,3 +805,155 @@ def detect_price_confirmation(df, indicators):
         pass
 
     return {'confirmed': False, 'reason': None}
+
+
+# =============================================================================
+# KILL SWITCH STRENGTH OVERRIDE - INDICATOR HELPERS
+# Add these functions to stock_indicators.py
+# =============================================================================
+
+def get_ema_slope(df, period=21, lookback=3):
+    """
+    Calculate EMA slope direction over recent bars.
+
+    Args:
+        df: DataFrame with 'close' column
+        period: EMA period (default 21)
+        lookback: Bars to measure slope over (default 3)
+
+    Returns:
+        dict: {
+            'slope': float (positive = upward),
+            'slope_pct': float (% change per bar),
+            'trending_up': bool
+        }
+    """
+    if len(df) < period + lookback:
+        return {'slope': 0, 'slope_pct': 0, 'trending_up': False}
+
+    ema = df['close'].ewm(span=period, adjust=False).mean()
+
+    current_ema = ema.iloc[-1]
+    past_ema = ema.iloc[-lookback - 1]
+
+    slope = current_ema - past_ema
+    slope_pct = (slope / past_ema * 100) if past_ema > 0 else 0
+
+    return {
+        'slope': slope,
+        'slope_pct': slope_pct,
+        'trending_up': slope > 0
+    }
+
+
+def get_relative_strength(stock_df, spy_df, lookback=10):
+    """
+    Calculate relative strength vs SPY over lookback period.
+
+    Args:
+        stock_df: DataFrame with stock 'close' prices
+        spy_df: DataFrame with SPY 'close' prices
+        lookback: Bars to measure performance (default 10)
+
+    Returns:
+        dict: {
+            'stock_return': float (%),
+            'spy_return': float (%),
+            'outperformance': float (stock - spy),
+            'outperforming': bool
+        }
+    """
+    if len(stock_df) < lookback + 1 or len(spy_df) < lookback + 1:
+        return {
+            'stock_return': 0,
+            'spy_return': 0,
+            'outperformance': 0,
+            'outperforming': False
+        }
+
+    # Stock return
+    stock_current = stock_df['close'].iloc[-1]
+    stock_past = stock_df['close'].iloc[-lookback - 1]
+    stock_return = ((stock_current - stock_past) / stock_past * 100) if stock_past > 0 else 0
+
+    # SPY return
+    spy_current = spy_df['close'].iloc[-1]
+    spy_past = spy_df['close'].iloc[-lookback - 1]
+    spy_return = ((spy_current - spy_past) / spy_past * 100) if spy_past > 0 else 0
+
+    outperformance = stock_return - spy_return
+
+    return {
+        'stock_return': round(stock_return, 2),
+        'spy_return': round(spy_return, 2),
+        'outperformance': round(outperformance, 2),
+        'outperforming': outperformance > 0
+    }
+
+
+def find_swing_lows(df, lookback=10, swing_size=2):
+    """
+    Find recent swing lows to check for higher-lows pattern.
+
+    A swing low is a bar with lows higher than surrounding bars.
+
+    Args:
+        df: DataFrame with 'low' column
+        lookback: Bars to search for swings (default 10)
+        swing_size: Bars on each side to confirm swing (default 2)
+
+    Returns:
+        dict: {
+            'swing_lows': list of (index, price) tuples,
+            'higher_lows': bool (last 2 swings ascending),
+            'current_above_last_swing': bool
+        }
+    """
+    if len(df) < lookback + swing_size:
+        return {
+            'swing_lows': [],
+            'higher_lows': False,
+            'current_above_last_swing': True
+        }
+
+    lows = df['low'].iloc[-lookback:]
+    swing_lows = []
+
+    for i in range(swing_size, len(lows) - swing_size):
+        is_swing = True
+        current_low = lows.iloc[i]
+
+        # Check bars before
+        for j in range(1, swing_size + 1):
+            if lows.iloc[i - j] <= current_low:
+                is_swing = False
+                break
+
+        # Check bars after
+        if is_swing:
+            for j in range(1, swing_size + 1):
+                if lows.iloc[i + j] <= current_low:
+                    is_swing = False
+                    break
+
+        if is_swing:
+            swing_lows.append((i, current_low))
+
+    # Determine higher lows
+    higher_lows = False
+    if len(swing_lows) >= 2:
+        last_two = swing_lows[-2:]
+        higher_lows = last_two[1][1] > last_two[0][1]
+
+    # Current price above last swing low
+    current_above = True
+    if swing_lows:
+        last_swing_low = swing_lows[-1][1]
+        current_close = df['close'].iloc[-1]
+        current_above = current_close > last_swing_low
+
+    return {
+        'swing_lows': swing_lows,
+        'higher_lows': higher_lows,
+        'current_above_last_swing': current_above
+    }
