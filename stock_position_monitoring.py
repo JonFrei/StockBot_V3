@@ -6,7 +6,7 @@ class ExitConfig:
     """Tiered exit configuration"""
 
     # Initial stop loss (Level 0)
-    INITIAL_STOP_ATR_MULT = 2.75
+    INITIAL_STOP_ATR_MULT = 2.75 # switched to 2.5 from 2.75 12/27/25
 
     # Tier 1: First profit target
     TIER1_TARGET_PCT = 12.0  # +12% from entry
@@ -20,7 +20,7 @@ class ExitConfig:
 
     # Kill Switch (active after Tier 1 OR min hold days)
     KILL_SWITCH_ACTIVE_AFTER_TIER1 = True
-    KILL_SWITCH_MIN_HOLD_DAYS = 5  # Kill switch activates after this many days
+    KILL_SWITCH_MIN_HOLD_DAYS = 10  # Kill switch activates after this many days
 
     # Maximum Loss Hard Stop (by volatility) - Emergency backstop
     MAX_LOSS_LOW_VOL = 15.0  # Low volatility stocks

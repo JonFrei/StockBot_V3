@@ -7,6 +7,7 @@ Changes:
 - Applies rotation multiplier from stock rotation system
 - MAX_SINGLE_POSITION_PCT prevents over-concentration
 - get_current_position_exposure() for add-on sizing
+- ALL SIZING NOW REFERENCES CASH, NOT PORTFOLIO VALUE
 """
 import account_broker_data
 from config import Config
@@ -96,10 +97,11 @@ class SimplifiedSizingConfig:
     """Position sizing configuration"""
     BASE_POSITION_PCT = 15.0
     MAX_POSITION_PCT = 18.0
-    MAX_TOTAL_POSITIONS = 25
+    MAX_TOTAL_POSITIONS = 30
     MIN_CASH_RESERVE_PCT = 10.0
+
     MAX_CASH_DEPLOYMENT_PCT = 85.0
-    MAX_DAILY_DEPLOYMENT_PCT = 60.0
+    MAX_DAILY_DEPLOYMENT_PCT = 70.0
     MAX_SINGLE_POSITION_PCT = 20.0
 
 
@@ -107,12 +109,20 @@ class SimplifiedSizingConfig:
 # POSITION EXPOSURE
 # =============================================================================
 
-def get_current_position_exposure(strategy, ticker):
+def get_current_position_exposure(strategy, ticker, portfolio_context):
     """
-    Get current exposure to a ticker as percentage of portfolio
+    Get current exposure to a ticker as percentage of total cash.
+
+    Args:
+        strategy: Trading strategy instance
+        ticker: Stock symbol
+        portfolio_context: Dict containing 'total_cash' and other context
+
+    Returns:
+        dict with has_position, quantity, market_value, exposure_pct
     """
     positions = strategy.get_positions()
-    portfolio_value = strategy.portfolio_value
+    cash_basis = portfolio_context['total_cash']
 
     for position in positions:
         if position.symbol == ticker:
@@ -120,7 +130,7 @@ def get_current_position_exposure(strategy, ticker):
                 quantity = int(position.quantity)
                 current_price = strategy.get_last_price(ticker)
                 market_value = quantity * current_price
-                exposure_pct = (market_value / portfolio_value * 100) if portfolio_value > 0 else 0
+                exposure_pct = (market_value / cash_basis * 100) if cash_basis > 0 else 0
 
                 return {
                     'has_position': True,
@@ -153,7 +163,7 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
 
     Logic:
     1. Calculate max we can deploy
-    2. Size each position (capped at BASE_POSITION_PCT of portfolio)
+    2. Size each position (capped at BASE_POSITION_PCT of cash)
     3. Sum all positions and check against available cash
     4. If sum exceeds budget, apply scale factor to reduce all positions proportionally
     5. Return sorted by score (highest first) for execution priority
@@ -166,11 +176,12 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
 
     portfolio_value = portfolio_context['portfolio_value']
     deployable_cash = portfolio_context['deployable_cash']
+    total_cash = portfolio_context['total_cash']
 
     # Safety cap
     actual_cash = portfolio_context['total_cash']
     if deployable_cash > actual_cash:
-        deployable_cash = max(0, actual_cash - portfolio_value * (SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100))
+        deployable_cash = max(0, actual_cash - total_cash * (SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100))
 
     # Calculate limits
     cash_limit = deployable_cash * (SimplifiedSizingConfig.MAX_CASH_DEPLOYMENT_PCT / 100)
@@ -179,28 +190,32 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
 
     if Config.BACKTESTING:
         print(f"[SIZE DEBUG] === BUDGET CONSTRAINTS ===")
+        print(f"[SIZE DEBUG] total_cash: ${total_cash:,.2f}")
         print(f"[SIZE DEBUG] deployable_cash: ${deployable_cash:,.2f}")
         print(f"[SIZE DEBUG] cash_limit ({SimplifiedSizingConfig.MAX_CASH_DEPLOYMENT_PCT}%): ${cash_limit:,.2f}")
-        print(f"[SIZE DEBUG] daily_limit ({SimplifiedSizingConfig.MAX_DAILY_DEPLOYMENT_PCT}% of ${portfolio_value:,.0f}): ${daily_limit:,.2f}")
+        print(
+            f"[SIZE DEBUG] daily_limit ({SimplifiedSizingConfig.MAX_DAILY_DEPLOYMENT_PCT}% of deployable): ${daily_limit:,.2f}")
         print(f"[SIZE DEBUG] max_deployment: ${max_deployment:,.2f}")
         print(f"[SIZE DEBUG] opportunities count: {len(opportunities)}")
 
     if max_deployment <= 0:
         return []
 
-    # === Size based on available cash, not portfolio ===
-    # Max per position based on portfolio (original logic)
-    max_position_from_portfolio = portfolio_value * (SimplifiedSizingConfig.BASE_POSITION_PCT / 100) * regime_multiplier
+    # === Size based on available cash ===
+    # Max per position based on cash (changed from portfolio_value)
+    max_position_from_cash_pct = total_cash * (SimplifiedSizingConfig.BASE_POSITION_PCT / 100) * regime_multiplier
 
     # Max per position based on dividing available deployment evenly
-    max_position_from_cash = max_deployment / len(opportunities)
+    max_position_from_deployment = max_deployment / len(opportunities)
 
     # Use the SMALLER of the two
-    position_dollars = min(max_position_from_portfolio, max_position_from_cash)
+    position_dollars = min(max_position_from_cash_pct, max_position_from_deployment)
 
     if Config.BACKTESTING:
-        print(f"[SIZE DEBUG] max_position_from_portfolio (12%): ${max_position_from_portfolio:,.2f}")
-        print(f"[SIZE DEBUG] max_position_from_cash (${max_deployment:,.0f} / {len(opportunities)}): ${max_position_from_cash:,.2f}")
+        print(
+            f"[SIZE DEBUG] max_position_from_cash_pct ({SimplifiedSizingConfig.BASE_POSITION_PCT}% of cash): ${max_position_from_cash_pct:,.2f}")
+        print(
+            f"[SIZE DEBUG] max_position_from_deployment (${max_deployment:,.0f} / {len(opportunities)}): ${max_position_from_deployment:,.2f}")
         print(f"[SIZE DEBUG] position_dollars (using min): ${position_dollars:,.2f}")
 
     allocations = []
@@ -215,7 +230,7 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
             this_position_dollars = position_dollars
 
             if strategy is not None:
-                current_exposure = get_current_position_exposure(strategy, ticker)
+                current_exposure = get_current_position_exposure(strategy, ticker, portfolio_context)
 
                 if current_exposure['has_position']:
                     if current_exposure['exposure_pct'] >= SimplifiedSizingConfig.MAX_SINGLE_POSITION_PCT:
@@ -223,10 +238,10 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
                             print(f"   ⚠️ {ticker}: At max concentration ({current_exposure['exposure_pct']:.1f}%)")
                         continue
 
-                    # For add-ons, limit to remaining room
+                    # For add-ons, limit to remaining room (based on total_cash)
                     remaining_room_pct = SimplifiedSizingConfig.MAX_SINGLE_POSITION_PCT - current_exposure[
                         'exposure_pct']
-                    remaining_room_dollars = portfolio_value * (remaining_room_pct / 100)
+                    remaining_room_dollars = total_cash * (remaining_room_pct / 100)
                     this_position_dollars = min(position_dollars, remaining_room_dollars)
 
             quantity = int(this_position_dollars / current_price)
@@ -291,7 +306,8 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
             })
 
             if Config.BACKTESTING:
-                print(f"[SIZE DEBUG]    {alloc['ticker']}: {alloc['quantity']} → {scaled_quantity} shares (${alloc['cost']:,.2f} → ${scaled_cost:,.2f})")
+                print(
+                    f"[SIZE DEBUG]    {alloc['ticker']}: {alloc['quantity']} → {scaled_quantity} shares (${alloc['cost']:,.2f} → ${scaled_cost:,.2f})")
 
         allocations = scaled_allocations
 
@@ -345,7 +361,8 @@ def create_portfolio_context(strategy):
             print(f"[CASH DEBUG] Using broker cash (tracker not init): ${cash_balance:,.2f}")
 
     deployed_capital = portfolio_value - cash_balance
-    min_reserve = portfolio_value * (SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100)
+    # MIN_CASH_RESERVE now based on cash_balance, not portfolio_value
+    min_reserve = cash_balance * (SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100)
     deployable_cash = max(0, cash_balance - min_reserve)
 
     # DEBUG: Log all calculated values
@@ -353,7 +370,7 @@ def create_portfolio_context(strategy):
         print(f"[CASH DEBUG] portfolio_value: ${portfolio_value:,.2f}")
         print(f"[CASH DEBUG] cash_balance: ${cash_balance:,.2f}")
         print(f"[CASH DEBUG] deployed_capital: ${deployed_capital:,.2f}")
-        print(f"[CASH DEBUG] min_reserve (5%): ${min_reserve:,.2f}")
+        print(f"[CASH DEBUG] min_reserve ({SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT}% of cash): ${min_reserve:,.2f}")
         print(f"[CASH DEBUG] deployable_cash: ${deployable_cash:,.2f}")
 
     return {
