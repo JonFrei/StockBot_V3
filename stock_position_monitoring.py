@@ -6,15 +6,28 @@ CORE PHILOSOPHY: Return closer to V1's original parameters. V2/V3 over-tightened
 EXIT SYSTEM:
 1. Initial Stop: Tighter of structure-based OR ATR-based (max 7% from entry)
 2. Trailing Stop: Chandelier Exit (highest close - 2.5×ATR after profit lock)
-3. Profit Take: Sell 50% at +2R
-4. Dead Money Filter: 5 consecutive closes below EMA50
-5. Hard Stop: 8% max loss (circuit breaker)
+3. Kill Switch: Momentum fade detection after 5 days held
+4. Profit Take: Sell 50% at +2R
+5. Dead Money Filter: 5 consecutive closes below EMA50
+6. Hard Stop: 8% max loss (circuit breaker)
 
 PHASES:
 - Entry: Stop = tighter of (lowest low - 0.5%) or (entry - 3.0×ATR)
 - Breakeven Lock: When price reaches +2.0×ATR, stop moves to entry
 - Profit Lock: When price reaches +3.0×ATR, stop moves to entry + 1.25×ATR
 - Trailing: After profit lock, Chandelier trailing (peak - 2.5×ATR)
+
+KILL SWITCH (Momentum Fade Detection):
+- Activates after: 5 days holding period (configurable)
+- Momentum Fade signals (ANY triggers):
+  * MACD histogram divergence (price higher high, histogram lower high)
+  * RSI(5) break (higher high then breaks swing low)
+  * EMA slope flattening (EMA5/EMA8 slopes drop 50%+)
+  * ATR+Volume contraction (both declining 3+ bars)
+- Price Confirmation required (ANY triggers):
+  * Close below EMA(8) or EMA(10)
+  * Break previous 2-bar swing low
+- EXIT = Momentum Fade + Price Confirmation
 
 V4 CHANGES (from V3) - Loosening toward V1:
 - Max initial stop: 5% → 7%
@@ -24,6 +37,7 @@ V4 CHANGES (from V3) - Loosening toward V1:
 - Profit lock stop: 1.0 → 1.25×ATR
 - Hard stop: 7% → 8%
 - Regime tightening: 25% → 20%
+- Kill switch: Re-added (momentum-based, 5-day activation)
 """
 
 import stock_indicators
@@ -81,6 +95,10 @@ class ExitConfig:
     # Remnant cleanup
     MIN_REMNANT_SHARES = 5
     MIN_REMNANT_VALUE = 300.0
+
+    # Kill Switch - Momentum Fade Detection
+    KILL_SWITCH_ENABLED = True
+    KILL_SWITCH_MIN_HOLD_DAYS = 5  # Only activate after this many days held
 
 
 class PositionMonitor:
@@ -378,6 +396,67 @@ def check_profit_take(entry_price, current_price, R, partial_taken):
     return None
 
 
+def check_kill_switch(raw_df, indicators, entry_date, current_date):
+    """
+    Check Kill Switch: Momentum Fade + Price Confirmation
+
+    Only active after minimum holding period (default 5 days).
+    Detects momentum fade via multiple signals, then confirms with price action.
+
+    Args:
+        raw_df: DataFrame with OHLC data
+        indicators: Dict with current indicators
+        entry_date: Position entry date
+        current_date: Current date
+
+    Returns:
+        dict or None: Kill switch exit signal
+    """
+    if not ExitConfig.KILL_SWITCH_ENABLED:
+        return None
+
+    # Check if minimum hold period met
+    if entry_date is None or current_date is None:
+        return None
+
+    try:
+        # Normalize dates for comparison
+        entry = entry_date.replace(tzinfo=None) if hasattr(entry_date, 'tzinfo') and entry_date.tzinfo else entry_date
+        current = current_date.replace(tzinfo=None) if hasattr(current_date,
+                                                               'tzinfo') and current_date.tzinfo else current_date
+        days_held = (current - entry).days
+
+        if days_held < ExitConfig.KILL_SWITCH_MIN_HOLD_DAYS:
+            return None
+    except:
+        return None
+
+    if raw_df is None or len(raw_df) < 10:
+        return None
+
+    # Check momentum fade (from stock_indicators)
+    fade_result = stock_indicators.detect_momentum_fade(raw_df, indicators)
+
+    if not fade_result.get('fade_detected', False):
+        return None
+
+    # Check price confirmation (from stock_indicators)
+    confirm_result = stock_indicators.detect_price_confirmation(raw_df, indicators)
+
+    if confirm_result.get('confirmed', False):
+        fade_signals = ', '.join(fade_result.get('signals', []))
+        confirm_reason = confirm_result.get('reason', 'price_break')
+
+        return {
+            'type': 'full_exit',
+            'reason': 'kill_switch',
+            'sell_pct': 100.0,
+            'message': f'KILL SWITCH: Fade [{fade_signals}] + Confirm [{confirm_reason}]'
+        }
+
+    return None
+
+
 def check_remnant_position(remaining_shares, current_price):
     """
     Check for remnant position cleanup
@@ -412,11 +491,12 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
     Check all positions for exit signals
 
     Priority order:
-    1. Hard Stop (10% max loss)
+    1. Hard Stop (8% max loss)
     2. Trailing/Structure Stop
-    3. Dead Money Filter
-    4. Profit Take (2R)
-    5. Remnant Cleanup (handled in execution)
+    3. Kill Switch (momentum fade after 5 days)
+    4. Dead Money Filter
+    5. Profit Take (2R)
+    6. Remnant Cleanup (handled in execution)
 
     Args:
         strategy: Lumibot Strategy instance
@@ -511,11 +591,12 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         phase = metadata.get('phase', 'entry')
         partial_taken = metadata.get('partial_taken', False)
         bars_below_ema50 = metadata.get('bars_below_ema50', 0)
+        entry_date = metadata.get('entry_date')
 
         exit_signal = None
 
         # =====================================================================
-        # PRIORITY 1: HARD STOP (10% max loss)
+        # PRIORITY 1: HARD STOP (8% max loss)
         # =====================================================================
         exit_signal = check_hard_stop(entry_price, current_price)
 
@@ -526,13 +607,19 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
             exit_signal = check_trailing_stop(current_stop, current_price, phase)
 
         # =====================================================================
-        # PRIORITY 3: DEAD MONEY FILTER
+        # PRIORITY 3: KILL SWITCH (momentum fade detection)
+        # =====================================================================
+        if not exit_signal:
+            exit_signal = check_kill_switch(raw_df, data, entry_date, current_date)
+
+        # =====================================================================
+        # PRIORITY 4: DEAD MONEY FILTER
         # =====================================================================
         if not exit_signal:
             exit_signal = check_dead_money(bars_below_ema50, pnl_pct, R, entry_price, current_price)
 
         # =====================================================================
-        # PRIORITY 4: PROFIT TAKE (2R)
+        # PRIORITY 5: PROFIT TAKE (2R)
         # =====================================================================
         if not exit_signal:
             exit_signal = check_profit_take(entry_price, current_price, R, partial_taken)
@@ -682,8 +769,9 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
             position_monitor.clean_position_metadata(ticker)
 
             # Record stop loss to regime detector
-            is_stop_loss = any(
-                kw in reason for kw in ['stop', 'hard_stop', 'chandelier', 'structure', 'breakeven', 'dead_money'])
+            is_stop_loss = any(kw in reason for kw in
+                               ['stop', 'hard_stop', 'chandelier', 'structure', 'breakeven', 'dead_money',
+                                'kill_switch'])
             if is_stop_loss and hasattr(strategy, 'regime_detector'):
                 strategy.regime_detector.record_stop_loss(current_date, ticker, pnl_pct)
 
