@@ -1,15 +1,16 @@
 """
-Stock Position Monitoring - Structure-Anchored Trailing Exit System (V4)
+Stock Position Monitoring - Structure-Anchored Trailing Exit System (V5)
 
-CORE PHILOSOPHY: Return closer to V1's original parameters. V2/V3 over-tightened.
+CORE PHILOSOPHY: Kill switch proved highly effective. Tighten hard stop and
+activate kill switch earlier to catch failures before they become large losses.
 
 EXIT SYSTEM:
 1. Initial Stop: Tighter of structure-based OR ATR-based (max 7% from entry)
 2. Trailing Stop: Chandelier Exit (highest close - 2.5×ATR after profit lock)
-3. Kill Switch: Momentum fade detection after 5 days held
+3. Kill Switch: Momentum fade detection after 3 days held
 4. Profit Take: Sell 50% at +2R
 5. Dead Money Filter: 5 consecutive closes below EMA50
-6. Hard Stop: 8% max loss (circuit breaker)
+6. Hard Stop: 6% max loss (circuit breaker)
 
 PHASES:
 - Entry: Stop = tighter of (lowest low - 0.5%) or (entry - 3.0×ATR)
@@ -18,7 +19,7 @@ PHASES:
 - Trailing: After profit lock, Chandelier trailing (peak - 2.5×ATR)
 
 KILL SWITCH (Momentum Fade Detection):
-- Activates after: 5 days holding period (configurable)
+- Activates after: 3 days holding period (reduced from 5)
 - Momentum Fade signals (ANY triggers):
   * MACD histogram divergence (price higher high, histogram lower high)
   * RSI(5) break (higher high then breaks swing low)
@@ -29,15 +30,9 @@ KILL SWITCH (Momentum Fade Detection):
   * Break previous 2-bar swing low
 - EXIT = Momentum Fade + Price Confirmation
 
-V4 CHANGES (from V3) - Loosening toward V1:
-- Max initial stop: 5% → 7%
-- ATR stop multiplier: 2.5 → 3.0×ATR
-- Breakeven lock: 1.5 → 2.0×ATR
-- Profit lock: 2.5 → 3.0×ATR
-- Profit lock stop: 1.0 → 1.25×ATR
-- Hard stop: 7% → 8%
-- Regime tightening: 25% → 20%
-- Kill switch: Re-added (momentum-based, 5-day activation)
+V5 CHANGES (from V4):
+- Hard stop: 8% → 6% (cap catastrophic losses)
+- Kill switch activation: 5 days → 3 days (catch failures earlier)
 """
 
 import stock_indicators
@@ -47,11 +42,11 @@ import account_broker_data
 
 
 class ExitConfig:
-    """Structure-Anchored Trailing Exit Configuration - V4
+    """Structure-Anchored Trailing Exit Configuration - V5
 
-    V4 Philosophy: Return closer to V1 original parameters.
-    V2/V3 over-tightened the initial stops. This version loosens them
-    while keeping the bug fix and ATR fallback safety net.
+    V5 Philosophy: Kill switch proved highly effective (+$87K in V4).
+    Tighten hard stop and activate kill switch earlier to reduce losses
+    from positions that fail before momentum detection kicks in.
     """
 
     # Structure-based initial stop - V4: LOOSENED
@@ -86,8 +81,8 @@ class ExitConfig:
     DEAD_MONEY_BARS_BELOW = 5  # Consecutive bars below EMA to trigger
     DEAD_MONEY_MAX_LOSS_R = 1.0  # Only trigger if loss < 1R
 
-    # Hard stop (circuit breaker) - V4: LOOSENED
-    HARD_STOP_PCT = 8.0  # V4: 8% (was 6% V2, 7% V3, 10% V1)
+    # Hard stop (circuit breaker) - V5: TIGHTENED
+    HARD_STOP_PCT = 6.0  # V5: 6% (was 8% V4, 7% V3, 6% V2)
 
     # Regime adjustment
     REGIME_TIGHTENING_PCT = 20.0  # V4: Back to 20% (was 25% in V2/V3)
@@ -98,7 +93,7 @@ class ExitConfig:
 
     # Kill Switch - Momentum Fade Detection
     KILL_SWITCH_ENABLED = True
-    KILL_SWITCH_MIN_HOLD_DAYS = 5  # Only activate after this many days held
+    KILL_SWITCH_MIN_HOLD_DAYS = 3  # V5: 3 days (was 5 in V4) - catch failures earlier
 
 
 class PositionMonitor:
@@ -491,9 +486,9 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
     Check all positions for exit signals
 
     Priority order:
-    1. Hard Stop (8% max loss)
+    1. Hard Stop (6% max loss)
     2. Trailing/Structure Stop
-    3. Kill Switch (momentum fade after 5 days)
+    3. Kill Switch (momentum fade after 3 days)
     4. Dead Money Filter
     5. Profit Take (2R)
     6. Remnant Cleanup (handled in execution)
@@ -596,7 +591,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         exit_signal = None
 
         # =====================================================================
-        # PRIORITY 1: HARD STOP (8% max loss)
+        # PRIORITY 1: HARD STOP (6% max loss)
         # =====================================================================
         exit_signal = check_hard_stop(entry_price, current_price)
 
@@ -607,7 +602,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
             exit_signal = check_trailing_stop(current_stop, current_price, phase)
 
         # =====================================================================
-        # PRIORITY 3: KILL SWITCH (momentum fade detection)
+        # PRIORITY 3: KILL SWITCH (momentum fade after 3 days)
         # =====================================================================
         if not exit_signal:
             exit_signal = check_kill_switch(raw_df, data, entry_date, current_date)
