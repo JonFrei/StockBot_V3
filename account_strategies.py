@@ -21,7 +21,7 @@ import account_profit_tracking
 import stock_position_monitoring
 from stock_rotation import StockRotator, should_rotate
 
-from server_recovery import save_state_safe, load_state_safe
+from server_recovery import save_state_safe, load_state_safe, repair_incomplete_position_metadata
 from account_drawdown_protection import MarketRegimeDetector
 from account_recovery_mode import RecoveryModeManager
 import account_broker_data
@@ -639,6 +639,15 @@ class SwingTradeStrategy(Strategy):
                     execution_tracker.complete('FAILED')
                     summary.print_summary()
                     return
+
+                # Repair any positions with incomplete metadata (missing stops, R, ATR, etc.)
+                if not Config.BACKTESTING:
+                    repaired = repair_incomplete_position_metadata(
+                        self, self.position_monitor, all_stock_data, current_date
+                    )
+                    if repaired:
+                        print(f"   📝 Repaired metadata for {len(repaired)} position(s)")
+                        save_state_safe(self)
 
             except Exception as e:
                 summary.add_error(f"Stock data fetch failed: {e}")

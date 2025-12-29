@@ -449,6 +449,103 @@ class StatePersistence:
         return True
 
 
+def repair_incomplete_position_metadata(strategy, position_monitor, all_stock_data, current_date):
+    """
+    Repair positions with incomplete metadata (missing stops, R, ATR, etc.)
+
+    Called after stock data is available to calculate structure-based values.
+    Should be called during position sync when stock data becomes available.
+
+    Args:
+        strategy: Lumibot Strategy instance
+        position_monitor: PositionMonitor instance
+        all_stock_data: Dict of {ticker: {'indicators': {...}, 'raw': DataFrame}}
+        current_date: Current datetime
+
+    Returns:
+        list: Dicts of {'ticker': str, 'fields': list} for repaired positions
+    """
+    import stock_indicators
+    from stock_position_monitoring import ExitConfig
+
+    repaired = []
+
+    for ticker, metadata in list(position_monitor.positions_metadata.items()):
+        entry_price = metadata.get('entry_price')
+        if not entry_price or entry_price <= 0:
+            continue  # Can't repair without entry price
+
+        # Check which fields are missing
+        missing = []
+        if not metadata.get('initial_stop'):
+            missing.append('initial_stop')
+        if not metadata.get('current_stop'):
+            missing.append('current_stop')
+        if not metadata.get('R'):
+            missing.append('R')
+        if not metadata.get('entry_atr'):
+            missing.append('entry_atr')
+        if not metadata.get('highest_close'):
+            missing.append('highest_close')
+
+        if not missing:
+            continue
+
+        # Get stock data for this ticker
+        ticker_data = all_stock_data.get(ticker)
+        raw_df = ticker_data.get('raw') if ticker_data else None
+        indicators = ticker_data.get('indicators', {}) if ticker_data else {}
+        current_price = indicators.get('close', 0)
+
+        # Calculate ATR
+        atr = None
+        if raw_df is not None and len(raw_df) >= 14:
+            atr = stock_indicators.get_atr(raw_df, period=ExitConfig.ATR_PERIOD)
+        if not atr or atr <= 0:
+            atr = indicators.get('atr_14', 0)
+
+        repaired_fields = []
+
+        # Calculate initial_stop if missing
+        if 'initial_stop' in missing:
+            initial_stop = position_monitor._calculate_structure_stop(entry_price, raw_df, atr)
+            metadata['initial_stop'] = initial_stop
+            repaired_fields.append('initial_stop')
+
+        # Set current_stop if missing (use initial_stop)
+        if 'current_stop' in missing:
+            metadata['current_stop'] = metadata.get('initial_stop', entry_price * 0.95)
+            repaired_fields.append('current_stop')
+
+        # Calculate R if missing
+        if 'R' in missing:
+            initial_stop = metadata.get('initial_stop', entry_price * 0.95)
+            R = entry_price - initial_stop if initial_stop > 0 else entry_price * 0.05
+            metadata['R'] = max(R, entry_price * 0.01)  # Min 1% R
+            repaired_fields.append('R')
+
+        # Calculate entry_atr if missing
+        if 'entry_atr' in missing:
+            if atr and atr > 0:
+                metadata['entry_atr'] = atr
+            else:
+                # Fallback: estimate from R
+                metadata['entry_atr'] = metadata.get('R', entry_price * 0.05) / 2.5
+            repaired_fields.append('entry_atr')
+
+        # Set highest_close if missing
+        if 'highest_close' in missing:
+            highest = max(entry_price, current_price) if current_price > 0 else entry_price
+            metadata['highest_close'] = highest
+            repaired_fields.append('highest_close')
+
+        if repaired_fields:
+            print(f"   🔧 {ticker}: Repaired [{', '.join(repaired_fields)}]")
+            repaired.append({'ticker': ticker, 'fields': repaired_fields})
+
+    return repaired
+
+
 def _parse_datetime(value):
     """Parse datetime from string or return None"""
     if value is None:
