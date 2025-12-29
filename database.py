@@ -1161,7 +1161,15 @@ class InMemoryDatabase:
         df = self.closed_trades_df.sort_values('exit_date', ascending=False)
         if limit:
             df = df.head(limit)
-        return df.to_dict('records')
+
+        trades = []
+        for _, row in df.iterrows():
+            trade = row.to_dict()
+            # Map exit_reason to exit_signal for consistency with live DB
+            if 'exit_reason' in trade and 'exit_signal' not in trade:
+                trade['exit_signal'] = trade.get('exit_reason', 'unknown')
+            trades.append(trade)
+        return trades
 
     def record_closed_trade(self, ticker, quantity, entry_price, exit_price,
                             pnl_dollars, pnl_pct, entry_signal, entry_score,
