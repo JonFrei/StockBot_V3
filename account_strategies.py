@@ -399,6 +399,19 @@ class SwingTradeStrategy(Strategy):
             return
         load_state_safe(self)
 
+        # Sync positions with broker immediately on startup
+        from datetime import datetime
+        try:
+            sync_result = sync_positions_with_broker(
+                strategy=self,
+                current_date=datetime.now(),
+                position_monitor=self.position_monitor
+            )
+            if sync_result['orphaned_adopted']:
+                print(f"🔄 Startup sync: Adopted {len(sync_result['orphaned_adopted'])} positions")
+        except Exception as e:
+            print(f"⚠️ Startup position sync failed: {e}")
+
     def on_trading_iteration(self):
         import account_email_notifications
         execution_tracker = account_email_notifications.ExecutionTracker()
