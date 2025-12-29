@@ -551,6 +551,7 @@ class Database:
             print(f"[DATABASE] Error getting position metadata for {ticker}: {e}")
             return None
 
+
     def get_all_position_metadata(self):
         """Get all position metadata"""
 
@@ -559,11 +560,9 @@ class Database:
             try:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT ticker, entry_date, entry_signal, entry_score, highest_price,
-                           profit_level, level_1_lock_price, level_2_lock_price,
-                           entry_price, kill_switch_active, peak_price,
-                           phase, R, entry_atr, highest_close, current_stop, initial_stop,
-                           bars_below_ema50, partial_taken, add_count
+                    SELECT ticker, entry_date, entry_signal, entry_score, entry_price,
+                           initial_stop, current_stop, R, entry_atr, highest_close,
+                           phase, bars_below_ema50, partial_taken, add_count
                     FROM position_metadata
                 """)
 
@@ -573,24 +572,16 @@ class Database:
                         'entry_date': row[1],
                         'entry_signal': row[2],
                         'entry_score': row[3],
-                        'highest_price': float(row[4]) if row[4] else 0,
-                        'local_max': float(row[4]) if row[4] else 0,
-                        'profit_level': row[5],
-                        'level_1_lock_price': float(row[6]) if row[6] else None,
-                        'tier1_lock_price': float(row[6]) if row[6] else None,
-                        'level_2_lock_price': float(row[7]) if row[7] else None,
-                        'entry_price': float(row[8]) if row[8] else None,
-                        'kill_switch_active': row[9],
-                        'peak_price': float(row[10]) if row[10] else None,
-                        'phase': row[11] or 'entry',
-                        'R': float(row[12]) if row[12] else None,
-                        'entry_atr': float(row[13]) if row[13] else None,
-                        'highest_close': float(row[14]) if row[14] else None,
-                        'current_stop': float(row[15]) if row[15] else None,
-                        'initial_stop': float(row[16]) if row[16] else None,
-                        'bars_below_ema50': row[17] or 0,
-                        'partial_taken': row[18] or False,
-                        'add_count': row[19] or 0
+                        'entry_price': float(row[4]) if row[4] else None,
+                        'initial_stop': float(row[5]) if row[5] else None,
+                        'current_stop': float(row[6]) if row[6] else None,
+                        'R': float(row[7]) if row[7] else None,
+                        'entry_atr': float(row[8]) if row[8] else None,
+                        'highest_close': float(row[9]) if row[9] else None,
+                        'phase': row[10] or 'entry',
+                        'bars_below_ema50': row[11] or 0,
+                        'partial_taken': row[12] or False,
+                        'add_count': row[13] or 0
                     }
                 cursor.close()
                 return positions
@@ -1248,48 +1239,6 @@ class InMemoryDatabase:
             'partial_taken': partial_taken or False,
             'add_count': add_count or 0
         }
-
-    def get_all_position_metadata(self):
-        """Get all position metadata"""
-
-        def _get_all():
-            conn = self.get_connection()
-            try:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT ticker, entry_date, entry_signal, entry_score, entry_price,
-                           initial_stop, current_stop, R, entry_atr, highest_close,
-                           phase, bars_below_ema50, partial_taken, add_count
-                    FROM position_metadata
-                """)
-
-                positions = {}
-                for row in cursor.fetchall():
-                    positions[row[0]] = {
-                        'entry_date': row[1],
-                        'entry_signal': row[2],
-                        'entry_score': row[3],
-                        'entry_price': float(row[4]) if row[4] else None,
-                        'initial_stop': float(row[5]) if row[5] else None,
-                        'current_stop': float(row[6]) if row[6] else None,
-                        'R': float(row[7]) if row[7] else None,
-                        'entry_atr': float(row[8]) if row[8] else None,
-                        'highest_close': float(row[9]) if row[9] else None,
-                        'phase': row[10] or 'entry',
-                        'bars_below_ema50': row[11] or 0,
-                        'partial_taken': row[12] or False,
-                        'add_count': row[13] or 0
-                    }
-                cursor.close()
-                return positions
-            finally:
-                self.return_connection(conn)
-
-        try:
-            return self._retry_operation(_get_all)
-        except Exception as e:
-            print(f"[DATABASE] Error getting all position metadata: {e}")
-            return {}
 
     def clear_all_position_metadata(self):
         self.position_metadata = {}
