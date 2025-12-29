@@ -495,10 +495,15 @@ class Database:
                         add_count = EXCLUDED.add_count,
                         updated_at = CURRENT_TIMESTAMP
                 """, (
-                    ticker, entry_date, entry_signal, entry_score, entry_price,
-                    initial_stop, current_stop, R, entry_atr, highest_close,
-                    phase, bars_below_ema50, partial_taken, add_count
-                ))
+                        ticker, entry_date, entry_signal, entry_score,
+                        float(entry_price) if entry_price is not None else None,
+                        float(initial_stop) if initial_stop is not None else None,
+                        float(current_stop) if current_stop is not None else None,
+                        float(R) if R is not None else None,
+                        float(entry_atr) if entry_atr is not None else None,
+                        float(highest_close) if highest_close is not None else None,
+                        phase, bars_below_ema50, partial_taken, add_count
+                    ))
                 conn.commit()
             finally:
                 cursor.close()
@@ -1224,6 +1229,7 @@ class InMemoryDatabase:
                                  R=None, entry_atr=None, highest_close=None,
                                  phase='entry', bars_below_ema50=0, partial_taken=False,
                                  add_count=0):
+
         self.position_metadata[ticker] = {
             'entry_date': entry_date,
             'entry_signal': entry_signal,
