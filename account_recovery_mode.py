@@ -732,12 +732,12 @@ class RecoveryModeManager:
 
         # Check for recovery mode exit (pass deployed_capital for breadth check)
         if self.recovery_mode_active:
-            should_exit, exit_reason = self.check_recovery_mode_exit(
+            should_exit, exit_signal = self.check_recovery_mode_exit(
                 current_date,
                 deployed_capital=deployed_capital
             )
             if should_exit:
-                self.exit_recovery_mode(exit_reason)
+                self.exit_recovery_mode(exit_signal)
 
         # Check for recovery mode entry (both tracks)
         if not self.recovery_mode_active:

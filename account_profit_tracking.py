@@ -373,7 +373,7 @@ class ProfitTracker:
                     pnl_pct=pnl_pct,
                     entry_signal=entry_signal,
                     entry_score=entry_score,
-                    exit_reason=exit_signal.get('reason', 'unknown') if isinstance(exit_signal, dict) else str(
+                    exit_signal=exit_signal.get('reason', 'unknown') if isinstance(exit_signal, dict) else str(
                         exit_signal),
                     exit_date=exit_date
                 )
@@ -382,7 +382,7 @@ class ProfitTracker:
                 cursor.execute("""
                     INSERT INTO closed_trades 
                     (ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct, 
-                     entry_signal, entry_score, exit_reason, exit_date)
+                     entry_signal, entry_score, exit_signal, exit_date)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     ticker, quantity_sold, entry_price, exit_price, total_pnl, pnl_pct,
@@ -433,7 +433,7 @@ class ProfitTracker:
                     'pnl_pct': float(row['pnl_pct']),
                     'entry_signal': row['entry_signal'],
                     'entry_score': row['entry_score'],
-                    'exit_signal': row['exit_reason'],  # Map column to exit_signal key
+                    'exit_signal': row['exit_signal'],  # Map column to exit_signal key
                     'exit_date': row['exit_date']
                 })
             return trades
@@ -513,9 +513,9 @@ class ProfitTracker:
     def _display_exit_breakdown(self, closed_trades):
         exit_stats = defaultdict(lambda: {'count': 0, 'pnl': 0})
         for t in closed_trades:
-            exit_reason = t['exit_signal']
-            exit_stats[exit_reason]['count'] += 1
-            exit_stats[exit_reason]['pnl'] += t['pnl_dollars']
+            exit_signal = t['exit_signal']
+            exit_stats[exit_signal]['count'] += 1
+            exit_stats[exit_signal]['pnl'] += t['pnl_dollars']
 
         print(f"\n{'EXIT BREAKDOWN':^100}")
         print(f"{'-' * 100}")

@@ -535,7 +535,7 @@ class SwingTradeStrategy(Strategy):
             # EMERGENCY EXIT HANDLERS
             # =============================================================
             if regime_result['action'] in ['exit_all', 'portfolio_drawdown_exit']:
-                exit_reason = regime_result['reason']
+                exit_signal = regime_result['reason']
                 exit_count = 0
 
                 positions = self.get_positions()
@@ -554,7 +554,7 @@ class SwingTradeStrategy(Strategy):
                                 pnl_dollars = (current_price - entry_price) * qty if entry_price > 0 else 0
                                 pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
 
-                                summary.add_exit(ticker, qty, pnl_dollars, pnl_pct, exit_reason)
+                                summary.add_exit(ticker, qty, pnl_dollars, pnl_pct, exit_signal)
 
                                 # Record trade
                                 metadata = self.position_monitor.get_position_metadata(ticker)
@@ -568,7 +568,7 @@ class SwingTradeStrategy(Strategy):
                                     exit_price=current_price,
                                     exit_date=current_date,
                                     entry_signal=entry_signal,
-                                    exit_signal={'reason': exit_reason},
+                                    exit_signal={'reason': exit_signal},
                                     entry_score=entry_score
                                 )
 
@@ -582,7 +582,7 @@ class SwingTradeStrategy(Strategy):
                                     stock_position_sizing.update_backtest_cash_for_sell(qty * current_price)
 
                             except Exception as e:
-                                summary.add_error(f"{exit_reason} {ticker} failed: {e}")
+                                summary.add_error(f"{exit_signal} {ticker} failed: {e}")
 
                     execution_tracker.record_action('exits', count=exit_count)
 

@@ -169,13 +169,13 @@ class Database:
                     pnl_pct DECIMAL(8, 4) NOT NULL,
                     entry_signal VARCHAR(50),
                     entry_score INTEGER DEFAULT 0,
-                    exit_reason VARCHAR(50),
+                    exit_signal VARCHAR(50),
                     exit_date TIMESTAMP,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE INDEX IF NOT EXISTS idx_closed_trades_ticker ON closed_trades(ticker);
                 CREATE INDEX IF NOT EXISTS idx_closed_trades_exit_date ON closed_trades(exit_date);
-                CREATE INDEX IF NOT EXISTS idx_closed_trades_exit_reason ON closed_trades(exit_reason);
+                CREATE INDEX IF NOT EXISTS idx_closed_trades_exit_signal ON closed_trades(exit_signal);
             """)
 
             # Position metadata table
@@ -806,7 +806,7 @@ class Database:
                         'pnl_pct': float(row['pnl_pct']),
                         'entry_signal': row['entry_signal'],
                         'entry_score': row['entry_score'],
-                        'exit_signal': row['exit_reason'],
+                        'exit_signal': row['exit_signal'],
                         'exit_date': row['exit_date']
                     })
                 return trades
