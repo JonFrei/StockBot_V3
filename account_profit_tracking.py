@@ -349,7 +349,7 @@ class ProfitTracker:
         self.stock_rotator = stock_rotator
 
     def record_trade(self, ticker, quantity_sold, entry_price, exit_price, exit_date,
-                     entry_signal='unknown', exit_reason=None, entry_score=0):
+                     entry_signal='unknown', exit_signal=None, entry_score=0):
         """
         Record a closed trade and notify rotation system
 
@@ -373,8 +373,8 @@ class ProfitTracker:
                     pnl_pct=pnl_pct,
                     entry_signal=entry_signal,
                     entry_score=entry_score,
-                    exit_reason=exit_reason.get('reason', 'unknown') if isinstance(exit_reason, dict) else str(
-                        exit_reason),
+                    exit_reason=exit_signal.get('reason', 'unknown') if isinstance(exit_signal, dict) else str(
+                        exit_signal),
                     exit_date=exit_date
                 )
             else:
@@ -387,7 +387,7 @@ class ProfitTracker:
                 """, (
                     ticker, quantity_sold, entry_price, exit_price, total_pnl, pnl_pct,
                     entry_signal, entry_score,
-                    exit_reason.get('reason', 'unknown') if isinstance(exit_reason, dict) else str(exit_reason),
+                    exit_signal.get('reason', 'unknown') if isinstance(exit_signal, dict) else str(exit_signal),
                     exit_date
                 ))
                 conn.commit()
@@ -425,16 +425,16 @@ class ProfitTracker:
             trades = []
             for row in cursor.fetchall():
                 trades.append({
-                    'ticker': row[0],
-                    'quantity': row[1],
-                    'entry_price': float(row[2]),
-                    'exit_price': float(row[3]),
-                    'pnl_dollars': float(row[4]),
-                    'pnl_pct': float(row[5]),
-                    'entry_signal': row[6],
-                    'entry_score': row[7],
-                    'exit_reason': row[8],
-                    'exit_date': row[9]
+                    'ticker': row['ticker'],
+                    'quantity': row['quantity'],
+                    'entry_price': float(row['entry_price']),
+                    'exit_price': float(row['exit_price']),
+                    'pnl_dollars': float(row['pnl_dollars']),
+                    'pnl_pct': float(row['pnl_pct']),
+                    'entry_signal': row['entry_signal'],
+                    'entry_score': row['entry_score'],
+                    'exit_signal': row['exit_reason'],  # Map column to exit_signal key
+                    'exit_date': row['exit_date']
                 })
             return trades
         finally:
@@ -513,7 +513,7 @@ class ProfitTracker:
     def _display_exit_breakdown(self, closed_trades):
         exit_stats = defaultdict(lambda: {'count': 0, 'pnl': 0})
         for t in closed_trades:
-            exit_reason = t['exit_reason']
+            exit_reason = t['exit_signal']
             exit_stats[exit_reason]['count'] += 1
             exit_stats[exit_reason]['pnl'] += t['pnl_dollars']
 
