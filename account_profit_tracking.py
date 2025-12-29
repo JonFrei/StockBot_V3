@@ -29,10 +29,12 @@ class DailySummary:
         self.recovery_mode_active = False
         self.recovery_max_positions = None
         self.recovery_profit_target = None
-        self.recovery_signals = None
+        self.recovery_entry_method = None
+        self.recovery_eligible_tiers = None
+        self.recovery_stop_multiplier = None
         self.exits = []
         self.entries = []
-        self.addons = []  # Track add-ons separately
+        self.addons = []
         self.profit_takes = []
         self.signals_found = []
         self.signals_skipped = []
@@ -51,10 +53,12 @@ class DailySummary:
         self.regime_multiplier = multiplier
 
         if recovery_details:
-            self.recovery_mode_active = recovery_details.get('active', False)
+            self.recovery_mode_active = recovery_details.get('entry_method') is not None
             self.recovery_max_positions = recovery_details.get('max_positions')
             self.recovery_profit_target = recovery_details.get('profit_target')
-            self.recovery_signals = recovery_details.get('signals')
+            self.recovery_entry_method = recovery_details.get('entry_method')
+            self.recovery_eligible_tiers = recovery_details.get('eligible_tiers')
+            self.recovery_stop_multiplier = recovery_details.get('stop_multiplier')
 
     def add_exit(self, ticker, qty, pnl, pnl_pct, reason):
         self.exits.append({'ticker': ticker, 'qty': qty, 'pnl': pnl, 'pnl_pct': pnl_pct, 'reason': reason})
@@ -113,11 +117,16 @@ class DailySummary:
 
             if self.recovery_mode_active or self.regime_status == 'recovery_mode':
                 print(f"   {'─' * 76}")
-                print(f"   🔓 RECOVERY MODE ACTIVE")
+                mode_type = "FULL" if self.recovery_entry_method == 'structure' else "CAUTIOUS"
+                print(f"   🔓 RECOVERY MODE ACTIVE ({mode_type})")
                 if self.recovery_max_positions:
                     print(f"      • Position Limit: {self.recovery_max_positions} positions")
                 if self.recovery_profit_target:
                     print(f"      • Profit Target: {self.recovery_profit_target:.1f}%")
+                if self.recovery_eligible_tiers:
+                    print(f"      • Eligible Tiers: {', '.join(self.recovery_eligible_tiers)}")
+                if self.recovery_stop_multiplier and self.recovery_stop_multiplier != 1.0:
+                    print(f"      • Stop Multiplier: {self.recovery_stop_multiplier}x")
                 print(f"   {'─' * 76}")
 
         # Show tier changes
@@ -339,8 +348,8 @@ class ProfitTracker:
         """Set stock rotator reference (can be set after initialization)"""
         self.stock_rotator = stock_rotator
 
-    def record_trade(self, ticker, quantity_sold, entry_price, exit_price, exit_date, entry_signal, exit_signal,
-                     entry_score=0):
+    def record_trade(self, ticker, quantity_sold, entry_price, exit_price, exit_date,
+                     entry_signal='unknown', exit_reason=None, entry_score=0):
         """
         Record a closed trade and notify rotation system
 
@@ -355,19 +364,32 @@ class ProfitTracker:
         conn = self.db.get_connection()
         try:
             if Config.BACKTESTING:
-                self.db.insert_trade(ticker=ticker, quantity=quantity_sold, entry_price=entry_price,
-                                     exit_price=exit_price, pnl_dollars=total_pnl, pnl_pct=pnl_pct,
-                                     entry_signal=entry_signal,
-                                     entry_score=entry_score, exit_signal=exit_signal.get('reason', 'unknown'),
-                                     exit_date=exit_date)
+                self.db.record_closed_trade(
+                    ticker=ticker,
+                    quantity=quantity_sold,
+                    entry_price=entry_price,
+                    exit_price=exit_price,
+                    pnl_dollars=total_pnl,
+                    pnl_pct=pnl_pct,
+                    entry_signal=entry_signal,
+                    entry_score=entry_score,
+                    exit_reason=exit_reason.get('reason', 'unknown') if isinstance(exit_reason, dict) else str(
+                        exit_reason),
+                    exit_date=exit_date
+                )
             else:
                 cursor = conn.cursor()
-                cursor.execute("""INSERT INTO closed_trades (ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct,
-                     entry_signal, entry_score, exit_signal, exit_date, was_watchlisted, confirmation_date, days_to_confirmation)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                               (ticker, quantity_sold, entry_price, exit_price, total_pnl, pnl_pct, entry_signal,
-                                entry_score,
-                                exit_signal.get('reason', 'unknown'), exit_date, False, None, 0))
+                cursor.execute("""
+                    INSERT INTO closed_trades 
+                    (ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct, 
+                     entry_signal, entry_score, exit_reason, exit_date)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    ticker, quantity_sold, entry_price, exit_price, total_pnl, pnl_pct,
+                    entry_signal, entry_score,
+                    exit_reason.get('reason', 'unknown') if isinstance(exit_reason, dict) else str(exit_reason),
+                    exit_date
+                ))
                 conn.commit()
                 cursor.close()
         except Exception as e:
@@ -402,11 +424,18 @@ class ProfitTracker:
                 cursor.execute(query)
             trades = []
             for row in cursor.fetchall():
-                trades.append(
-                    {'ticker': row[0], 'quantity': row[1], 'entry_price': float(row[2]), 'exit_price': float(row[3]),
-                     'pnl_dollars': float(row[4]), 'pnl_pct': float(row[5]), 'entry_signal': row[6],
-                     'entry_score': row[7],
-                     'exit_signal': row[8], 'exit_date': row[9]})
+                trades.append({
+                    'ticker': row[0],
+                    'quantity': row[1],
+                    'entry_price': float(row[2]),
+                    'exit_price': float(row[3]),
+                    'pnl_dollars': float(row[4]),
+                    'pnl_pct': float(row[5]),
+                    'entry_signal': row[6],
+                    'entry_score': row[7],
+                    'exit_reason': row[8],
+                    'exit_date': row[9]
+                })
             return trades
         finally:
             cursor.close()
@@ -484,7 +513,7 @@ class ProfitTracker:
     def _display_exit_breakdown(self, closed_trades):
         exit_stats = defaultdict(lambda: {'count': 0, 'pnl': 0})
         for t in closed_trades:
-            exit_reason = t['exit_signal']
+            exit_reason = t['exit_reason']
             exit_stats[exit_reason]['count'] += 1
             exit_stats[exit_reason]['pnl'] += t['pnl_dollars']
 
@@ -634,8 +663,8 @@ class OrderLogger:
         self.strategy = strategy
         self.db = get_database()
 
-    def log_order(self, ticker, side, quantity, signal_type='unknown', award='none', quality_score=0, limit_price=None,
-                  was_watchlisted=False, days_on_watchlist=0, is_addon=False):
+    def log_order(self, ticker, side, quantity, signal_type='unknown', award='none',
+                  quality_score=0, limit_price=None, is_addon=False):
         """
         Log an order with add-on tracking
 
@@ -666,8 +695,7 @@ class OrderLogger:
                                          limit_price=limit_price, filled_price=filled_price, submitted_at=submitted_at,
                                          signal_type=signal_type, portfolio_value=portfolio_value,
                                          cash_before=cash_before,
-                                         award=award, quality_score=quality_score, broker_order_id=None,
-                                         was_watchlisted=was_watchlisted, days_on_watchlist=days_on_watchlist)
+                                         award=award, quality_score=quality_score, broker_order_id=None)
             else:
                 conn = self.db.get_connection()
                 try:
@@ -677,8 +705,7 @@ class OrderLogger:
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                                    (ticker, side, quantity, 'market', limit_price, filled_price, submitted_at,
                                     signal_type,
-                                    portfolio_value, cash_before, award, quality_score, was_watchlisted,
-                                    days_on_watchlist))
+                                    portfolio_value, cash_before, award, quality_score))
                     conn.commit()
                 finally:
                     cursor.close()

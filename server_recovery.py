@@ -199,13 +199,16 @@ class StatePersistence:
                 entry_date=meta['entry_date'],
                 entry_signal=meta['entry_signal'],
                 entry_score=meta.get('entry_score', 0),
-                highest_price=meta.get('highest_price', meta.get('local_max', 0)),
-                profit_level=meta.get('profit_level', 0),
-                level_1_lock_price=meta.get('level_1_lock_price') or meta.get('tier1_lock_price'),
-                level_2_lock_price=meta.get('level_2_lock_price'),
                 entry_price=meta.get('entry_price'),
-                kill_switch_active=meta.get('kill_switch_active', False),
-                peak_price=meta.get('peak_price')
+                initial_stop=meta.get('initial_stop'),
+                current_stop=meta.get('current_stop'),
+                R=meta.get('R'),
+                entry_atr=meta.get('entry_atr'),
+                highest_close=meta.get('highest_close'),
+                phase=meta.get('phase', 'entry'),
+                bars_below_ema50=meta.get('bars_below_ema50', 0),
+                partial_taken=meta.get('partial_taken', False),
+                add_count=meta.get('add_count', 0)
             )
 
         # Save rotation state
@@ -285,13 +288,16 @@ class StatePersistence:
                 entry_date=meta['entry_date'],
                 entry_signal=meta['entry_signal'],
                 entry_score=meta.get('entry_score', 0),
-                highest_price=meta.get('highest_price', meta.get('local_max', 0)),
-                profit_level=meta.get('profit_level', 0),
-                level_1_lock_price=meta.get('level_1_lock_price') or meta.get('tier1_lock_price'),
-                level_2_lock_price=meta.get('level_2_lock_price'),
                 entry_price=meta.get('entry_price'),
-                kill_switch_active=meta.get('kill_switch_active', False),
-                peak_price=meta.get('peak_price')
+                initial_stop=meta.get('initial_stop'),
+                current_stop=meta.get('current_stop'),
+                R=meta.get('R'),
+                entry_atr=meta.get('entry_atr'),
+                highest_close=meta.get('highest_close'),
+                phase=meta.get('phase', 'entry'),
+                bars_below_ema50=meta.get('bars_below_ema50', 0),
+                partial_taken=meta.get('partial_taken', False),
+                add_count=meta.get('add_count', 0)
             )
 
         # Save rotation state
@@ -333,15 +339,16 @@ class StatePersistence:
                 'entry_date': meta['entry_date'],
                 'entry_signal': meta['entry_signal'],
                 'entry_score': meta.get('entry_score', 0),
-                'highest_price': meta.get('highest_price', 0),
-                'local_max': meta.get('highest_price', 0),
-                'profit_level': meta.get('profit_level', 0),
-                'level_1_lock_price': meta.get('level_1_lock_price'),
-                'tier1_lock_price': meta.get('level_1_lock_price'),
-                'level_2_lock_price': meta.get('level_2_lock_price'),
                 'entry_price': meta.get('entry_price'),
-                'kill_switch_active': meta.get('kill_switch_active', False),
-                'peak_price': meta.get('peak_price')
+                'initial_stop': meta.get('initial_stop'),
+                'current_stop': meta.get('current_stop'),
+                'R': meta.get('R'),
+                'entry_atr': meta.get('entry_atr'),
+                'highest_close': meta.get('highest_close'),
+                'phase': meta.get('phase', 'entry'),
+                'bars_below_ema50': meta.get('bars_below_ema50', 0),
+                'partial_taken': meta.get('partial_taken', False),
+                'add_count': meta.get('add_count', 0)
             }
         print(f"✅ Position Metadata: {len(positions)} position(s)")
 

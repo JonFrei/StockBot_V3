@@ -165,21 +165,17 @@ class Database:
                     quantity INTEGER NOT NULL,
                     entry_price DECIMAL(10, 2) NOT NULL,
                     exit_price DECIMAL(10, 2) NOT NULL,
-                    pnl_dollars DECIMAL(10, 2) NOT NULL,
-                    pnl_pct DECIMAL(10, 2) NOT NULL,
-                    entry_signal VARCHAR(50) NOT NULL,
+                    pnl_dollars DECIMAL(12, 2) NOT NULL,
+                    pnl_pct DECIMAL(8, 4) NOT NULL,
+                    entry_signal VARCHAR(50),
                     entry_score INTEGER DEFAULT 0,
-                    exit_signal VARCHAR(50) NOT NULL,
-                    exit_date TIMESTAMP NOT NULL,
-                    was_watchlisted BOOLEAN DEFAULT FALSE,
-                    confirmation_date TIMESTAMP,
-                    days_to_confirmation INTEGER DEFAULT 0,
+                    exit_reason VARCHAR(50),
+                    exit_date TIMESTAMP,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE INDEX IF NOT EXISTS idx_closed_trades_ticker ON closed_trades(ticker);
                 CREATE INDEX IF NOT EXISTS idx_closed_trades_exit_date ON closed_trades(exit_date);
-                CREATE INDEX IF NOT EXISTS idx_closed_trades_confirmation ON closed_trades(was_watchlisted, confirmation_date);
-                CREATE INDEX IF NOT EXISTS idx_closed_trades_signal_confirmation ON closed_trades(entry_signal, was_watchlisted);
+                CREATE INDEX IF NOT EXISTS idx_closed_trades_exit_reason ON closed_trades(exit_reason);
             """)
 
             # Position metadata table
@@ -189,16 +185,16 @@ class Database:
                     entry_date TIMESTAMP NOT NULL,
                     entry_signal VARCHAR(50) NOT NULL,
                     entry_score INTEGER DEFAULT 0,
-                    highest_price DECIMAL(10, 2) NOT NULL,
-                    profit_level INTEGER DEFAULT 0,
-                    level_1_lock_price DECIMAL(10, 2),
-                    level_2_lock_price DECIMAL(10, 2),
-                    was_watchlisted BOOLEAN DEFAULT FALSE,
-                    confirmation_date TIMESTAMP,
-                    days_to_confirmation INTEGER DEFAULT 0,
                     entry_price DECIMAL(10, 2),
-                    kill_switch_active BOOLEAN DEFAULT FALSE,
-                    peak_price DECIMAL(10, 2),
+                    initial_stop DECIMAL(10, 2),
+                    current_stop DECIMAL(10, 2),
+                    R DECIMAL(10, 4),
+                    entry_atr DECIMAL(10, 4),
+                    highest_close DECIMAL(10, 2),
+                    phase VARCHAR(20) DEFAULT 'entry',
+                    bars_below_ema50 INTEGER DEFAULT 0,
+                    partial_taken BOOLEAN DEFAULT FALSE,
+                    add_count INTEGER DEFAULT 0,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE INDEX IF NOT EXISTS idx_position_metadata_entry_date ON position_metadata(entry_date);
@@ -470,9 +466,10 @@ class Database:
     # =========================================================================
 
     def upsert_position_metadata(self, ticker, entry_date, entry_signal, entry_score,
-                                 highest_price, profit_level, level_1_lock_price,
-                                 level_2_lock_price, entry_price=None, kill_switch_active=False,
-                                 peak_price=None):
+                                 entry_price=None, initial_stop=None, current_stop=None,
+                                 R=None, entry_atr=None, highest_close=None,
+                                 phase='entry', bars_below_ema50=0, partial_taken=False,
+                                 add_count=0):
         """Insert or update position metadata"""
 
         def _upsert():
@@ -481,26 +478,29 @@ class Database:
                 cursor = conn.cursor()
                 cursor.execute("""
                     INSERT INTO position_metadata 
-                    (ticker, entry_date, entry_signal, entry_score, highest_price, 
-                     profit_level, level_1_lock_price, level_2_lock_price,
-                     entry_price, kill_switch_active, peak_price, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    (ticker, entry_date, entry_signal, entry_score, entry_price,
+                     initial_stop, current_stop, R, entry_atr, highest_close,
+                     phase, bars_below_ema50, partial_taken, add_count, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
                     ON CONFLICT (ticker) DO UPDATE SET
                         entry_date = EXCLUDED.entry_date,
                         entry_signal = EXCLUDED.entry_signal,
                         entry_score = EXCLUDED.entry_score,
-                        highest_price = EXCLUDED.highest_price,
-                        profit_level = EXCLUDED.profit_level,
-                        level_1_lock_price = EXCLUDED.level_1_lock_price,
-                        level_2_lock_price = EXCLUDED.level_2_lock_price,
                         entry_price = EXCLUDED.entry_price,
-                        kill_switch_active = EXCLUDED.kill_switch_active,
-                        peak_price = EXCLUDED.peak_price,
+                        initial_stop = EXCLUDED.initial_stop,
+                        current_stop = EXCLUDED.current_stop,
+                        R = EXCLUDED.R,
+                        entry_atr = EXCLUDED.entry_atr,
+                        highest_close = EXCLUDED.highest_close,
+                        phase = EXCLUDED.phase,
+                        bars_below_ema50 = EXCLUDED.bars_below_ema50,
+                        partial_taken = EXCLUDED.partial_taken,
+                        add_count = EXCLUDED.add_count,
                         updated_at = CURRENT_TIMESTAMP
                 """, (
-                    ticker, entry_date, entry_signal, entry_score, highest_price,
-                    profit_level, level_1_lock_price, level_2_lock_price,
-                    entry_price, kill_switch_active, peak_price
+                    ticker, entry_date, entry_signal, entry_score, entry_price,
+                    initial_stop, current_stop, R, entry_atr, highest_close,
+                    phase, bars_below_ema50, partial_taken, add_count
                 ))
                 conn.commit()
             finally:
@@ -520,9 +520,9 @@ class Database:
             try:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT entry_date, entry_signal, entry_score, highest_price, 
-                           profit_level, level_1_lock_price, level_2_lock_price,
-                           entry_price, kill_switch_active, peak_price
+                    SELECT entry_date, entry_signal, entry_score, entry_price,
+                           initial_stop, current_stop, R, entry_atr, highest_close,
+                           phase, bars_below_ema50, partial_taken, add_count
                     FROM position_metadata WHERE ticker = %s
                 """, (ticker,))
                 row = cursor.fetchone()
@@ -533,13 +533,16 @@ class Database:
                         'entry_date': row[0],
                         'entry_signal': row[1],
                         'entry_score': row[2],
-                        'highest_price': float(row[3]) if row[3] else 0,
-                        'profit_level': row[4],
-                        'level_1_lock_price': float(row[5]) if row[5] else None,
-                        'level_2_lock_price': float(row[6]) if row[6] else None,
-                        'entry_price': float(row[7]) if row[7] else None,
-                        'kill_switch_active': row[8],
-                        'peak_price': float(row[9]) if row[9] else None
+                        'entry_price': float(row[3]) if row[3] else None,
+                        'initial_stop': float(row[4]) if row[4] else None,
+                        'current_stop': float(row[5]) if row[5] else None,
+                        'R': float(row[6]) if row[6] else None,
+                        'entry_atr': float(row[7]) if row[7] else None,
+                        'highest_close': float(row[8]) if row[8] else None,
+                        'phase': row[9] or 'entry',
+                        'bars_below_ema50': row[10] or 0,
+                        'partial_taken': row[11] or False,
+                        'add_count': row[12] or 0
                     }
                 return None
             finally:
@@ -561,7 +564,9 @@ class Database:
                 cursor.execute("""
                     SELECT ticker, entry_date, entry_signal, entry_score, highest_price,
                            profit_level, level_1_lock_price, level_2_lock_price,
-                           entry_price, kill_switch_active, peak_price
+                           entry_price, kill_switch_active, peak_price,
+                           phase, R, entry_atr, highest_close, current_stop, initial_stop,
+                           bars_below_ema50, partial_taken, add_count
                     FROM position_metadata
                 """)
 
@@ -572,12 +577,23 @@ class Database:
                         'entry_signal': row[2],
                         'entry_score': row[3],
                         'highest_price': float(row[4]) if row[4] else 0,
+                        'local_max': float(row[4]) if row[4] else 0,
                         'profit_level': row[5],
                         'level_1_lock_price': float(row[6]) if row[6] else None,
+                        'tier1_lock_price': float(row[6]) if row[6] else None,
                         'level_2_lock_price': float(row[7]) if row[7] else None,
                         'entry_price': float(row[8]) if row[8] else None,
                         'kill_switch_active': row[9],
-                        'peak_price': float(row[10]) if row[10] else None
+                        'peak_price': float(row[10]) if row[10] else None,
+                        'phase': row[11] or 'entry',
+                        'R': float(row[12]) if row[12] else None,
+                        'entry_atr': float(row[13]) if row[13] else None,
+                        'highest_close': float(row[14]) if row[14] else None,
+                        'current_stop': float(row[15]) if row[15] else None,
+                        'initial_stop': float(row[16]) if row[16] else None,
+                        'bars_below_ema50': row[17] or 0,
+                        'partial_taken': row[18] or False,
+                        'add_count': row[19] or 0
                     }
                 cursor.close()
                 return positions
@@ -779,26 +795,23 @@ class Database:
                            entry_signal, entry_score, exit_signal, exit_date
                     FROM closed_trades ORDER BY exit_date DESC
                 """
+                df = self.closed_trades_df.sort_values('exit_date', ascending=False)
                 if limit:
-                    cursor.execute(query + " LIMIT %s", (limit,))
-                else:
-                    cursor.execute(query)
-
+                    df = df.head(limit)
                 trades = []
-                for row in cursor.fetchall():
+                for _, row in df.iterrows():
                     trades.append({
-                        'ticker': row[0],
-                        'quantity': row[1],
-                        'entry_price': float(row[2]),
-                        'exit_price': float(row[3]),
-                        'pnl_dollars': float(row[4]),
-                        'pnl_pct': float(row[5]),
-                        'entry_signal': row[6],
-                        'entry_score': row[7],
-                        'exit_signal': row[8],
-                        'exit_date': row[9]
+                        'ticker': row['ticker'],
+                        'quantity': row['quantity'],
+                        'entry_price': float(row['entry_price']),
+                        'exit_price': float(row['exit_price']),
+                        'pnl_dollars': float(row['pnl_dollars']),
+                        'pnl_pct': float(row['pnl_pct']),
+                        'entry_signal': row['entry_signal'],
+                        'entry_score': row['entry_score'],
+                        'exit_reason': row['exit_reason'],
+                        'exit_date': row['exit_date']
                     })
-                cursor.close()
                 return trades
             finally:
                 self.return_connection(conn)
@@ -1030,13 +1043,12 @@ class InMemoryDatabase:
         self.tickers_df = pd.DataFrame(columns=['ticker', 'name', 'strategies', 'is_blacklisted'])
         self.closed_trades_df = pd.DataFrame(columns=[
             'ticker', 'quantity', 'entry_price', 'exit_price', 'pnl_dollars', 'pnl_pct',
-            'entry_signal', 'entry_score', 'exit_signal', 'exit_date', 'was_watchlisted',
-            'confirmation_date', 'days_to_confirmation'
+            'entry_signal', 'entry_score', 'exit_reason', 'exit_date'
         ])
         self.order_log_df = pd.DataFrame(columns=[
             'ticker', 'side', 'quantity', 'order_type', 'limit_price', 'filled_price',
             'submitted_at', 'signal_type', 'portfolio_value', 'cash_before', 'award',
-            'quality_score', 'broker_order_id', 'was_watchlisted', 'days_on_watchlist'
+            'quality_score', 'broker_order_id'
         ])
         self.daily_metrics_df = pd.DataFrame(columns=[
             'date', 'portfolio_value', 'cash_balance', 'num_positions', 'num_trades',
@@ -1151,6 +1163,26 @@ class InMemoryDatabase:
             df = df.head(limit)
         return df.to_dict('records')
 
+    def record_closed_trade(self, ticker, quantity, entry_price, exit_price,
+                            pnl_dollars, pnl_pct, entry_signal, entry_score,
+                            exit_reason, exit_date):
+        new_row = pd.DataFrame([{
+            'ticker': ticker,
+            'quantity': quantity,
+            'entry_price': entry_price,
+            'exit_price': exit_price,
+            'pnl_dollars': pnl_dollars,
+            'pnl_pct': pnl_pct,
+            'entry_signal': entry_signal,
+            'entry_score': entry_score,
+            'exit_reason': exit_reason,
+            'exit_date': exit_date
+        }])
+        if self.closed_trades_df.empty:
+            self.closed_trades_df = new_row
+        else:
+            self.closed_trades_df = pd.concat([self.closed_trades_df, new_row], ignore_index=True)
+
     def get_trades_by_signal(self, signal_name, lookback=None):
         if self.closed_trades_df.empty:
             return []
@@ -1166,7 +1198,8 @@ class InMemoryDatabase:
 
     def insert_order_log(self, ticker, side, quantity, order_type, limit_price, filled_price,
                          submitted_at, signal_type, portfolio_value, cash_before, award,
-                         quality_score, broker_order_id, was_watchlisted=False, days_on_watchlist=0):
+                         quality_score, broker_order_id):
+
         new_row = pd.DataFrame([{
             'ticker': ticker,
             'side': side,
@@ -1180,9 +1213,7 @@ class InMemoryDatabase:
             'cash_before': cash_before,
             'award': award,
             'quality_score': quality_score,
-            'broker_order_id': broker_order_id,
-            'was_watchlisted': was_watchlisted,
-            'days_on_watchlist': days_on_watchlist
+            'broker_order_id': broker_order_id
         }])
         if self.order_log_df.empty:
             self.order_log_df = new_row
@@ -1194,26 +1225,67 @@ class InMemoryDatabase:
     # =========================================================================
 
     def upsert_position_metadata(self, ticker, entry_date, entry_signal, entry_score,
-                                 highest_price, profit_level, level_1_lock_price,
-                                 level_2_lock_price, entry_price=None, kill_switch_active=False,
-                                 peak_price=None):
+                                 entry_price=None, initial_stop=None, current_stop=None,
+                                 R=None, entry_atr=None, highest_close=None,
+                                 phase='entry', bars_below_ema50=0, partial_taken=False,
+                                 add_count=0):
         self.position_metadata[ticker] = {
             'entry_date': entry_date,
             'entry_signal': entry_signal,
             'entry_score': entry_score,
-            'highest_price': float(highest_price) if highest_price else 0,
-            'local_max': float(highest_price) if highest_price else 0,
-            'profit_level': profit_level,
-            'level_1_lock_price': float(level_1_lock_price) if level_1_lock_price else None,
-            'tier1_lock_price': float(level_1_lock_price) if level_1_lock_price else None,
-            'level_2_lock_price': float(level_2_lock_price) if level_2_lock_price else None,
             'entry_price': float(entry_price) if entry_price else None,
-            'kill_switch_active': kill_switch_active,
-            'peak_price': float(peak_price) if peak_price else None
+            'initial_stop': float(initial_stop) if initial_stop else None,
+            'current_stop': float(current_stop) if current_stop else None,
+            'R': float(R) if R else None,
+            'entry_atr': float(entry_atr) if entry_atr else None,
+            'highest_close': float(highest_close) if highest_close else None,
+            'phase': phase or 'entry',
+            'bars_below_ema50': bars_below_ema50 or 0,
+            'partial_taken': partial_taken or False,
+            'add_count': add_count or 0
         }
 
     def get_all_position_metadata(self):
-        return self.position_metadata.copy()
+        """Get all position metadata"""
+
+        def _get_all():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT ticker, entry_date, entry_signal, entry_score, entry_price,
+                           initial_stop, current_stop, R, entry_atr, highest_close,
+                           phase, bars_below_ema50, partial_taken, add_count
+                    FROM position_metadata
+                """)
+
+                positions = {}
+                for row in cursor.fetchall():
+                    positions[row[0]] = {
+                        'entry_date': row[1],
+                        'entry_signal': row[2],
+                        'entry_score': row[3],
+                        'entry_price': float(row[4]) if row[4] else None,
+                        'initial_stop': float(row[5]) if row[5] else None,
+                        'current_stop': float(row[6]) if row[6] else None,
+                        'R': float(row[7]) if row[7] else None,
+                        'entry_atr': float(row[8]) if row[8] else None,
+                        'highest_close': float(row[9]) if row[9] else None,
+                        'phase': row[10] or 'entry',
+                        'bars_below_ema50': row[11] or 0,
+                        'partial_taken': row[12] or False,
+                        'add_count': row[13] or 0
+                    }
+                cursor.close()
+                return positions
+            finally:
+                self.return_connection(conn)
+
+        try:
+            return self._retry_operation(_get_all)
+        except Exception as e:
+            print(f"[DATABASE] Error getting all position metadata: {e}")
+            return {}
 
     def clear_all_position_metadata(self):
         self.position_metadata = {}
