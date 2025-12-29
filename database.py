@@ -253,13 +253,10 @@ class Database:
                     award VARCHAR(20),
                     quality_score INTEGER,
                     broker_order_id VARCHAR(100),
-                    was_watchlisted BOOLEAN DEFAULT FALSE,
-                    days_on_watchlist INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE INDEX IF NOT EXISTS idx_order_log_ticker ON order_log(ticker);
                 CREATE INDEX IF NOT EXISTS idx_order_log_submitted ON order_log(submitted_at);
-                CREATE INDEX IF NOT EXISTS idx_order_log_watchlist ON order_log(was_watchlisted);
             """)
 
             # Daily metrics table
@@ -754,7 +751,7 @@ class Database:
     # =========================================================================
 
     def insert_trade(self, ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct,
-                     entry_signal, entry_score, exit_signal, exit_date, was_watchlisted=False,
+                     entry_signal, entry_score, exit_signal, exit_date,
                      confirmation_date=None, days_to_confirmation=0):
         """Insert a closed trade record"""
 
@@ -765,12 +762,12 @@ class Database:
                 cursor.execute("""
                     INSERT INTO closed_trades 
                     (ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct,
-                     entry_signal, entry_score, exit_signal, exit_date, was_watchlisted,
+                     entry_signal, entry_score, exit_signal, exit_date,
                      confirmation_date, days_to_confirmation)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct,
-                    entry_signal, entry_score, exit_signal, exit_date, was_watchlisted,
+                    entry_signal, entry_score, exit_signal, exit_date,
                     confirmation_date, days_to_confirmation
                 ))
                 conn.commit()
@@ -1132,7 +1129,7 @@ class InMemoryDatabase:
     # =========================================================================
 
     def insert_trade(self, ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct,
-                     entry_signal, entry_score, exit_signal, exit_date, was_watchlisted=False,
+                     entry_signal, entry_score, exit_signal, exit_date,
                      confirmation_date=None, days_to_confirmation=0):
         new_row = pd.DataFrame([{
             'ticker': ticker,
@@ -1145,7 +1142,6 @@ class InMemoryDatabase:
             'entry_score': entry_score,
             'exit_signal': exit_signal,
             'exit_date': exit_date,
-            'was_watchlisted': was_watchlisted,
             'confirmation_date': confirmation_date,
             'days_to_confirmation': days_to_confirmation
         }])
