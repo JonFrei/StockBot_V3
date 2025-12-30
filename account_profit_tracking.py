@@ -13,7 +13,7 @@ from datetime import datetime
 from collections import defaultdict
 from database import get_database
 from config import Config
-
+from psycopg2.extras import RealDictCursor
 
 class DailySummary:
     def __init__(self):
@@ -416,7 +416,8 @@ class ProfitTracker:
             return self.db.get_closed_trades(limit)
         conn = self.db.get_connection()
         try:
-            cursor = conn.cursor()
+            # cursor = conn.cursor()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
             query = "SELECT ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct, entry_signal, entry_score, exit_signal, exit_date FROM closed_trades ORDER BY exit_date DESC"
             if limit:
                 cursor.execute(query + " LIMIT %s", (limit,))
