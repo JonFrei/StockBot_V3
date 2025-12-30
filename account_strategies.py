@@ -131,6 +131,14 @@ def sync_positions_with_broker(strategy, current_date, position_monitor):
             position = next((p for p in broker_positions if p.symbol == ticker), None)
             entry_price = account_broker_data.get_broker_entry_price(position, strategy, ticker)
 
+            # Try to get actual entry date from Alpaca order history
+            actual_entry_date = account_broker_data.get_position_entry_date(ticker)
+            if actual_entry_date:
+                print(f"   📅 {ticker}: Found original entry date: {actual_entry_date.strftime('%Y-%m-%d')}")
+            else:
+                actual_entry_date = current_date
+                print(f"   ⚠️ {ticker}: Could not find entry date, using current date")
+
             position_monitor.track_position(
                 ticker=ticker,
                 entry_date=current_date,

@@ -12,7 +12,7 @@ IMPORTANT: This module bypasses Lumibot for position data when needed,
 calling Alpaca's REST API directly to get accurate entry prices.
 """
 
-from datetime import time, date
+from datetime import time, date, datetime
 from typing import Any, Tuple, Dict, Optional
 import os
 import pytz
@@ -730,3 +730,58 @@ def get_cash_balance(strategy):
     except Exception as e:
         print(f"[BROKER] Failed to get Alpaca cash, falling back to Lumibot: {e}")
         return strategy.get_cash()
+
+
+def get_position_entry_date(ticker: str) -> Optional[datetime]:
+    """
+    Get the original entry date for a position from Alpaca order history.
+
+    Looks for the earliest filled BUY order for this ticker.
+
+    Args:
+        ticker: Stock symbol
+
+    Returns:
+        datetime: Entry date or None if not found
+    """
+    if Config.BACKTESTING:
+        return None
+
+    try:
+        from alpaca.trading.client import TradingClient
+        from alpaca.trading.requests import GetOrdersRequest
+        from alpaca.trading.enums import OrderSide, OrderStatus, QueryOrderStatus
+        import os
+
+        client = TradingClient(
+            api_key=os.getenv('ALPACA_API_KEY'),
+            secret_key=os.getenv('ALPACA_SECRET_KEY'),
+            paper=os.getenv('ALPACA_PAPER', 'true').lower() == 'true'
+        )
+
+        # Get filled orders for this ticker
+        request = GetOrdersRequest(
+            status=QueryOrderStatus.CLOSED,
+            symbols=[ticker.upper()],
+            limit=100
+        )
+
+        orders = client.get_orders(filter=request)
+
+        # Find earliest filled BUY order
+        buy_orders = [
+            o for o in orders
+            if o.side == OrderSide.BUY and o.status == OrderStatus.FILLED
+        ]
+
+        if buy_orders:
+            # Sort by filled_at ascending to get earliest
+            buy_orders.sort(key=lambda o: o.filled_at or o.submitted_at)
+            earliest = buy_orders[0]
+            return earliest.filled_at or earliest.submitted_at
+
+        return None
+
+    except Exception as e:
+        print(f"[BROKER] Error getting entry date for {ticker}: {e}")
+        return None
