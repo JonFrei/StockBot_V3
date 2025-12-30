@@ -495,15 +495,15 @@ class Database:
                         add_count = EXCLUDED.add_count,
                         updated_at = CURRENT_TIMESTAMP
                 """, (
-                        ticker, entry_date, entry_signal, entry_score,
-                        float(entry_price) if entry_price is not None else None,
-                        float(initial_stop) if initial_stop is not None else None,
-                        float(current_stop) if current_stop is not None else None,
-                        float(R) if R is not None else None,
-                        float(entry_atr) if entry_atr is not None else None,
-                        float(highest_close) if highest_close is not None else None,
-                        phase, bars_below_ema50, partial_taken, add_count
-                    ))
+                    ticker, entry_date, entry_signal, entry_score,
+                    float(entry_price) if entry_price is not None else None,
+                    float(initial_stop) if initial_stop is not None else None,
+                    float(current_stop) if current_stop is not None else None,
+                    float(R) if R is not None else None,
+                    float(entry_atr) if entry_atr is not None else None,
+                    float(highest_close) if highest_close is not None else None,
+                    phase, bars_below_ema50, partial_taken, add_count
+                ))
                 conn.commit()
             finally:
                 cursor.close()
@@ -555,7 +555,6 @@ class Database:
         except Exception as e:
             print(f"[DATABASE] Error getting position metadata for {ticker}: {e}")
             return None
-
 
     def get_all_position_metadata(self):
         """Get all position metadata"""
@@ -1016,6 +1015,32 @@ class Database:
             self._retry_operation(_update)
         except Exception as e:
             print(f"[DATABASE] Error updating bot state: {e}")
+
+    def delete_stale_position_metadata(self, current_tickers):
+        """Delete position metadata for tickers no longer in current positions"""
+
+        def _delete_stale():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                if current_tickers:
+                    placeholders = ','.join(['%s'] * len(current_tickers))
+                    cursor.execute(f"""
+                        DELETE FROM position_metadata 
+                        WHERE ticker NOT IN ({placeholders})
+                    """, tuple(current_tickers))
+                else:
+                    # No current positions - clear all
+                    cursor.execute("DELETE FROM position_metadata")
+                conn.commit()
+                cursor.close()
+            finally:
+                self.return_connection(conn)
+
+        try:
+            self._retry_operation(_delete_stale)
+        except Exception as e:
+            print(f"[DATABASE] Error deleting stale position metadata: {e}")
 
     def close_pool(self):
         """Close all connections in pool"""

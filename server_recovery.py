@@ -192,7 +192,7 @@ class StatePersistence:
         """Save to PostgreSQL using database class methods"""
 
         # Save position metadata using class methods
-        self.db.clear_all_position_metadata()
+        current_tickers = set(strategy.position_monitor.positions_metadata.keys())
         for ticker, meta in strategy.position_monitor.positions_metadata.items():
             self.db.upsert_position_metadata(
                 ticker=ticker,
@@ -210,6 +210,8 @@ class StatePersistence:
                 partial_taken=meta.get('partial_taken', False),
                 add_count=meta.get('add_count', 0)
             )
+
+        self.db.delete_stale_position_metadata(current_tickers)
 
         # Save rotation state
         if hasattr(strategy, 'stock_rotator') and strategy.stock_rotator:
