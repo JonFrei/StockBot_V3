@@ -111,7 +111,8 @@ def main():
                     "tickers": swing_tickers
                 },
                 benchmark_asset='SPY',
-                config=ALPACA_CONFIG
+                config=ALPACA_CONFIG,
+                budget=100000
             )
 
         except Exception as backtest_error:

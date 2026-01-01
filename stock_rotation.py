@@ -39,11 +39,11 @@ class RotationConfig:
 
     # Position size multipliers
     MULTIPLIERS = {
-        'premium': 1.5,
-        'active': 1.0,
-        'probation': 0.5,
-        'rehabilitation': 0.25,
-        'frozen': 0.1
+        'premium': 1.25,  # 1.5
+        'active': 1.0,  # 1.0
+        'probation': 0.75,  # 0.5
+        'rehabilitation': 0.5,  # 0.25
+        'frozen': 0.1  # 0.1
     }
 
 
@@ -220,10 +220,18 @@ class StockRotator:
         # =================================================================
         # PREMIUM EVALUATION (from Active only)
         # =================================================================
+        # if current_tier == 'active':
+        #    if self._qualifies_for_premium(state):
+        #        new_tier = 'premium'
+        #        reason = f"Premium: {state.total_trades} trades, {state.get_win_rate():.0f}% WR, PF {state.get_profit_factor():.1f}"
+
         if current_tier == 'active':
             if self._qualifies_for_premium(state):
                 new_tier = 'premium'
                 reason = f"Premium: {state.total_trades} trades, {state.get_win_rate():.0f}% WR, PF {state.get_profit_factor():.1f}"
+            elif self._should_demote_to_probation(state):
+                new_tier = 'probation'
+                reason = self._get_probation_reason(state)
 
         # =================================================================
         # PREMIUM DEMOTION (loses premium status)
@@ -241,10 +249,10 @@ class StockRotator:
         # =================================================================
         # ACTIVE → PROBATION
         # =================================================================
-        elif current_tier == 'active':
-            if self._should_demote_to_probation(state):
-                new_tier = 'probation'
-                reason = self._get_probation_reason(state)
+        # elif current_tier == 'active':
+        #     if self._should_demote_to_probation(state):
+        #         new_tier = 'probation'
+        #         reason = self._get_probation_reason(state)
 
         # =================================================================
         # PROBATION TRANSITIONS
@@ -292,10 +300,10 @@ class StockRotator:
     def _qualifies_for_premium(self, state):
         """Check if ticker qualifies for premium tier"""
         return (
-            state.total_trades >= RotationConfig.PREMIUM_MIN_TRADES and
-            state.get_win_rate() >= RotationConfig.PREMIUM_WIN_RATE and
-            state.total_pnl > 0 and
-            state.get_profit_factor() >= RotationConfig.PREMIUM_MIN_PROFIT_FACTOR
+                state.total_trades >= RotationConfig.PREMIUM_MIN_TRADES and
+                state.get_win_rate() >= RotationConfig.PREMIUM_WIN_RATE and
+                state.total_pnl > 0 and
+                state.get_profit_factor() >= RotationConfig.PREMIUM_MIN_PROFIT_FACTOR
         )
 
     def _should_demote_to_probation(self, state):
@@ -306,8 +314,8 @@ class StockRotator:
 
         # Trigger 2: Pattern of poor performance
         if (state.total_trades >= RotationConfig.PROBATION_MIN_TRADES and
-            state.total_pnl < 0 and
-            state.get_win_rate() < RotationConfig.PROBATION_MAX_WIN_RATE):
+                state.total_pnl < 0 and
+                state.get_win_rate() < RotationConfig.PROBATION_MAX_WIN_RATE):
             return True
 
         return False
@@ -435,7 +443,8 @@ class StockRotator:
         print(f"   🥇 Premium ({tier_counts['premium']}): {', '.join(tier_tickers['premium'][:5]) or 'None'}")
         print(f"   🥈 Active ({tier_counts['active']}): {len(tier_tickers['active'])} stocks")
         print(f"   ⚠️  Probation ({tier_counts['probation']}): {', '.join(tier_tickers['probation'][:5]) or 'None'}")
-        print(f"   🔄 Rehab ({tier_counts['rehabilitation']}): {', '.join(tier_tickers['rehabilitation'][:5]) or 'None'}")
+        print(
+            f"   🔄 Rehab ({tier_counts['rehabilitation']}): {', '.join(tier_tickers['rehabilitation'][:5]) or 'None'}")
         print(f"   ❄️  Frozen ({tier_counts['frozen']}): {', '.join(tier_tickers['frozen'][:5]) or 'None'}")
 
     def get_statistics(self):
