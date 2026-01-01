@@ -15,6 +15,7 @@ from config import Config
 # =============================================================================
 # BACKTEST CASH TRACKER
 # =============================================================================
+'''
 _backtest_cash_tracker = {
     'initialized': False,
     'iteration_start_cash': 0.0,
@@ -53,7 +54,7 @@ def get_tracked_cash():
                 + _backtest_cash_tracker['sell_adjustments'])
     return None
 
-'''
+
 def debug_cash_state(label="", strategy=None):
     
     if Config.BACKTESTING:
@@ -72,7 +73,7 @@ def debug_cash_state(label="", strategy=None):
                 discrepancy = lumibot_cash - tracked
                 if abs(discrepancy) > 1:
                     print(f"   ⚠️ DISCREPANCY: ${discrepancy:,.2f}")
-'''
+
 
 def validate_end_of_day_cash(strategy):
     """Call at end of iteration to detect cash tracking drift"""
@@ -88,7 +89,7 @@ def validate_end_of_day_cash(strategy):
 
         if abs(discrepancy) > 100:
             print(f"   ⚠️ SIGNIFICANT DRIFT DETECTED")
-
+'''
 
 # =============================================================================
 # CONFIGURATION
@@ -97,12 +98,12 @@ def validate_end_of_day_cash(strategy):
 class SimplifiedSizingConfig:
     """Position sizing configuration"""
     BASE_POSITION_PCT = 18.0
-    MAX_POSITION_PCT = 25.0
+    MAX_POSITION_PCT = 20.0
     MAX_TOTAL_POSITIONS = 30
     MIN_CASH_RESERVE_PCT = 10.0
 
     MAX_CASH_DEPLOYMENT_PCT = 85.0
-    MAX_DAILY_DEPLOYMENT_PCT = 70.0
+    MAX_DAILY_DEPLOYMENT_PCT = 80.0
     MAX_SINGLE_POSITION_PCT = 20.0
 
 
@@ -209,7 +210,8 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
         try:
             ticker = opp['ticker']
             data = opp['data']
-            current_price = data['close']
+            # current_price = data['close']
+            current_price = strategy.get_last_price(ticker)
             rotation_mult = opp.get('rotation_mult', 1.0)
 
             # Apply rotation multiplier FIRST to get tier-adjusted position size
@@ -370,8 +372,9 @@ def create_portfolio_context(strategy):
         '''
 
     # Use tracked cash for backtesting, Alpaca for live
-    if Config.BACKTESTING and _backtest_cash_tracker['initialized']:
-        cash_balance = get_tracked_cash()
+    if Config.BACKTESTING:
+        # cash_balance = get_tracked_cash()
+        cash_balance = strategy.get_cash()
         '''
         print(f"[CASH DEBUG] Using tracked cash: ${cash_balance:,.2f}")
         '''

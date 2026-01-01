@@ -19,6 +19,8 @@ import stock_signals
 import stock_position_sizing
 import account_profit_tracking
 import stock_position_monitoring
+import stock_entries
+
 from stock_rotation import StockRotator, should_rotate
 
 from server_recovery import save_state_safe, load_state_safe, repair_incomplete_position_metadata
@@ -356,6 +358,7 @@ class EntryFilterConfig:
     # Minimum volume confirmation
     MIN_VOLUME_RATIO = 1.0  # At least average volume
 
+
 class SwingTradeStrategy(Strategy):
 
     def initialize(self, send_emails=True):
@@ -420,6 +423,14 @@ class SwingTradeStrategy(Strategy):
         except Exception as e:
             print(f"⚠️ Startup position sync failed: {e}")
 
+    def on_filled_order(self, position, order, price, quantity, multiplier):
+        if Config.BACKTESTING:
+            if order.side == 'buy':
+                print(f"[FILL] BUY {order.symbol}: {quantity} @ ${price:.2f} = ${quantity * price:,.2f}")
+            else:
+                print(f"[FILL] SELL {order.symbol}: {quantity} @ ${price:.2f} = ${quantity * price:,.2f}")
+            print(f"[FILL] Lumibot cash after fill: ${self.get_cash():,.2f}")
+
     def on_trading_iteration(self):
         import account_email_notifications
         execution_tracker = account_email_notifications.ExecutionTracker()
@@ -437,9 +448,6 @@ class SwingTradeStrategy(Strategy):
             if db.get_bot_paused():
                 print("[DASHBOARD] Bot paused by user via dashboard. Skipping iteration.")
                 return
-
-        #if Config.BACKTESTING:
-        #    stock_position_sizing.sync_backtest_cash_start_of_day()  # No parameter needed
 
         try:
             # === MARKET OPEN CHECK (Live Only) ===
@@ -471,21 +479,16 @@ class SwingTradeStrategy(Strategy):
 
             # Use tracked cash for backtesting display
             if Config.BACKTESTING:
-                stock_position_sizing.sync_backtest_cash_start_of_day(self)
-                tracked_cash = stock_position_sizing.get_tracked_cash()
-                display_cash = tracked_cash if tracked_cash is not None else self.get_cash()
+                display_cash = self.get_cash()
             else:
                 display_cash = self.get_cash()
             summary.set_context(current_date, self.portfolio_value, display_cash)
 
-            # if Config.BACKTESTING:
-            #    stock_position_sizing.sync_backtest_cash_start_of_day()
             # =============================================================
             # REFRESH ALPACA POSITION CACHE (Direct API)
             # =============================================================
             if not Config.BACKTESTING:
                 account_broker_data.refresh_position_cache()
-
             # =============================================================
             # DAILY POSITION SYNC (Broker is Source of Truth)
             # =============================================================
@@ -599,8 +602,8 @@ class SwingTradeStrategy(Strategy):
                                 exit_count += 1
 
                                 # Update backtest cash tracker
-                                if Config.BACKTESTING:
-                                    stock_position_sizing.update_backtest_cash_for_sell(qty * current_price)
+                                # if Config.BACKTESTING:
+                                #     stock_position_sizing.update_backtest_cash_for_sell(qty * current_price)
 
                             except Exception as e:
                                 summary.add_error(f"{exit_signal} {ticker} failed: {e}")
@@ -620,8 +623,8 @@ class SwingTradeStrategy(Strategy):
                     if not Config.BACKTESTING:
                         account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
 
-                    if Config.BACKTESTING:
-                        stock_position_sizing.validate_end_of_day_cash(self)
+                    # if Config.BACKTESTING:
+                    #     stock_position_sizing.validate_end_of_day_cash(self)
 
                     update_end_of_day_metrics(self, current_date, self._current_regime_result)
                     save_state_safe(self)
@@ -779,18 +782,27 @@ class SwingTradeStrategy(Strategy):
                         continue
 
                     # Relative strength filter
+                    '''
                     raw_df = data.get('raw')
                     if raw_df is not None and len(raw_df) >= 20:
                         try:
-                            stock_current = data['close']
+                            # stock_current = data['close']
+                            stock_current = self.get_last_price(ticker)
                             stock_past = float(raw_df['close'].iloc[-21]) if len(raw_df) >= 21 else float(
                                 raw_df['close'].iloc[0])
-                            rs_result = self.regime_detector.check_relative_strength(stock_current, stock_past)
+                            spy_current = all_stock_data.get('SPY', {}).get('indicators', {}).get('close', 0)
+                            spy_raw = all_stock_data.get('SPY', {}).get('raw')
+                            spy_past = float(spy_raw['close'].iloc[-21]) if spy_raw is not None and len(
+                                spy_raw) >= 21 else None
+                            
+                            rs_result = stock_entries.check_relative_strength(stock_current, stock_past, spy_current,
+                                                                              spy_past)
                             if not rs_result['passes']:
                                 summary.add_skip(ticker, f"Weak RS: {rs_result['relative_strength']:+.1f}%")
                                 continue
                         except:
                             pass
+                    '''
 
                     # 200 SMA trend filter - only buy stocks in uptrends with rising 200 SMA
                     sma200 = data.get('sma200', 0)
@@ -1007,22 +1019,41 @@ class SwingTradeStrategy(Strategy):
                     quantity = alloc['quantity']
                     cost = alloc['cost']
                     price = alloc['price']
+                    sizing_price = alloc['price']
                     signal_type = alloc['signal_type']
                     signal_score = alloc['signal_score']
                     rotation_mult = alloc.get('rotation_mult', 1.0)
 
                     # Check 1: Would this buy exceed daily deployment limit?
-                    '''
-                    if daily_spent + cost > max_deployment:
+                    # Get actual current price and validate against sizing price
+                    actual_price = self.get_last_price(ticker)
+                    actual_cost = quantity * actual_price
+
+                    # Check for price discrepancy (>10% difference suggests bad data)
+                    if abs(actual_price - sizing_price) / sizing_price > 0.10:
                         summary.add_warning(
-                            f"Skipped {ticker}: exceeds daily limit (${daily_spent:,.0f} + ${cost:,.0f} > ${max_deployment:,.0f})")
+                            f"Skipped {ticker}: price mismatch (sized @ ${sizing_price:.2f}, actual ${actual_price:.2f})")
                         continue
-                    '''
+
+                    # Check against actual available cash
+                    available_cash = self.get_cash()
+                    min_reserve = self.portfolio_value * (
+                                stock_position_sizing.SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100)
+                    if (available_cash - actual_cost) < min_reserve:
+                        summary.add_warning(
+                            f"Skipped {ticker}: insufficient cash (${available_cash:,.0f} - ${actual_cost:,.0f} < ${min_reserve:,.0f} reserve)")
+                        continue
+
+                    # Use actual price/cost for logging
+                    price = actual_price
+                    cost = actual_cost
+
                     # Check 2: Do we have enough actual cash?
                     if Config.BACKTESTING:
-                        available_cash = stock_position_sizing.get_tracked_cash()
+                        # available_cash = stock_position_sizing.get_tracked_cash()
+                        available_cash = self.get_cash()
                         min_reserve = self.portfolio_value * (
-                                    stock_position_sizing.SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100)
+                                stock_position_sizing.SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100)
                         if available_cash is None or (available_cash - cost) < min_reserve:
                             summary.add_warning(
                                 f"Skipped {ticker}: insufficient cash (${available_cash:,.0f} - ${cost:,.0f} < ${min_reserve:,.0f} reserve)")
@@ -1065,12 +1096,12 @@ class SwingTradeStrategy(Strategy):
                     # Track spending
                     daily_spent += cost
 
-                    if Config.BACKTESTING:
-                        stock_position_sizing.update_backtest_cash_for_buy(cost)
-                        '''
-                        print(f"[BUY DEBUG] Bought {ticker}: ${cost:,.2f} | Daily spent: ${daily_spent:,.2f}")
-                        stock_position_sizing.debug_cash_state(f"After buying {ticker}")
-                        '''
+                    # if Config.BACKTESTING:
+                    #     stock_position_sizing.update_backtest_cash_for_buy(cost)
+                    '''
+                    print(f"[BUY DEBUG] Bought {ticker}: ${cost:,.2f} | Daily spent: ${daily_spent:,.2f}")
+                    stock_position_sizing.debug_cash_state(f"After buying {ticker}")
+                    '''
 
                     # Record stock as traded today (live trading only)
                     if not Config.BACKTESTING:
