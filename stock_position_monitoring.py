@@ -782,7 +782,13 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         data = all_stock_data[ticker]['indicators']
         raw_df = all_stock_data[ticker].get('raw')
 
-        current_price = data.get('close', 0)
+        try:
+            current_price = strategy.get_last_price(ticker)
+        except:
+            current_price = data.get('close', 0)
+
+        if current_price <= 0:
+            current_price = data.get('close', 0)
         if current_price <= 0:
             continue
 

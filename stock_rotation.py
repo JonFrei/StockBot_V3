@@ -41,7 +41,7 @@ class RotationConfig:
     MULTIPLIERS = {
         'premium': 1.25,  # 1.5
         'active': 1.0,  # 1.0
-        'probation': 0.75,  # 0.5
+        'probation': 1.0,  # 0.5
         'rehabilitation': 0.75,  # 0.25
         'frozen': 0.5  # 0.1
     }
