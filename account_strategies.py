@@ -212,12 +212,11 @@ def sync_positions_with_broker(strategy, current_date, position_monitor, all_sto
                 print(f"      Verification: {verification['reason']} (confidence: {verification['confidence']})")
 
                 if verification['should_adjust']:
-                    # Use the ratio from verification (may differ from our calculation)
                     adjustment_ratio = verification['ratio_to_use']
 
                     meta = position_monitor.positions_metadata[ticker]
 
-                    # Store old values for logging
+                    # Store old values for logging and tracking
                     old_entry = meta.get('entry_price', 0)
                     old_stop = meta.get('current_stop', 0)
                     old_R = meta.get('R', 0)
@@ -228,6 +227,21 @@ def sync_positions_with_broker(strategy, current_date, position_monitor, all_sto
                     # Adjust all other price-based fields
                     account_broker_data.adjust_position_metadata_for_split(meta, adjustment_ratio)
 
+                    # Record split for reporting
+                    account_broker_data.split_tracker.record_split(
+                        ticker=ticker,
+                        split_type=split_type,
+                        ratio=adjustment_ratio,
+                        old_entry=old_entry,
+                        new_entry=broker_entry,
+                        confidence=verification['confidence'],
+                        date=current_date,
+                        old_stop=old_stop,
+                        new_stop=meta.get('current_stop'),
+                        old_R=old_R,
+                        new_R=meta.get('R')
+                    )
+
                     result['splits_adjusted'].append({
                         'ticker': ticker,
                         'split_type': split_type,
@@ -237,16 +251,7 @@ def sync_positions_with_broker(strategy, current_date, position_monitor, all_sto
                         'confidence': verification['confidence']
                     })
 
-                    confidence_emoji = '✅' if verification['confidence'] == 'high' else '⚠️'
-                    print(f"   {confidence_emoji} {ticker}: Adjusted for {split_type} split")
-                    print(f"      Entry: ${old_entry:.2f} → ${broker_entry:.2f}")
-                    if old_stop > 0:
-                        print(f"      Stop: ${old_stop:.2f} → ${meta.get('current_stop', 0):.2f}")
-                    if old_R > 0:
-                        print(f"      R: ${old_R:.2f} → ${meta.get('R', 0):.2f}")
-
                 else:
-                    # Split not confirmed - flag for review
                     print(f"   ❓ {ticker}: Price discrepancy not confirmed as split")
                     result['unverified_discrepancies'].append({
                         'ticker': ticker,
@@ -504,6 +509,9 @@ class SwingTradeStrategy(Strategy):
 
         # Now set the profit_tracker reference in rotator
         self.stock_rotator.profit_tracker = self.profit_tracker
+
+        # Clear split tracker at start of new session
+        account_broker_data.split_tracker.clear()
 
         self.order_logger = account_profit_tracking.OrderLogger(self)
         self._current_regime_result = None  # Store for metrics tracking

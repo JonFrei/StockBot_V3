@@ -27,6 +27,8 @@ import os
 from datetime import datetime
 from config import Config
 import traceback
+import account_broker_data
+import pytz
 
 
 # =============================================================================
@@ -425,6 +427,18 @@ def send_daily_summary_email(strategy, current_date, execution_tracker=None):
     if Config.BACKTESTING:
         return
 
+    # Only send after market close
+    if not is_after_market_close(current_date):
+        print(f"[EMAIL] Skipping email - market still open. Will send after 4:00 PM EST.")
+        return
+
+    # Check if we already sent today's email (prevent duplicates)
+    if hasattr(strategy, '_last_email_date'):
+        current_date_only = current_date.date() if hasattr(current_date, 'date') else current_date
+        if strategy._last_email_date == current_date_only:
+            print(f"[EMAIL] Daily email already sent for {current_date_only}")
+            return
+
     print("\n[EMAIL] Preparing daily summary email...")
 
     # Create tracker if not provided
@@ -435,6 +449,11 @@ def send_daily_summary_email(strategy, current_date, execution_tracker=None):
     try:
         # Build email in two sections
         html_body = generate_execution_summary_html(execution_tracker, current_date)
+
+        # ADD: Stock split section if any splits detected
+        if account_broker_data.split_tracker.has_splits():
+            html_body += account_broker_data.split_tracker.generate_html_section()
+
 
         # Try to append detailed summary (best effort)
         try:
@@ -649,6 +668,10 @@ def generate_detailed_summary_html(strategy, current_date):
     # Portfolio Overview (safe)
     portfolio_html = safe_generate_portfolio_section(strategy)
     html += portfolio_html
+
+    # ADD: Stock Splits Section (if any)
+    if account_broker_data.split_tracker.has_splits():
+        html += account_broker_data.split_tracker.generate_html_section()
 
     # Active Positions (safe)
     positions_html = safe_generate_positions_section(strategy)
@@ -1181,6 +1204,20 @@ def generate_crash_notification_html(error_message, error_traceback=None):
 
     return html
 
+
+def is_after_market_close(current_time=None) -> bool:
+    """Check if current time is after market close (4:00 PM EST)."""
+    from datetime import datetime, time
+
+    if current_time is None:
+        eastern = pytz.timezone('US/Eastern')
+        current_time = datetime.now(eastern)
+    elif current_time.tzinfo is None:
+        eastern = pytz.timezone('US/Eastern')
+        current_time = eastern.localize(current_time)
+
+    market_close = time(16, 0)
+    return current_time.time() >= market_close
 
 # =============================================================================
 # POSITION ALERT EMAIL (Legacy - kept for compatibility)

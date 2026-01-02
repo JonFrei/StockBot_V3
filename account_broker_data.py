@@ -261,6 +261,245 @@ def get_position_direct(ticker: str) -> Optional[dict]:
 
 
 # =============================================================================
+# STOCK SPLIT TRACKER
+# =============================================================================
+
+class StockSplitTracker:
+    """
+    Tracks stock splits detected during trading sessions for reporting in:
+    - Backtest final summary
+    - Live trading logs
+    - Daily email notifications
+
+    Usage:
+        from account_broker_data import split_tracker
+
+        # Record a split
+        split_tracker.record_split(
+            ticker='NOW',
+            split_type='forward',
+            ratio=5.0,
+            old_entry=720.00,
+            new_entry=144.00,
+            confidence='high',
+            date=current_date
+        )
+
+        # Get all splits for reporting
+        splits = split_tracker.get_splits()
+
+        # Clear at start of new session/backtest
+        split_tracker.clear()
+    """
+
+    def __init__(self):
+        self.splits: list = []
+
+    def record_split(
+            self,
+            ticker: str,
+            split_type: str,
+            ratio: float,
+            old_entry: float,
+            new_entry: float,
+            confidence: str = 'medium',
+            date: datetime = None,
+            old_stop: float = None,
+            new_stop: float = None,
+            old_R: float = None,
+            new_R: float = None
+    ):
+        """
+        Record a detected stock split.
+
+        Args:
+            ticker: Stock symbol
+            split_type: 'forward' or 'reverse'
+            ratio: Split ratio (e.g., 5.0 for 5:1 forward split)
+            old_entry: Entry price before adjustment
+            new_entry: Entry price after adjustment
+            confidence: 'high', 'medium', or 'low'
+            date: Date split was detected
+            old_stop: Stop price before adjustment (optional)
+            new_stop: Stop price after adjustment (optional)
+            old_R: R value before adjustment (optional)
+            new_R: R value after adjustment (optional)
+        """
+        split_record = {
+            'ticker': ticker,
+            'split_type': split_type,
+            'ratio': ratio,
+            'old_entry': old_entry,
+            'new_entry': new_entry,
+            'confidence': confidence,
+            'date': date or datetime.now(),
+            'old_stop': old_stop,
+            'new_stop': new_stop,
+            'old_R': old_R,
+            'new_R': new_R,
+            'display_ratio': format_split_ratio(ratio)
+        }
+
+        self.splits.append(split_record)
+
+        # Log immediately for live trading
+        self._log_split(split_record)
+
+    def _log_split(self, split: dict):
+        """Log split detection to console"""
+        confidence_emoji = {
+            'high': '✅',
+            'medium': '⚠️',
+            'low': '❓'
+        }.get(split['confidence'], '❓')
+
+        print(f"\n{'=' * 60}")
+        print(f"🔄 STOCK SPLIT DETECTED")
+        print(f"{'=' * 60}")
+        print(f"   Ticker: {split['ticker']}")
+        print(f"   Type: {split['split_type'].upper()} SPLIT ({split['display_ratio']})")
+        print(f"   Confidence: {confidence_emoji} {split['confidence'].upper()}")
+        print(f"   Entry Price: ${split['old_entry']:.2f} → ${split['new_entry']:.2f}")
+
+        if split.get('old_stop') and split.get('new_stop'):
+            print(f"   Stop Price: ${split['old_stop']:.2f} → ${split['new_stop']:.2f}")
+
+        if split.get('old_R') and split.get('new_R'):
+            print(f"   R Value: ${split['old_R']:.2f} → ${split['new_R']:.2f}")
+
+        if split['date']:
+            print(f"   Date: {split['date'].strftime('%Y-%m-%d %H:%M')}")
+        print(f"{'=' * 60}\n")
+
+    def get_splits(self) -> list:
+        """Get all recorded splits"""
+        return self.splits.copy()
+
+    def get_splits_for_date(self, date: datetime) -> list:
+        """Get splits detected on a specific date"""
+        target_date = date.date() if hasattr(date, 'date') else date
+        return [
+            s for s in self.splits
+            if s['date'] and s['date'].date() == target_date
+        ]
+
+    def get_split_count(self) -> int:
+        """Get total number of splits detected"""
+        return len(self.splits)
+
+    def get_splits_by_type(self) -> dict:
+        """Get splits grouped by type"""
+        forward = [s for s in self.splits if s['split_type'] == 'forward']
+        reverse = [s for s in self.splits if s['split_type'] == 'reverse']
+        return {'forward': forward, 'reverse': reverse}
+
+    def has_splits(self) -> bool:
+        """Check if any splits were detected"""
+        return len(self.splits) > 0
+
+    def clear(self):
+        """Clear all recorded splits (call at start of new session)"""
+        self.splits = []
+
+    def get_summary_text(self) -> str:
+        """Get text summary for logging"""
+        if not self.splits:
+            return "No stock splits detected."
+
+        lines = [
+            f"Stock Splits Detected: {len(self.splits)}",
+            "-" * 40
+        ]
+
+        for split in self.splits:
+            conf_emoji = '✅' if split['confidence'] == 'high' else '⚠️'
+            lines.append(
+                f"  {conf_emoji} {split['ticker']}: {split['split_type']} {split['display_ratio']} "
+                f"(${split['old_entry']:.2f} → ${split['new_entry']:.2f})"
+            )
+
+        return "\n".join(lines)
+
+    def generate_html_section(self) -> str:
+        """Generate HTML for email/report"""
+        if not self.splits:
+            return ""
+
+        html = """
+        <div class="split-section" style="margin: 20px 0; padding: 15px; background-color: #fff3cd; border-left: 5px solid #ffc107; border-radius: 4px;">
+            <h3 style="margin-top: 0; color: #856404;">🔄 Stock Splits Detected</h3>
+            <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+                <tr style="background-color: #ffeaa7;">
+                    <th style="padding: 8px; text-align: left; border-bottom: 2px solid #856404;">Ticker</th>
+                    <th style="padding: 8px; text-align: left; border-bottom: 2px solid #856404;">Type</th>
+                    <th style="padding: 8px; text-align: left; border-bottom: 2px solid #856404;">Ratio</th>
+                    <th style="padding: 8px; text-align: right; border-bottom: 2px solid #856404;">Old Entry</th>
+                    <th style="padding: 8px; text-align: right; border-bottom: 2px solid #856404;">New Entry</th>
+                    <th style="padding: 8px; text-align: center; border-bottom: 2px solid #856404;">Confidence</th>
+                </tr>
+        """
+
+        for split in self.splits:
+            conf_emoji = '✅' if split['confidence'] == 'high' else ('⚠️' if split['confidence'] == 'medium' else '❓')
+            type_emoji = '📈' if split['split_type'] == 'forward' else '📉'
+
+            html += f"""
+                <tr>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd;"><strong>{split['ticker']}</strong></td>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd;">{type_emoji} {split['split_type'].capitalize()}</td>
+                    <td style="padding: 8px; border-bottom: 1px solid #ddd;">{split['display_ratio']}</td>
+                    <td style="padding: 8px; text-align: right; border-bottom: 1px solid #ddd;">${split['old_entry']:,.2f}</td>
+                    <td style="padding: 8px; text-align: right; border-bottom: 1px solid #ddd;">${split['new_entry']:,.2f}</td>
+                    <td style="padding: 8px; text-align: center; border-bottom: 1px solid #ddd;">{conf_emoji} {split['confidence'].capitalize()}</td>
+                </tr>
+            """
+
+        html += """
+            </table>
+            <p style="margin-top: 10px; font-size: 0.9em; color: #856404;">
+                <em>Position metadata (stops, R values) have been automatically adjusted for these splits.</em>
+            </p>
+        </div>
+        """
+
+        return html
+
+    def display_summary(self):
+        """Display stock split summary for final report (backtest)"""
+        if not self.has_splits():
+            return
+
+        splits = self.get_splits()
+        splits_by_type = self.get_splits_by_type()
+
+        print(f"\n{'STOCK SPLITS DETECTED':^100}")
+        print(f"{'-' * 100}")
+        print(f"{'Total Splits':<35} {len(splits):>25}")
+        print(f"{'Forward Splits':<35} {len(splits_by_type['forward']):>25}")
+        print(f"{'Reverse Splits':<35} {len(splits_by_type['reverse']):>25}")
+
+        print(f"\n{'Ticker':<12} {'Type':<10} {'Ratio':<10} {'Old Entry':>15} {'New Entry':>15} {'Confidence':<12}")
+        print(f"{'-' * 100}")
+
+        for split in splits:
+            conf_emoji = '✅' if split['confidence'] == 'high' else ('⚠️' if split['confidence'] == 'medium' else '❓')
+            print(
+                f"{split['ticker']:<12} "
+                f"{split['split_type']:<10} "
+                f"{split['display_ratio']:<10} "
+                f"${split['old_entry']:>14,.2f} "
+                f"${split['new_entry']:>14,.2f} "
+                f"{conf_emoji} {split['confidence']:<10}"
+            )
+
+        print(f"\n{'Note: Position metadata (stops, R values) automatically adjusted':^100}")
+
+
+# Global singleton instance
+split_tracker = StockSplitTracker()
+
+
+# =============================================================================
 # STOCK SPLIT DETECTION AND VERIFICATION
 # =============================================================================
 

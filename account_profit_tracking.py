@@ -14,6 +14,8 @@ from collections import defaultdict
 from database import get_database
 from config import Config
 from psycopg2.extras import RealDictCursor
+import account_broker_data
+
 
 class DailySummary:
     def __init__(self):
@@ -461,6 +463,8 @@ class ProfitTracker:
         self._display_safeguard_summary(regime_detector)
         self._display_recovery_mode_summary(recovery_manager)
 
+        account_broker_data.split_tracker.display_summary()
+
         print(f"{'=' * 100}\n")
 
     def _display_overall_performance(self, closed_trades):
@@ -640,6 +644,26 @@ class ProfitTracker:
             <tr><td>❄️ Frozen:</td><td>{dist.get('frozen', 0)}</td></tr>
             """
 
+        # Stock split summary HTML
+        split_html = ""
+        if account_broker_data.split_tracker.has_splits():
+            splits = account_broker_data.split_tracker.get_splits()
+            split_html = f"""
+            <h3>🔄 Stock Splits ({len(splits)})</h3>
+            <table>
+            """
+            for split in splits:
+                conf_emoji = '✅' if split['confidence'] == 'high' else '⚠️'
+                split_html += f"""
+                <tr>
+                    <td>{split['ticker']}</td>
+                    <td>{split['split_type']} {split['display_ratio']}</td>
+                    <td>${split['old_entry']:.2f} → ${split['new_entry']:.2f}</td>
+                    <td>{conf_emoji}</td>
+                </tr>
+                """
+            split_html += "</table>"
+
         return f"""
         <h3>📈 Performance Summary</h3>
         <table>
@@ -648,6 +672,7 @@ class ProfitTracker:
             <tr><td>Total P&L:</td><td style="color:{pnl_color};font-weight:bold;">${total_realized:+,.2f}</td></tr>
             <tr><td>Recovery Mode Activations:</td><td>{recovery_count}</td></tr>
         </table>
+        {split_html}
         <h3>🏆 Tier Distribution</h3>
         <table>
             {tier_html}
