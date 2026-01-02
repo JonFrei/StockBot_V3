@@ -87,7 +87,7 @@ class ConsecutiveFailureTracker:
         return self.failure_history[-self.threshold:]
 
 
-def sync_positions_with_broker(strategy, current_date, position_monitor):
+def sync_positions_with_broker(strategy, current_date, position_monitor, all_stock_data=None):
     """
     Daily position sync - Broker is source of truth.
 
@@ -100,6 +100,8 @@ def sync_positions_with_broker(strategy, current_date, position_monitor):
         'synced': False,
         'orphaned_adopted': [],
         'stale_removed': [],
+        'splits_adjusted': [],
+        'unverified_discrepancies': [],
         'missing_entry_prices': []
     }
 
@@ -160,7 +162,103 @@ def sync_positions_with_broker(strategy, current_date, position_monitor):
             position_monitor.clean_position_metadata(ticker)
             result['stale_removed'].append(ticker)
 
+        # =====================================================================
+        # === DETECT AND ADJUST FOR STOCK SPLITS (NEW SECTION) ===
+        # =====================================================================
+        for position in broker_positions:
+            ticker = position.symbol
+            if ticker in account_broker_data.SKIP_SYMBOLS:
+                continue
+
+            metadata = position_monitor.get_position_metadata(ticker)
+            if not metadata:
+                continue
+
+            stored_entry = metadata.get('entry_price', 0)
+            broker_entry = account_broker_data.get_broker_entry_price(position, strategy, ticker)
+
+            if stored_entry <= 0 or broker_entry <= 0:
+                continue
+
+            ratio = stored_entry / broker_entry
+
+            # Detect potential split:
+            # - Forward split: ratio > 1.5 (e.g., 2:1=2.0, 5:1=5.0)
+            # - Reverse split: ratio < 0.67 (e.g., 1:2=0.5, 1:10=0.1)
+            is_forward_split = ratio > 1.5
+            is_reverse_split = ratio < 0.67
+
+            if is_forward_split or is_reverse_split:
+                split_type = "forward" if is_forward_split else "reverse"
+                display_ratio = account_broker_data.format_split_ratio(ratio)
+
+                print(f"   🔍 {ticker}: Potential {split_type} split detected (ratio {display_ratio})")
+                print(f"      Stored: ${stored_entry:.2f}, Broker: ${broker_entry:.2f}")
+
+                # Get raw DataFrame for verification (if available)
+                raw_df = None
+                if all_stock_data and ticker in all_stock_data:
+                    raw_df = all_stock_data[ticker].get('raw')
+
+                # Verify the split
+                verification = account_broker_data.verify_split_ratio(
+                    ticker=ticker,
+                    detected_ratio=ratio,
+                    current_date=current_date,
+                    raw_df=raw_df,
+                    is_backtesting=Config.BACKTESTING
+                )
+
+                print(f"      Verification: {verification['reason']} (confidence: {verification['confidence']})")
+
+                if verification['should_adjust']:
+                    # Use the ratio from verification (may differ from our calculation)
+                    adjustment_ratio = verification['ratio_to_use']
+
+                    meta = position_monitor.positions_metadata[ticker]
+
+                    # Store old values for logging
+                    old_entry = meta.get('entry_price', 0)
+                    old_stop = meta.get('current_stop', 0)
+                    old_R = meta.get('R', 0)
+
+                    # Update entry price to broker's value
+                    meta['entry_price'] = broker_entry
+
+                    # Adjust all other price-based fields
+                    account_broker_data.adjust_position_metadata_for_split(meta, adjustment_ratio)
+
+                    result['splits_adjusted'].append({
+                        'ticker': ticker,
+                        'split_type': split_type,
+                        'ratio': adjustment_ratio,
+                        'old_entry': old_entry,
+                        'new_entry': broker_entry,
+                        'confidence': verification['confidence']
+                    })
+
+                    confidence_emoji = '✅' if verification['confidence'] == 'high' else '⚠️'
+                    print(f"   {confidence_emoji} {ticker}: Adjusted for {split_type} split")
+                    print(f"      Entry: ${old_entry:.2f} → ${broker_entry:.2f}")
+                    if old_stop > 0:
+                        print(f"      Stop: ${old_stop:.2f} → ${meta.get('current_stop', 0):.2f}")
+                    if old_R > 0:
+                        print(f"      R: ${old_R:.2f} → ${meta.get('R', 0):.2f}")
+
+                else:
+                    # Split not confirmed - flag for review
+                    print(f"   ❓ {ticker}: Price discrepancy not confirmed as split")
+                    result['unverified_discrepancies'].append({
+                        'ticker': ticker,
+                        'stored_entry': stored_entry,
+                        'broker_entry': broker_entry,
+                        'ratio': ratio,
+                        'reason': verification['reason']
+                    })
+
+        # =======================================
         # === CHECK FOR MISSING ENTRY PRICES ===
+        # =======================================
         for position in broker_positions:
             ticker = position.symbol
             if ticker in account_broker_data.SKIP_SYMBOLS:
@@ -198,9 +296,24 @@ def sync_positions_with_broker(strategy, current_date, position_monitor):
         print(f"\n📋 SYNC SUMMARY:")
         print(f"   Orphaned Adopted: {len(result['orphaned_adopted'])}")
         print(f"   Stale Removed: {len(result['stale_removed'])}")
+        print(f"   Splits Adjusted: {len(result['splits_adjusted'])}")
+
+        if result['splits_adjusted']:
+            for split in result['splits_adjusted']:
+                conf_emoji = '✅' if split['confidence'] == 'high' else '⚠️'
+                print(f"      {conf_emoji} {split['ticker']}: {split['split_type']} "
+                      f"(${split['old_entry']:.2f} → ${split['new_entry']:.2f})")
+
+        if result.get('unverified_discrepancies'):
+            print(f"   ⚠️ Unverified Discrepancies: {len(result['unverified_discrepancies'])}")
+            for disc in result['unverified_discrepancies']:
+                print(f"      ❓ {disc['ticker']}: ratio={disc['ratio']:.2f} - {disc['reason']}")
+
         print(f"   Missing Entry Prices: {len(result['missing_entry_prices'])}")
 
-        if not result['orphaned_adopted'] and not result['stale_removed'] and not result['missing_entry_prices']:
+        if (not result['orphaned_adopted'] and not result['stale_removed'] and
+                not result['splits_adjusted'] and not result.get('unverified_discrepancies') and
+                not result['missing_entry_prices']):
             print(f"   ✅ All positions in sync!")
 
         print(f"{'=' * 60}\n")
@@ -208,7 +321,7 @@ def sync_positions_with_broker(strategy, current_date, position_monitor):
         result['synced'] = True
 
         # Save state if any changes were made
-        if result['orphaned_adopted'] or result['stale_removed']:
+        if result['orphaned_adopted'] or result['stale_removed'] or result['splits_adjusted']:
             save_state_safe(strategy)
 
     except Exception as e:
@@ -489,6 +602,50 @@ class SwingTradeStrategy(Strategy):
             # =============================================================
             if not Config.BACKTESTING:
                 account_broker_data.refresh_position_cache()
+
+            # =============================================================
+            # FETCH MARKET DATA
+            # =============================================================
+            try:
+                all_tickers = list(set(self.tickers + ['SPY']))
+                all_stock_data = stock_data.process_data(all_tickers, current_date)
+
+                if not all_stock_data:
+                    summary.add_error("No stock data available")
+
+                    if not Config.BACKTESTING:
+                        should_pause = self.failure_tracker.record_failure("Stock Data", "No data returned")
+                        if should_pause:
+                            enter_paused_state(self, self.failure_tracker, execution_tracker)
+                            return
+
+                    execution_tracker.complete('FAILED')
+                    summary.print_summary()
+                    return
+
+                # Repair any positions with incomplete metadata (missing stops, R, ATR, etc.)
+                if not Config.BACKTESTING:
+                    repaired = repair_incomplete_position_metadata(
+                        self, self.position_monitor, all_stock_data, current_date
+                    )
+                    if repaired:
+                        print(f"   📝 Repaired metadata for {len(repaired)} position(s)")
+                        save_state_safe(self)
+
+            except Exception as e:
+                summary.add_error(f"Stock data fetch failed: {e}")
+                execution_tracker.add_error("Stock Data", e)
+
+                if not Config.BACKTESTING:
+                    should_pause = self.failure_tracker.record_failure("Stock Data", e)
+                    if should_pause:
+                        enter_paused_state(self, self.failure_tracker, execution_tracker)
+                        return
+
+                execution_tracker.complete('FAILED')
+                summary.print_summary()
+                return
+
             # =============================================================
             # DAILY POSITION SYNC (Broker is Source of Truth)
             # =============================================================
@@ -497,7 +654,8 @@ class SwingTradeStrategy(Strategy):
                     sync_result = sync_positions_with_broker(
                         strategy=self,
                         current_date=current_date,
-                        position_monitor=self.position_monitor
+                        position_monitor=self.position_monitor,
+                        all_stock_data=all_stock_data
                     )
 
                     # Send email if there are missing entry prices
@@ -645,52 +803,8 @@ class SwingTradeStrategy(Strategy):
                 return
 
             # =============================================================
-            # FETCH MARKET DATA
-            # =============================================================
-            try:
-                all_tickers = list(set(self.tickers + ['SPY']))
-                all_stock_data = stock_data.process_data(all_tickers, current_date)
-
-                if not all_stock_data:
-                    summary.add_error("No stock data available")
-
-                    if not Config.BACKTESTING:
-                        should_pause = self.failure_tracker.record_failure("Stock Data", "No data returned")
-                        if should_pause:
-                            enter_paused_state(self, self.failure_tracker, execution_tracker)
-                            return
-
-                    execution_tracker.complete('FAILED')
-                    summary.print_summary()
-                    return
-
-                # Repair any positions with incomplete metadata (missing stops, R, ATR, etc.)
-                if not Config.BACKTESTING:
-                    repaired = repair_incomplete_position_metadata(
-                        self, self.position_monitor, all_stock_data, current_date
-                    )
-                    if repaired:
-                        print(f"   📝 Repaired metadata for {len(repaired)} position(s)")
-                        save_state_safe(self)
-
-            except Exception as e:
-                summary.add_error(f"Stock data fetch failed: {e}")
-                execution_tracker.add_error("Stock Data", e)
-
-                if not Config.BACKTESTING:
-                    should_pause = self.failure_tracker.record_failure("Stock Data", e)
-                    if should_pause:
-                        enter_paused_state(self, self.failure_tracker, execution_tracker)
-                        return
-
-                execution_tracker.complete('FAILED')
-                summary.print_summary()
-                return
-
-            # =============================================================
             # PROCESS EXISTING POSITIONS (Exits)
             # =============================================================
-            exit_orders = []
 
             try:
                 exit_orders = stock_position_monitoring.check_positions_for_exits(

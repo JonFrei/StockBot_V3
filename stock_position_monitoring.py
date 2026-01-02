@@ -785,10 +785,12 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         try:
             current_price = strategy.get_last_price(ticker)
         except:
-            current_price = data.get('close', 0)
+            current_price = 0
 
+            # Fallback to indicator data if get_last_price fails
         if current_price <= 0:
             current_price = data.get('close', 0)
+
         if current_price <= 0:
             continue
 

@@ -7,12 +7,13 @@ Handles:
 - Trading frequency controls
 - Broker position utilities (entry price extraction, validation)
 - Direct Alpaca API integration for reliable position data
+- Stock split detection and verification (forward and reverse)
 
 IMPORTANT: This module bypasses Lumibot for position data when needed,
 calling Alpaca's REST API directly to get accurate entry prices.
 """
 
-from datetime import time, date, datetime
+from datetime import time, date, datetime, timedelta
 from typing import Any, Tuple, Dict, Optional
 import os
 import pytz
@@ -260,6 +261,388 @@ def get_position_direct(ticker: str) -> Optional[dict]:
 
 
 # =============================================================================
+# STOCK SPLIT DETECTION AND VERIFICATION
+# =============================================================================
+
+def detect_split_via_alpaca(ticker: str, current_date: datetime = None, days_back: int = 5) -> dict:
+    """
+    Detect stock splits by comparing raw vs split-adjusted prices from Alpaca.
+
+    This works by fetching the same historical bars with two different adjustments:
+    - 'split' adjustment: prices adjusted for splits
+    - 'raw': original unadjusted prices
+    If these differ, a split occurred.
+
+    Args:
+        ticker: Stock symbol
+        current_date: Reference date (for backtesting). None = use current time.
+        days_back: Days of history to check
+
+    Returns:
+        dict: {
+            'split_detected': bool,
+            'ratio': float or None,
+            'raw_price': float,
+            'adjusted_price': float,
+            'split_type': 'forward' or 'reverse' or None,
+            'error': str or None
+        }
+    """
+    try:
+        from alpaca.data.historical import StockHistoricalDataClient
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame
+
+        client = StockHistoricalDataClient(
+            Config.ALPACA_API_KEY,
+            Config.ALPACA_API_SECRET
+        )
+
+        # Use provided date or current time
+        if current_date:
+            # Handle timezone-aware datetimes
+            if hasattr(current_date, 'tzinfo') and current_date.tzinfo is not None:
+                end_date = current_date.replace(tzinfo=None)
+            else:
+                end_date = current_date
+        else:
+            end_date = datetime.now()
+
+        start_date = end_date - timedelta(days=days_back)
+
+        # Fetch with split adjustment
+        adjusted_request = StockBarsRequest(
+            symbol_or_symbols=ticker,
+            timeframe=TimeFrame.Day,
+            start=start_date,
+            end=end_date,
+            adjustment='split'
+        )
+
+        # Fetch raw (unadjusted)
+        raw_request = StockBarsRequest(
+            symbol_or_symbols=ticker,
+            timeframe=TimeFrame.Day,
+            start=start_date,
+            end=end_date,
+            adjustment='raw'
+        )
+
+        adjusted_bars = client.get_stock_bars(adjusted_request)
+        raw_bars = client.get_stock_bars(raw_request)
+
+        if ticker not in adjusted_bars.data or ticker not in raw_bars.data:
+            return {
+                'split_detected': False,
+                'ratio': None,
+                'error': 'No data returned'
+            }
+
+        if not adjusted_bars.data[ticker] or not raw_bars.data[ticker]:
+            return {
+                'split_detected': False,
+                'ratio': None,
+                'error': 'Empty bar data'
+            }
+
+        # Get most recent bar from each
+        adjusted_close = float(adjusted_bars.data[ticker][-1].close)
+        raw_close = float(raw_bars.data[ticker][-1].close)
+
+        # If they differ significantly, a split occurred
+        if adjusted_close > 0 and raw_close > 0:
+            ratio = raw_close / adjusted_close
+
+            # Threshold: more than 5% difference indicates a split
+            if abs(ratio - 1.0) > 0.05:
+                split_type = 'forward' if ratio > 1.0 else 'reverse'
+                return {
+                    'split_detected': True,
+                    'ratio': ratio,
+                    'raw_price': raw_close,
+                    'adjusted_price': adjusted_close,
+                    'split_type': split_type,
+                    'error': None
+                }
+
+        return {
+            'split_detected': False,
+            'ratio': 1.0,
+            'raw_price': raw_close,
+            'adjusted_price': adjusted_close,
+            'split_type': None,
+            'error': None
+        }
+
+    except Exception as e:
+        print(f"[SPLIT CHECK] Alpaca API error for {ticker}: {e}")
+        return {
+            'split_detected': False,
+            'ratio': None,
+            'error': str(e)
+        }
+
+
+def detect_split_via_dataframe(ticker: str, raw_df, days_back: int = 10) -> dict:
+    """
+    Detect splits using pre-loaded DataFrame (for backtesting).
+
+    Looks for sudden large price gaps that indicate a split.
+    This is less reliable than API comparison but works offline.
+
+    Args:
+        ticker: Stock symbol
+        raw_df: DataFrame with OHLC data (should be split-adjusted)
+        days_back: Days to scan for gaps
+
+    Returns:
+        dict: Split detection result
+    """
+    try:
+        if raw_df is None or len(raw_df) < days_back + 1:
+            return {
+                'split_detected': False,
+                'ratio': None,
+                'error': 'Insufficient data'
+            }
+
+        # Look at recent closes
+        recent_closes = raw_df['close'].tail(days_back + 1).values
+
+        # Check for large overnight gaps (>40% move suggests split)
+        for i in range(1, len(recent_closes)):
+            prev_close = recent_closes[i - 1]
+            curr_close = recent_closes[i]
+
+            if prev_close > 0 and curr_close > 0:
+                ratio = prev_close / curr_close
+
+                # Forward split: price dropped significantly (ratio > 1.4)
+                # Reverse split: price jumped significantly (ratio < 0.7)
+                if ratio > 1.4:
+                    return {
+                        'split_detected': True,
+                        'ratio': ratio,
+                        'split_type': 'forward',
+                        'method': 'price_gap',
+                        'error': None
+                    }
+                elif ratio < 0.7:
+                    return {
+                        'split_detected': True,
+                        'ratio': ratio,
+                        'split_type': 'reverse',
+                        'method': 'price_gap',
+                        'error': None
+                    }
+
+        return {
+            'split_detected': False,
+            'ratio': 1.0,
+            'split_type': None,
+            'error': None
+        }
+
+    except Exception as e:
+        print(f"[SPLIT CHECK] DataFrame analysis error for {ticker}: {e}")
+        return {
+            'split_detected': False,
+            'ratio': None,
+            'error': str(e)
+        }
+
+
+def verify_split_ratio(
+        ticker: str,
+        detected_ratio: float,
+        current_date: datetime = None,
+        raw_df=None,
+        is_backtesting: bool = False
+) -> dict:
+    """
+    Verify detected split ratio using available data sources.
+
+    In live trading: Uses Alpaca API (raw vs adjusted comparison)
+    In backtesting: Uses DataFrame analysis (less reliable, more permissive)
+
+    Args:
+        ticker: Stock symbol
+        detected_ratio: Ratio we calculated (stored_price / broker_price)
+        current_date: Reference date
+        raw_df: DataFrame for backtesting verification
+        is_backtesting: True if running in backtest mode
+
+    Returns:
+        dict: {
+            'verified': bool - was verification attempted successfully
+            'split_confirmed': bool - does evidence support a split
+            'should_adjust': bool - should we apply the adjustment
+            'ratio_to_use': float - the ratio to use for adjustment
+            'confidence': str - 'high', 'medium', 'low'
+            'reason': str - explanation
+        }
+    """
+
+    if is_backtesting:
+        # Backtesting: Use DataFrame analysis as backup, but be more permissive
+        # since we can't reliably call the API in backtest mode
+
+        df_result = detect_split_via_dataframe(ticker, raw_df)
+
+        if df_result.get('split_detected'):
+            df_ratio = df_result['ratio']
+            # Check if ratios are in same ballpark (within 20%)
+            if df_ratio and abs(detected_ratio - df_ratio) / max(detected_ratio, df_ratio) < 0.20:
+                return {
+                    'verified': True,
+                    'split_confirmed': True,
+                    'should_adjust': True,
+                    'ratio_to_use': detected_ratio,  # Use our detected ratio
+                    'confidence': 'medium',
+                    'reason': f'DataFrame gap analysis confirms split (df_ratio={df_ratio:.2f})'
+                }
+
+        # In backtesting, if the ratio is extreme enough, trust it
+        # This handles the NOW case where stored metadata doesn't match split-adjusted data
+        is_forward = detected_ratio > 1.5
+        is_reverse = detected_ratio < 0.67
+
+        if is_forward or is_reverse:
+            return {
+                'verified': True,
+                'split_confirmed': True,
+                'should_adjust': True,
+                'ratio_to_use': detected_ratio,
+                'confidence': 'medium',
+                'reason': f'Backtest mode: ratio {detected_ratio:.2f} strongly suggests split'
+            }
+
+        return {
+            'verified': True,
+            'split_confirmed': False,
+            'should_adjust': False,
+            'ratio_to_use': None,
+            'confidence': 'low',
+            'reason': 'No split evidence in backtest data'
+        }
+
+    else:
+        # Live trading: Use Alpaca API verification
+        alpaca_result = detect_split_via_alpaca(ticker, current_date)
+
+        if alpaca_result.get('error'):
+            # API failed - fall back to ratio-only with lower confidence
+            is_forward = detected_ratio > 1.5
+            is_reverse = detected_ratio < 0.67
+
+            if is_forward or is_reverse:
+                return {
+                    'verified': False,
+                    'split_confirmed': None,
+                    'should_adjust': True,  # Proceed cautiously
+                    'ratio_to_use': detected_ratio,
+                    'confidence': 'low',
+                    'reason': f'API unavailable, proceeding with detected ratio {detected_ratio:.2f}'
+                }
+
+            return {
+                'verified': False,
+                'split_confirmed': False,
+                'should_adjust': False,
+                'ratio_to_use': None,
+                'confidence': 'low',
+                'reason': f'API error: {alpaca_result["error"]}'
+            }
+
+        if not alpaca_result['split_detected']:
+            # Alpaca says no split - don't adjust
+            return {
+                'verified': True,
+                'split_confirmed': False,
+                'should_adjust': False,
+                'ratio_to_use': None,
+                'confidence': 'high',
+                'reason': 'Alpaca raw/adjusted prices match - no split detected'
+            }
+
+        # Alpaca confirms split - verify ratio matches
+        alpaca_ratio = alpaca_result['ratio']
+        tolerance = 0.15  # 15% tolerance
+        ratio_matches = abs(detected_ratio - alpaca_ratio) / alpaca_ratio < tolerance
+
+        if ratio_matches:
+            return {
+                'verified': True,
+                'split_confirmed': True,
+                'should_adjust': True,
+                'ratio_to_use': alpaca_ratio,  # Use Alpaca's more accurate ratio
+                'confidence': 'high',
+                'reason': f'Alpaca confirms {alpaca_result["split_type"]} split (ratio={alpaca_ratio:.2f})'
+            }
+        else:
+            # Split confirmed but ratios differ - use Alpaca's ratio
+            return {
+                'verified': True,
+                'split_confirmed': True,
+                'should_adjust': True,
+                'ratio_to_use': alpaca_ratio,  # Trust Alpaca over our calculation
+                'confidence': 'medium',
+                'reason': f'Split confirmed, using Alpaca ratio {alpaca_ratio:.2f} (detected was {detected_ratio:.2f})'
+            }
+
+
+def format_split_ratio(ratio: float) -> str:
+    """
+    Format split ratio for display.
+
+    Args:
+        ratio: The split ratio (old_price / new_price)
+
+    Returns:
+        str: Human-readable format like "5:1" or "1:10"
+    """
+    if ratio >= 1.0:
+        # Forward split
+        return f"{ratio:.0f}:1"
+    else:
+        # Reverse split
+        return f"1:{1 / ratio:.0f}"
+
+
+def adjust_position_metadata_for_split(meta: dict, ratio: float) -> dict:
+    """
+    Adjust all price-based fields in position metadata for a stock split.
+
+    Args:
+        meta: Position metadata dictionary
+        ratio: Split ratio (old_price / new_price)
+
+    Returns:
+        dict: Updated metadata (also modifies in place)
+    """
+    if ratio <= 0:
+        return meta
+
+    # Adjust all price-based fields
+    if meta.get('initial_stop') and meta['initial_stop'] > 0:
+        meta['initial_stop'] = meta['initial_stop'] / ratio
+
+    if meta.get('current_stop') and meta['current_stop'] > 0:
+        meta['current_stop'] = meta['current_stop'] / ratio
+
+    if meta.get('R') and meta['R'] > 0:
+        meta['R'] = meta['R'] / ratio
+
+    if meta.get('highest_close') and meta['highest_close'] > 0:
+        meta['highest_close'] = meta['highest_close'] / ratio
+
+    if meta.get('entry_atr') and meta['entry_atr'] > 0:
+        meta['entry_atr'] = meta['entry_atr'] / ratio
+
+    return meta
+
+
+# =============================================================================
 # MARKET HOLIDAY FUNCTIONS
 # =============================================================================
 
@@ -268,87 +651,20 @@ def is_market_holiday(check_date) -> bool:
     Check if date is a US market holiday.
 
     Args:
-        check_date: datetime.date object
+        check_date: date or datetime object
 
     Returns:
-        bool: True if holiday, False otherwise
+        bool: True if holiday
     """
-    if check_date.weekday() >= 5:  # Saturday = 5, Sunday = 6
-        return True
+    if hasattr(check_date, 'date'):
+        check_date = check_date.date()
+
     return check_date in US_MARKET_HOLIDAYS_2025
-
-
-# =============================================================================
-# TRADING WINDOW FUNCTIONS
-# =============================================================================
-
-def is_within_trading_window(strategy) -> bool:
-    """
-    Check if current time is within trading window.
-
-    Args:
-        strategy: Lumibot Strategy instance
-
-    Returns:
-        bool: True if within trading window, False otherwise
-    """
-    if Config.BACKTESTING:
-        return True
-
-    try:
-        est = pytz.timezone('US/Eastern')
-        current_datetime_est = strategy.get_datetime().astimezone(est)
-        current_time_est = current_datetime_est.time()
-        current_date = current_datetime_est.date()
-
-        if is_market_holiday(current_date):
-            day_name = current_datetime_est.strftime('%A')
-            print(f"[INFO] Market closed - {day_name}, {current_date} is a holiday/weekend")
-            return False
-
-        is_within = TRADING_START_TIME <= current_time_est <= TRADING_END_TIME
-
-        if not is_within:
-            if current_time_est < TRADING_START_TIME:
-                print(f"[INFO] Before trading window (current: {current_time_est.strftime('%I:%M %p')} EST, "
-                      f"window opens at {TRADING_START_TIME.strftime('%I:%M %p')} EST)")
-            else:
-                print(f"[INFO] After trading window (current: {current_time_est.strftime('%I:%M %p')} EST, "
-                      f"window closed at {TRADING_END_TIME.strftime('%I:%M %p')} EST)")
-
-        return is_within
-
-    except Exception as e:
-        print(f"[WARN] Could not check trading window: {e}")
-        return False
-
-
-def has_traded_today(strategy, last_trade_date) -> bool:
-    """
-    Check if strategy has already traded today.
-
-    Args:
-        strategy: Lumibot Strategy instance
-        last_trade_date: Last date trading occurred (date object)
-
-    Returns:
-        bool: True if already traded today, False otherwise
-    """
-    if Config.BACKTESTING:
-        return False
-
-    current_date = strategy.get_datetime().date()
-
-    if last_trade_date == current_date:
-        print(f"[INFO] Already traded today ({current_date}) - skipping iteration")
-        return True
-
-    return False
 
 
 def get_trading_window_info() -> dict:
     """
-    Get trading window configuration info.
+    Get trading window configuration.
 
     Returns:
         dict: Trading window details
@@ -707,8 +1023,6 @@ def get_cash_balance(strategy):
     In backtesting, Lumibot's get_cash() can be stale within an iteration,
     so we track pending orders ourselves.
     """
-    from config import Config
-
     if Config.BACKTESTING:
         # Use Lumibot's cash for backtesting (handled by pending_exit_orders adjustment)
         return strategy.get_cash()
@@ -716,7 +1030,6 @@ def get_cash_balance(strategy):
     # Live trading: Get directly from Alpaca
     try:
         from alpaca.trading.client import TradingClient
-        import os
 
         client = TradingClient(
             api_key=os.getenv('ALPACA_API_KEY'),
@@ -751,7 +1064,6 @@ def get_position_entry_date(ticker: str) -> Optional[datetime]:
         from alpaca.trading.client import TradingClient
         from alpaca.trading.requests import GetOrdersRequest
         from alpaca.trading.enums import OrderSide, OrderStatus, QueryOrderStatus
-        import os
 
         client = TradingClient(
             api_key=os.getenv('ALPACA_API_KEY'),
@@ -785,3 +1097,22 @@ def get_position_entry_date(ticker: str) -> Optional[datetime]:
     except Exception as e:
         print(f"[BROKER] Error getting entry date for {ticker}: {e}")
         return None
+
+
+# =============================================================================
+# TRADING FREQUENCY CONTROL
+# =============================================================================
+
+def has_traded_today(strategy, last_trade_date) -> bool:
+    """
+    Check if we've already traded today (for backtesting once-per-day).
+
+    Args:
+        strategy: Strategy instance
+        last_trade_date: Date of last trade
+
+    Returns:
+        bool: True if already traded today
+    """
+    current_date = strategy.get_datetime().date()
+    return last_trade_date == current_date
