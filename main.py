@@ -17,8 +17,6 @@ import server_health_check
 # from check_core_transaction import CoreHoldingsStrategy
 from account_strategies import SwingTradeStrategy
 
-import logging
-
 import warnings
 import pandas as pd
 
@@ -36,9 +34,9 @@ logging.getLogger().setLevel(logging.INFO)
 TESTING = os.getenv('BACKTESTING', 'False').lower() == 'true'
 DATA_DIR = os.getenv('DATA_DIR', '/app/data')  # Railway volume mount point
 
-core_tickers = []
-swing_tickers = []
-watch_list = []
+core_tickers = {}
+swing_tickers = {}
+watch_list = {}
 
 try:
     from Utils import load_tickers
@@ -58,6 +56,9 @@ except Exception as e:
 
 ALPACA_CONFIG = Config.get_alpaca_config()
 
+# At module level (after imports)
+health_server = None
+
 
 # ===================================================== #
 
@@ -73,10 +74,16 @@ def setup_data_directory():
 
 def signal_handler(_signum, _frame):
     """Handle shutdown signals gracefully"""
+    global health_server
     print("\n" + "=" * 80)
     print("SHUTDOWN SIGNAL RECEIVED")
     print("=" * 80)
     print("Saving state and shutting down gracefully...")
+
+    if health_server:
+        print("Stopping health check server...")
+        health_server.shutdown()
+
     sys.exit(0)
 
 
@@ -93,6 +100,8 @@ def main():
     setup_data_directory()
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
+
+    global health_server
 
     if Config.BACKTESTING:
         # BACKTESTING
@@ -121,7 +130,8 @@ def main():
     else:
 
         try:
-            server_health_check.start_healthcheck_server()
+            health_server = server_health_check.start_healthcheck_server()
+            # server_health_check.start_healthcheck_server()
 
             # LIVE
             broker = Alpaca(ALPACA_CONFIG)

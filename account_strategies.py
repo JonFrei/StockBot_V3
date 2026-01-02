@@ -35,7 +35,6 @@ from datetime import datetime
 
 broker = Alpaca(Config.get_alpaca_config())
 
-CAUTION_MIN_PROFIT_PCT = 0.0
 CONSECUTIVE_FAILURE_THRESHOLD = 3
 
 
@@ -336,83 +335,6 @@ def sync_positions_with_broker(strategy, current_date, position_monitor, all_sto
         result['synced'] = False
 
     return result
-
-
-'''
-def update_end_of_day_metrics(strategy, current_date, regime_result):
-    """Update daily_metrics and signal_performance tables at end of iteration"""
-    try:
-        from database import get_database
-        from collections import defaultdict
-
-        db = get_database()
-
-        # Gather daily metrics data
-        portfolio_value = strategy.portfolio_value
-        cash_balance = strategy.get_cash()
-        positions = strategy.get_positions()
-        num_positions = len(positions)
-
-        # Calculate unrealized P&L
-        unrealized_pnl = 0
-        for pos in positions:
-            if hasattr(pos, 'unrealized_pl'):
-                unrealized_pnl += float(pos.unrealized_pl or 0)
-
-        # Get today's trades and calculate realized P&L
-        closed_trades = strategy.profit_tracker.get_closed_trades()
-        today_trades = [t for t in closed_trades if
-                        t['exit_date'].date() == current_date.date()] if closed_trades else []
-        num_trades = len(today_trades)
-        realized_pnl = sum(t['pnl_dollars'] for t in today_trades)
-
-        # Calculate overall win rate
-        if closed_trades:
-            winners = [t for t in closed_trades if t['pnl_dollars'] > 0]
-            win_rate = (len(winners) / len(closed_trades)) * 100
-        else:
-            win_rate = 0
-
-        # Get SPY close and regime
-        spy_close = regime_result.get('spy_close', 0) if regime_result else 0
-        market_regime = regime_result.get('action', 'unknown') if regime_result else 'unknown'
-
-        # Save daily metrics
-        db.save_daily_metrics(
-            date=current_date.date(),
-            portfolio_value=portfolio_value,
-            cash_balance=cash_balance,
-            num_positions=num_positions,
-            num_trades=num_trades,
-            realized_pnl=realized_pnl,
-            unrealized_pnl=unrealized_pnl,
-            win_rate=win_rate,
-            spy_close=spy_close,
-            market_regime=market_regime
-        )
-
-        # Update signal performance
-        if closed_trades:
-            signal_stats = defaultdict(lambda: {'trades': 0, 'wins': 0, 'pnl': 0})
-            for trade in closed_trades:
-                signal = trade['entry_signal']
-                signal_stats[signal]['trades'] += 1
-                signal_stats[signal]['pnl'] += trade['pnl_dollars']
-                if trade['pnl_dollars'] > 0:
-                    signal_stats[signal]['wins'] += 1
-
-            for signal_name, stats in signal_stats.items():
-                db.update_signal_performance(
-                    signal_name=signal_name,
-                    total_trades=stats['trades'],
-                    wins=stats['wins'],
-                    total_pnl=stats['pnl']
-                )
-
-    except Exception as e:
-        print(f"[METRICS] Error updating end-of-day metrics: {e}")
-
-'''
 
 
 def enter_paused_state(strategy, failure_tracker, execution_tracker=None):
@@ -767,10 +689,6 @@ class SwingTradeStrategy(Strategy):
                                 self.submit_order(sell_order)
                                 exit_count += 1
 
-                                # Update backtest cash tracker
-                                # if Config.BACKTESTING:
-                                #     stock_position_sizing.update_backtest_cash_for_sell(qty * current_price)
-
                             except Exception as e:
                                 summary.add_error(f"{exit_signal} {ticker} failed: {e}")
 
@@ -903,28 +821,6 @@ class SwingTradeStrategy(Strategy):
                     if not vol_metrics.get('allow_trading', True):
                         continue
 
-                    # Relative strength filter
-                    '''
-                    raw_df = data.get('raw')
-                    if raw_df is not None and len(raw_df) >= 20:
-                        try:
-                            # stock_current = data['close']
-                            stock_current = self.get_last_price(ticker)
-                            stock_past = float(raw_df['close'].iloc[-21]) if len(raw_df) >= 21 else float(
-                                raw_df['close'].iloc[0])
-                            spy_current = all_stock_data.get('SPY', {}).get('indicators', {}).get('close', 0)
-                            spy_raw = all_stock_data.get('SPY', {}).get('raw')
-                            spy_past = float(spy_raw['close'].iloc[-21]) if spy_raw is not None and len(
-                                spy_raw) >= 21 else None
-                            
-                            rs_result = stock_entries.check_relative_strength(stock_current, stock_past, spy_current,
-                                                                              spy_past)
-                            if not rs_result['passes']:
-                                summary.add_skip(ticker, f"Weak RS: {rs_result['relative_strength']:+.1f}%")
-                                continue
-                        except:
-                            pass
-                    '''
 
                     # 200 SMA trend filter - only buy stocks in uptrends with rising 200 SMA
                     sma200 = data.get('sma200', 0)
@@ -955,20 +851,6 @@ class SwingTradeStrategy(Strategy):
                     # UNIVERSAL ENTRY FILTERS (V5)
                     # Catches risk factors that individual signals miss
                     # =============================================================
-                    '''
-                    # Filter 1: Minimum Trend Strength (ADX)
-                    adx = data.get('adx', 0)
-                    if adx < EntryFilterConfig.MIN_ADX:
-                        summary.add_skip(ticker, f"Weak trend: ADX {adx:.1f} < {EntryFilterConfig.MIN_ADX}")
-                        continue
-
-                    # Filter 2: Minimum Volume Confirmation
-                    volume_ratio = data.get('volume_ratio', 0)
-                    if volume_ratio < EntryFilterConfig.MIN_VOLUME_RATIO:
-                        summary.add_skip(ticker,
-                                         f"Low volume: {volume_ratio:.2f}x < {EntryFilterConfig.MIN_VOLUME_RATIO}x")
-                        continue
-                    '''
                     signal_result = self.signal_processor.process_ticker(ticker, data, None)
 
                     if signal_result['action'] == 'buy':
@@ -1217,13 +1099,6 @@ class SwingTradeStrategy(Strategy):
 
                     # Track spending
                     daily_spent += cost
-
-                    # if Config.BACKTESTING:
-                    #     stock_position_sizing.update_backtest_cash_for_buy(cost)
-                    '''
-                    print(f"[BUY DEBUG] Bought {ticker}: ${cost:,.2f} | Daily spent: ${daily_spent:,.2f}")
-                    stock_position_sizing.debug_cash_state(f"After buying {ticker}")
-                    '''
 
                     # Record stock as traded today (live trading only)
                     if not Config.BACKTESTING:

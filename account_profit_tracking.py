@@ -560,19 +560,34 @@ class ProfitTracker:
                 f"   {ticker:<10} {stats['trades']:>3} trades | {win_rate:>5.1f}% WR | ${stats['pnl']:>10,.2f} | Tier: {tier}")
 
     def _display_last_100_trades(self, closed_trades):
-        last_100 = closed_trades[:100]
-        if len(last_100) < 10:
+        last_40 = closed_trades[:40]
+        if len(last_40) < 5:
             return
 
-        winners = [t for t in last_100 if t['pnl_dollars'] > 0]
-        total_pnl = sum(t['pnl_dollars'] for t in last_100)
-        win_rate = (len(winners) / len(last_100) * 100)
+        # Summary stats
+        winners = [t for t in last_40 if t['pnl_dollars'] > 0]
+        total_pnl = sum(t['pnl_dollars'] for t in last_40)
+        win_rate = (len(winners) / len(last_40) * 100)
 
-        print(f"\n{'LAST 100 TRADES':^100}")
+        print(f"\n{'LAST 40 TRADES':^100}")
         print(f"{'-' * 100}")
-        print(f"{'Trades':<35} {len(last_100):>25}")
-        print(f"{'Win Rate':<35} {win_rate:>24.1f}%")
-        print(f"{'Total P&L':<35} ${total_pnl:>24,.2f}")
+        print(
+            f"{'Trades':<20} {len(last_40):>10} | {'Win Rate':<15} {win_rate:>6.1f}% | {'Total P&L':<15} ${total_pnl:>12,.2f}")
+        print(f"{'-' * 100}")
+        print(f"{'Ticker':<10} {' | Entry Signal':<20} {'Entry':>12} {' | Exit Signal':<20} {'Exit':>12} {' | P&L %':>12}")
+        print(f"{'-' * 100}")
+
+        for trade in reversed(last_40):
+            ticker = trade['ticker']
+            entry_signal = trade.get('entry_signal', 'unknown')[:18]
+            exit_signal = trade.get('exit_signal', 'unknown')[:18]
+            entry_price = trade['entry_price']
+            exit_price = trade['exit_price']
+            pnl_pct = trade['pnl_pct']
+
+            pnl_str = f"{pnl_pct:>+.1f}%"
+            print(
+                f"{ticker:<10} | {entry_signal:<20} ${entry_price:>10,.2f} | {exit_signal:<20} ${exit_price:>10,.2f} | {pnl_str:>12}")
 
     def _display_rotation_summary(self, stock_rotator):
         if not stock_rotator:
