@@ -125,7 +125,9 @@ def main():
             )
 
         except Exception as backtest_error:
-            print('error: ', backtest_error)
+            print(f'[BACKTEST ERROR] {backtest_error}')
+            import traceback
+            traceback.print_exc()
 
     else:
 

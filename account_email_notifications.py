@@ -53,12 +53,16 @@ class ExecutionTracker:
 
     def add_error(self, context, error, error_traceback=None):
         """Record an error with full context"""
+        tb = error_traceback or traceback.format_exc()
         self.errors.append({
             'context': context,
             'error': str(error),
-            'traceback': error_traceback or traceback.format_exc(),
+            'traceback': tb,
             'timestamp': datetime.now()
         })
+        # Always print to terminal/logs immediately
+        print(f"[ERROR] {context}: {error}")
+        print(tb)
 
     def add_warning(self, message):
         """Record a warning"""

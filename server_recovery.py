@@ -43,6 +43,7 @@ class FallbackState:
             print(f"\n⚠️ [FALLBACK] Database unavailable - running in-memory")
             print(f"   Window: {FALLBACK_WINDOW_MINUTES} minutes before halt")
             print(f"   Error: {error}\n")
+            self._send_activation_alert = True  # Flag for external alert
 
     def deactivate(self):
         """Deactivate fallback mode"""
@@ -97,6 +98,9 @@ def _retry_db_operation(operation, fallback_state, *args, **kwargs):
             else:
                 print(f"[DATABASE] All {DB_RETRY_ATTEMPTS} attempts failed")
                 fallback_state.activate(e)
+                if getattr(fallback_state, '_send_activation_alert', False):
+                    fallback_state._send_activation_alert = False
+                    _send_database_fallback_started_alert(e, fallback_state)
 
     return False, last_error
 
@@ -151,6 +155,32 @@ def _send_database_failure_alert(error, fallback_state):
     except Exception as e:
         print(f"[ALERT] Failed to send database failure email: {e}")
 
+def _send_database_fallback_started_alert(error, fallback_state):
+    """Send alert when database fallback first activates"""
+    try:
+        import account_email_notifications
+
+        html_body = f"""
+        <html>
+        <body>
+            <h2>⚠️ Database Fallback Activated</h2>
+            <p><strong>Status:</strong> Bot running in-memory mode</p>
+            <p><strong>Started:</strong> {fallback_state.started_at.strftime('%Y-%m-%d %H:%M:%S')}</p>
+            <p><strong>Window:</strong> {FALLBACK_WINDOW_MINUTES} minutes before halt</p>
+            <p><strong>Error:</strong> {error}</p>
+            <p><em>Check Railway PostgreSQL status. Bot will halt if not resolved.</em></p>
+        </body>
+        </html>
+        """
+
+        account_email_notifications.send_email(
+            "⚠️ DATABASE FALLBACK - Bot Running In-Memory",
+            html_body
+        )
+        print("[ALERT] Database fallback activation email sent")
+
+    except Exception as e:
+        print(f"[ALERT] Failed to send fallback activation email: {e}")
 
 class StatePersistence:
     """Dual-mode state persistence"""
