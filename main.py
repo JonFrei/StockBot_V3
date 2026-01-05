@@ -109,8 +109,8 @@ def main():
             from lumibot.backtesting import YahooDataBacktesting
             from lumibot.backtesting import AlpacaBacktesting
 
-            start = datetime(2024, 1, 8)
-            end = datetime(2025, 11, 6)
+            start = datetime(2022, 1, 8)
+            end = datetime(2025, 12, 30)
 
             SwingTradeStrategy.backtest(
                 datasource_class=AlpacaBacktesting,
@@ -121,7 +121,8 @@ def main():
                 },
                 benchmark_asset='SPY',
                 config=ALPACA_CONFIG,
-                budget=100000
+                budget=100000,
+                slippage=0.001  # 0.1% slippage on each trade
             )
 
         except Exception as backtest_error:

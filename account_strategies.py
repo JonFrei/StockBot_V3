@@ -537,7 +537,16 @@ class SwingTradeStrategy(Strategy):
             # FETCH MARKET DATA
             # =============================================================
             try:
-                all_tickers = list(set(self.tickers + ['SPY']))
+                # Get tickers from positions we hold (for exit monitoring)
+                held_tickers = []
+                try:
+                    positions = self.get_positions()
+                    held_tickers = [p.symbol for p in positions if p.symbol not in account_broker_data.SKIP_SYMBOLS]
+                except:
+                    pass
+
+                # Combine universe + held positions + SPY
+                all_tickers = list(set(self.tickers + held_tickers + ['SPY']))
                 all_stock_data = stock_data.process_data(all_tickers, current_date)
 
                 if not all_stock_data:
