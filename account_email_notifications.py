@@ -432,9 +432,9 @@ def send_daily_summary_email(strategy, current_date, execution_tracker=None):
         return
 
     # Only send after market close
-    if not is_after_market_close(current_date):
-        print(f"[EMAIL] Skipping email - market still open. Will send after 4:00 PM EST.")
-        return
+    # if not is_after_market_close(current_date):
+    #     print(f"[EMAIL] Skipping email - market still open. Will send after 4:00 PM EST.")
+    #     return
 
     # Check if we already sent today's email (prevent duplicates)
     if hasattr(strategy, '_last_email_date'):
@@ -457,7 +457,6 @@ def send_daily_summary_email(strategy, current_date, execution_tracker=None):
         # ADD: Stock split section if any splits detected
         if account_broker_data.split_tracker.has_splits():
             html_body += account_broker_data.split_tracker.generate_html_section()
-
 
         # Try to append detailed summary (best effort)
         try:
@@ -1209,8 +1208,9 @@ def generate_crash_notification_html(error_message, error_traceback=None):
     return html
 
 
+'''
 def is_after_market_close(current_time=None) -> bool:
-    """Check if current time is after market close (4:00 PM EST)."""
+
     from datetime import datetime, time
 
     if current_time is None:
@@ -1222,6 +1222,8 @@ def is_after_market_close(current_time=None) -> bool:
 
     market_close = time(16, 0)
     return current_time.time() >= market_close
+'''
+
 
 # =============================================================================
 # POSITION ALERT EMAIL (Legacy - kept for compatibility)

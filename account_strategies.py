@@ -474,6 +474,20 @@ class SwingTradeStrategy(Strategy):
                 print(f"[FILL] SELL {order.symbol}: {quantity} @ ${price:.2f} = ${quantity * price:,.2f}")
             print(f"[FILL] Lumibot cash after fill: ${self.get_cash():,.2f}")
 
+    def after_market_closes(self):
+        """Called after market closes - send daily summary email"""
+        if Config.BACKTESTING:
+            return
+
+        import account_email_notifications
+        current_date = self.get_datetime()
+
+        execution_tracker = account_email_notifications.ExecutionTracker()
+        execution_tracker.complete('SUCCESS')
+
+        print("\n[EMAIL] Market closed - sending daily summary...")
+        account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
+
     def on_trading_iteration(self):
         import account_email_notifications
         execution_tracker = account_email_notifications.ExecutionTracker()
