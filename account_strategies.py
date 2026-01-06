@@ -407,6 +407,7 @@ class SwingTradeStrategy(Strategy):
         else:
             self.sleeptime = "30M"
 
+        self.minutes_before_closing = 60
         self.tickers = self.parameters.get("tickers", [])
         self.last_trade_date = None
 
@@ -474,7 +475,7 @@ class SwingTradeStrategy(Strategy):
                 print(f"[FILL] SELL {order.symbol}: {quantity} @ ${price:.2f} = ${quantity * price:,.2f}")
             print(f"[FILL] Lumibot cash after fill: ${self.get_cash():,.2f}")
 
-    def after_market_closes(self):
+    def before_market_closes(self):
         """Called after market closes - send daily summary email"""
         if Config.BACKTESTING:
             return
