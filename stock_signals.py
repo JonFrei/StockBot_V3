@@ -8,7 +8,7 @@ from typing import Dict, Any
 
 class SignalConfig:
     """Signal configuration"""
-    MIN_SCORE_THRESHOLD = 55
+    MIN_SCORE_THRESHOLD = 55 # was 55 on 1/5/26
 
     # SWING_TRADE_1
     ST1_EMA20_DISTANCE_MAX = 8.0

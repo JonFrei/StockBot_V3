@@ -12,89 +12,10 @@ Changes:
 import account_broker_data
 from config import Config
 
-# =============================================================================
-# BACKTEST CASH TRACKER
-# =============================================================================
-'''
-_backtest_cash_tracker = {
-    'initialized': False,
-    'iteration_start_cash': 0.0,
-    'buy_adjustments': 0.0,
-    'sell_adjustments': 0.0
-}
 
-
-def sync_backtest_cash_start_of_day(strategy):
-    global _backtest_cash_tracker
-    _backtest_cash_tracker = {
-        'initialized': True,
-        'iteration_start_cash': float(strategy.get_cash()),
-        'buy_adjustments': 0.0,
-        'sell_adjustments': 0.0
-    }
-
-
-def update_backtest_cash_for_buy(cost):
-    global _backtest_cash_tracker
-    if _backtest_cash_tracker['initialized']:
-        _backtest_cash_tracker['buy_adjustments'] -= cost
-
-
-def update_backtest_cash_for_sell(proceeds):
-    global _backtest_cash_tracker
-    if _backtest_cash_tracker['initialized']:
-        _backtest_cash_tracker['sell_adjustments'] += proceeds
-
-
-def get_tracked_cash():
-    global _backtest_cash_tracker
-    if _backtest_cash_tracker['initialized']:
-        return (_backtest_cash_tracker['iteration_start_cash']
-                + _backtest_cash_tracker['buy_adjustments']
-                + _backtest_cash_tracker['sell_adjustments'])
-    return None
-
-
-def debug_cash_state(label="", strategy=None):
-    
-    if Config.BACKTESTING:
-        print(f"[CASH DEBUG] {label}")
-        print(f"   initialized: {_backtest_cash_tracker['initialized']}")
-        print(f"   iteration_start_cash: ${_backtest_cash_tracker['iteration_start_cash']:,.2f}")
-        print(f"   buy_adjustments: ${_backtest_cash_tracker['buy_adjustments']:,.2f}")
-        print(f"   sell_adjustments: ${_backtest_cash_tracker['sell_adjustments']:,.2f}")
-        tracked = get_tracked_cash()
-        print(f"   tracked_cash: ${tracked:,.2f}" if tracked else "   tracked_cash: None")
-
-        if strategy is not None:
-            lumibot_cash = strategy.get_cash()
-            print(f"   lumibot_cash: ${lumibot_cash:,.2f}")
-            if tracked is not None:
-                discrepancy = lumibot_cash - tracked
-                if abs(discrepancy) > 1:
-                    print(f"   ⚠️ DISCREPANCY: ${discrepancy:,.2f}")
-
-
-def validate_end_of_day_cash(strategy):
-    """Call at end of iteration to detect cash tracking drift"""
-    if Config.BACKTESTING and _backtest_cash_tracker['initialized']:
-        tracked = get_tracked_cash()
-        lumibot = strategy.get_cash()
-        discrepancy = lumibot - tracked if tracked else 0
-
-        print(f"[CASH VALIDATION] End of Day")
-        print(f"   Tracked: ${tracked:,.2f}" if tracked else "   Tracked: None")
-        print(f"   Lumibot: ${lumibot:,.2f}")
-        print(f"   Discrepancy: ${discrepancy:,.2f}")
-
-        if abs(discrepancy) > 100:
-            print(f"   ⚠️ SIGNIFICANT DRIFT DETECTED")
-'''
-
-# =============================================================================
+# ===============================================================
 # CONFIGURATION
 # =============================================================================
-
 class SimplifiedSizingConfig:
     """Position sizing configuration"""
     BASE_POSITION_PCT = 18.0
@@ -230,7 +151,8 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
                         continue
 
                     # For add-ons, limit to remaining room (based on portfolio)
-                    remaining_room_pct = SimplifiedSizingConfig.MAX_SINGLE_POSITION_PCT - current_exposure['exposure_pct']
+                    remaining_room_pct = SimplifiedSizingConfig.MAX_SINGLE_POSITION_PCT - current_exposure[
+                        'exposure_pct']
                     remaining_room_dollars = portfolio_value * (remaining_room_pct / 100)
                     # Also apply rotation multiplier to add-on room
                     this_position_dollars = min(tier_adjusted_dollars, remaining_room_dollars)
@@ -253,8 +175,10 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
             else:
                 # Position too small - skip
                 if verbose and is_reduced_tier:
-                    tier_name = 'frozen' if rotation_mult <= 0.1 else ('rehab' if rotation_mult <= 0.25 else 'probation')
-                    print(f"   ⚠️ {ticker}: Position too small for {tier_name} tier ({rotation_mult}x → ${this_position_dollars:.2f})")
+                    tier_name = 'frozen' if rotation_mult <= 0.1 else (
+                        'rehab' if rotation_mult <= 0.25 else 'probation')
+                    print(
+                        f"   ⚠️ {ticker}: Position too small for {tier_name} tier ({rotation_mult}x → ${this_position_dollars:.2f})")
                 continue
 
             allocations.append({

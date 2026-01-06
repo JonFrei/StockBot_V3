@@ -30,10 +30,10 @@ class DailySummary:
         self.regime_multiplier = 1.0
         self.recovery_mode_active = False
         self.recovery_max_positions = None
-        self.recovery_profit_target = None
+        # self.recovery_profit_target = None
         self.recovery_entry_method = None
-        self.recovery_eligible_tiers = None
-        self.recovery_stop_multiplier = None
+        # self.recovery_eligible_tiers = None
+        # self.recovery_stop_multiplier = None
         self.exits = []
         self.entries = []
         self.addons = []
@@ -57,10 +57,10 @@ class DailySummary:
         if recovery_details:
             self.recovery_mode_active = recovery_details.get('entry_method') is not None
             self.recovery_max_positions = recovery_details.get('max_positions')
-            self.recovery_profit_target = recovery_details.get('profit_target')
+            # self.recovery_profit_target = recovery_details.get('profit_target')
             self.recovery_entry_method = recovery_details.get('entry_method')
-            self.recovery_eligible_tiers = recovery_details.get('eligible_tiers')
-            self.recovery_stop_multiplier = recovery_details.get('stop_multiplier')
+            # self.recovery_eligible_tiers = recovery_details.get('eligible_tiers')
+            # self.recovery_stop_multiplier = recovery_details.get('stop_multiplier')
 
     def add_exit(self, ticker, qty, pnl, pnl_pct, reason):
         self.exits.append({'ticker': ticker, 'qty': qty, 'pnl': pnl, 'pnl_pct': pnl_pct, 'reason': reason})
@@ -123,12 +123,12 @@ class DailySummary:
                 print(f"   🔓 RECOVERY MODE ACTIVE ({mode_type})")
                 if self.recovery_max_positions:
                     print(f"      • Position Limit: {self.recovery_max_positions} positions")
-                if self.recovery_profit_target:
-                    print(f"      • Profit Target: {self.recovery_profit_target:.1f}%")
-                if self.recovery_eligible_tiers:
-                    print(f"      • Eligible Tiers: {', '.join(self.recovery_eligible_tiers)}")
-                if self.recovery_stop_multiplier and self.recovery_stop_multiplier != 1.0:
-                    print(f"      • Stop Multiplier: {self.recovery_stop_multiplier}x")
+                # if self.recovery_profit_target:
+                #     print(f"      • Profit Target: {self.recovery_profit_target:.1f}%")
+                # if self.recovery_eligible_tiers:
+                #     print(f"      • Eligible Tiers: {', '.join(self.recovery_eligible_tiers)}")
+                # if self.recovery_stop_multiplier and self.recovery_stop_multiplier != 1.0:
+                #     print(f"      • Stop Multiplier: {self.recovery_stop_multiplier}x")
                 print(f"   {'─' * 76}")
 
         # Show tier changes

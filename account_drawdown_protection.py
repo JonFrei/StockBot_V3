@@ -546,9 +546,9 @@ class MarketRegimeDetector:
                     'entry_method': recovery_manager.recovery_entry_method,
                     'position_multiplier': recovery_result.get('position_multiplier', 1.0),
                     'max_positions': recovery_result.get('max_positions', 8),
-                    'profit_target': recovery_result.get('profit_target', 5.0),
-                    'stop_multiplier': recovery_result.get('stop_multiplier', 1.0),
-                    'eligible_tiers': recovery_result.get('eligible_tiers', ['premium', 'active'])
+                    # 'profit_target': recovery_result.get('profit_target', 5.0),
+                    # 'stop_multiplier': recovery_result.get('stop_multiplier', 1.0),
+                    # 'eligible_tiers': recovery_result.get('eligible_tiers', ['premium', 'active'])
                 }
 
         # =====================================================================

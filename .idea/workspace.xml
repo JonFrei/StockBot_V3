@@ -6,8 +6,11 @@
   <component name="ChangeListManager">
     <list default="true" id="d6df019d-759f-4aef-8455-f63cac562958" name="Changes" comment="com">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/account_email_notifications.py" beforeDir="false" afterPath="$PROJECT_DIR$/account_email_notifications.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/account_strategies.py" beforeDir="false" afterPath="$PROJECT_DIR$/account_strategies.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/account_drawdown_protection.py" beforeDir="false" afterPath="$PROJECT_DIR$/account_drawdown_protection.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/account_profit_tracking.py" beforeDir="false" afterPath="$PROJECT_DIR$/account_profit_tracking.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/account_recovery_mode.py" beforeDir="false" afterPath="$PROJECT_DIR$/account_recovery_mode.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_position_sizing.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_position_sizing.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_signals.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_signals.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -232,14 +235,6 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1762775089088</updated>
-    </task>
-    <task id="LOCAL-00194" summary="com">
-      <option name="closed" value="true" />
-      <created>1766786754083</created>
-      <option name="number" value="00194" />
-      <option name="presentableId" value="LOCAL-00194" />
-      <option name="project" value="LOCAL" />
-      <updated>1766786754083</updated>
     </task>
     <task id="LOCAL-00195" summary="com">
       <option name="closed" value="true" />
@@ -625,7 +620,15 @@
       <option name="project" value="LOCAL" />
       <updated>1767632309778</updated>
     </task>
-    <option name="localTasksCounter" value="243" />
+    <task id="LOCAL-00243" summary="com">
+      <option name="closed" value="true" />
+      <created>1767655468405</created>
+      <option name="number" value="00243" />
+      <option name="presentableId" value="LOCAL-00243" />
+      <option name="project" value="LOCAL" />
+      <updated>1767655468405</updated>
+    </task>
+    <option name="localTasksCounter" value="244" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">

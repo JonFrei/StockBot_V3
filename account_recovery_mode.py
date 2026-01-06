@@ -43,8 +43,8 @@ class RecoveryModeConfig:
     RECOVERY_POSITION_MULTIPLIER = 1.0
     RECOVERY_MAX_POSITIONS = 8
     RECOVERY_MAX_POSITIONS_HIGHER_LOW = 10  # More positions if higher low confirmed
-    RECOVERY_PROFIT_TARGET = 5.0
-    RECOVERY_ELIGIBLE_TIERS = ['premium', 'active']  # All active tier and above
+    # RECOVERY_PROFIT_TARGET = 5.0
+    # RECOVERY_ELIGIBLE_TIERS = ['premium', 'active']  # All active tier and above
 
     # =========================================================================
     # TRACK 2: TIME-BASED FALLBACK (Lower Conviction)
@@ -59,10 +59,10 @@ class RecoveryModeConfig:
 
     # === TRACK 2 CAUTIOUS SETTINGS ===
     CAUTIOUS_POSITION_MULTIPLIER = 0.5  # Half position size
-    CAUTIOUS_MAX_POSITIONS = 4  # Fewer positions
-    CAUTIOUS_PROFIT_TARGET = 4.0  # Tighter profit target
-    CAUTIOUS_STOP_MULTIPLIER = 0.8  # Tighter stops (0.8x normal ATR)
-    CAUTIOUS_ELIGIBLE_TIERS = ['premium']  # Premium tier only
+    CAUTIOUS_MAX_POSITIONS = 6  # Fewer positions
+    # CAUTIOUS_PROFIT_TARGET = 4.0  # Tighter profit target
+    # CAUTIOUS_STOP_MULTIPLIER = 0.8  # Tighter stops (0.8x normal ATR)
+    # CAUTIOUS_ELIGIBLE_TIERS = ['premium']  # Premium tier only
 
     # =========================================================================
     # SHARED EXIT CONDITIONS
@@ -77,7 +77,7 @@ class RecoveryModeConfig:
     # =========================================================================
     # GRADUATION CONDITIONS (Recovery → Normal)
     # =========================================================================
-    GRADUATE_SPY_ABOVE_200_DAYS = 3  # SPY > 200 SMA for N consecutive days
+    # GRADUATE_SPY_ABOVE_200_DAYS = 3  # SPY > 200 SMA for N consecutive days
 
 
 class RecoveryModeManager:
@@ -566,12 +566,12 @@ class RecoveryModeManager:
                              if self.is_higher_low
                              else RecoveryModeConfig.RECOVERY_MAX_POSITIONS)
             mode_name = "FULL"
-            eligible_tiers = RecoveryModeConfig.RECOVERY_ELIGIBLE_TIERS
+            # eligible_tiers = RecoveryModeConfig.RECOVERY_ELIGIBLE_TIERS
         else:
             # Track 2: Cautious recovery mode
             max_positions = RecoveryModeConfig.CAUTIOUS_MAX_POSITIONS
             mode_name = "CAUTIOUS"
-            eligible_tiers = RecoveryModeConfig.CAUTIOUS_ELIGIBLE_TIERS
+            # eligible_tiers = RecoveryModeConfig.CAUTIOUS_ELIGIBLE_TIERS
 
         print(f"\n{'=' * 60}")
         print(f"🔓 RECOVERY MODE ACTIVATED - {mode_name} (#{self.activation_count})")
@@ -582,10 +582,10 @@ class RecoveryModeManager:
         if method == 'structure' and self.swing_low_price:
             print(f"   Swing Low: ${self.swing_low_price:.2f} on {self.swing_low_date.strftime('%Y-%m-%d')}")
         print(f"   Max Positions: {max_positions}")
-        print(f"   Eligible Tiers: {', '.join(eligible_tiers)}")
+        # print(f"   Eligible Tiers: {', '.join(eligible_tiers)}")
         if method == 'time_based':
             print(f"   Position Sizing: {RecoveryModeConfig.CAUTIOUS_POSITION_MULTIPLIER}x (reduced)")
-            print(f"   Stop Multiplier: {RecoveryModeConfig.CAUTIOUS_STOP_MULTIPLIER}x (tighter)")
+            # print(f"   Stop Multiplier: {RecoveryModeConfig.CAUTIOUS_STOP_MULTIPLIER}x (tighter)")
         print(f"{'=' * 60}\n")
 
     def check_recovery_mode_exit(self, current_date, portfolio_value=None, deployed_capital=0):
@@ -707,6 +707,10 @@ class RecoveryModeManager:
         Returns:
             dict with recovery mode settings
         """
+        # Normalize to naive datetime for day calculations (handles both backtest and live)
+        if hasattr(current_date, 'tzinfo') and current_date.tzinfo is not None:
+            current_date = current_date.replace(tzinfo=None)
+
         # Determine if we should be tracking for recovery
         should_track = spy_below_200 or lockout_active
 
@@ -718,10 +722,10 @@ class RecoveryModeManager:
                 'recovery_entry_method': None,
                 'position_multiplier': 1.0,
                 'max_positions': 25,
-                'allow_entries': True,
-                'profit_target': 10.0,
-                'stop_multiplier': 1.0,
-                'eligible_tiers': ['premium', 'active', 'probation'],
+                # 'allow_entries': True,
+                # 'profit_target': 10.0,
+                # 'stop_multiplier': 1.0,
+                # 'eligible_tiers': ['premium', 'active', 'probation'],
                 'signals': {},
                 'reason': 'Normal'
             }
@@ -751,47 +755,44 @@ class RecoveryModeManager:
 
         if self.recovery_mode_active:
             if self.recovery_entry_method == 'structure':
-                # Track 1: Full recovery mode
-                max_positions = (RecoveryModeConfig.RECOVERY_MAX_POSITIONS_HIGHER_LOW
-                                 if self.is_higher_low
-                                 else RecoveryModeConfig.RECOVERY_MAX_POSITIONS)
+                # Full recovery mode (Track 1)
                 return {
                     'recovery_mode_active': True,
                     'recovery_entry_method': 'structure',
                     'position_multiplier': RecoveryModeConfig.RECOVERY_POSITION_MULTIPLIER,
-                    'max_positions': max_positions,
-                    'allow_entries': True,
-                    'profit_target': RecoveryModeConfig.RECOVERY_PROFIT_TARGET,
-                    'stop_multiplier': 1.0,
-                    'eligible_tiers': RecoveryModeConfig.RECOVERY_ELIGIBLE_TIERS,
+                    'max_positions': RecoveryModeConfig.RECOVERY_MAX_POSITIONS,
+                    # 'allow_entries': True,
+                    # 'profit_target': RecoveryModeConfig.RECOVERY_PROFIT_TARGET,
+                    # 'stop_multiplier': RecoveryModeConfig.RECOVERY_STOP_MULTIPLIER,
+                    # 'eligible_tiers': RecoveryModeConfig.RECOVERY_ELIGIBLE_TIERS,
                     'signals': {**structure_status, **time_status},
-                    'reason': f"Recovery Mode FULL (Higher Low: {self.is_higher_low})"
+                    'reason': f"Recovery Mode (Structure): Follow-through confirmed"
                 }
             else:
-                # Track 2: Cautious recovery mode
+                # Cautious recovery mode (Track 2)
                 return {
                     'recovery_mode_active': True,
                     'recovery_entry_method': 'time_based',
                     'position_multiplier': RecoveryModeConfig.CAUTIOUS_POSITION_MULTIPLIER,
                     'max_positions': RecoveryModeConfig.CAUTIOUS_MAX_POSITIONS,
-                    'allow_entries': True,
-                    'profit_target': RecoveryModeConfig.CAUTIOUS_PROFIT_TARGET,
-                    'stop_multiplier': RecoveryModeConfig.CAUTIOUS_STOP_MULTIPLIER,
-                    'eligible_tiers': RecoveryModeConfig.CAUTIOUS_ELIGIBLE_TIERS,
+                     #'allow_entries': True,
+                    # 'profit_target': RecoveryModeConfig.CAUTIOUS_PROFIT_TARGET,
+                    # 'stop_multiplier': RecoveryModeConfig.CAUTIOUS_STOP_MULTIPLIER,
+                    # 'eligible_tiers': RecoveryModeConfig.CAUTIOUS_ELIGIBLE_TIERS,
                     'signals': {**structure_status, **time_status},
-                    'reason': "Recovery Mode CAUTIOUS (Time-Based)"
+                    'reason': f"Recovery Mode (Time-based): Stabilization detected"
                 }
 
-        # Locked but not in recovery
+        # Not in recovery mode yet - return waiting status
         return {
             'recovery_mode_active': False,
             'recovery_entry_method': None,
             'position_multiplier': 0.0,
             'max_positions': 0,
-            'allow_entries': False,
-            'profit_target': 10.0,
-            'stop_multiplier': 1.0,
-            'eligible_tiers': [],
+            # 'allow_entries': False,
+            # 'profit_target': 10.0,
+            # 'stop_multiplier': 1.0,
+            # 'eligible_tiers': [],
             'signals': {**structure_status, **time_status},
             'reason': self._get_waiting_reason(current_date)
         }
@@ -896,7 +897,7 @@ class RecoveryModeManager:
     def trigger_relock(self, current_date, reason):
         """Compatibility method"""
         return self.exit_recovery_mode(reason)
-
+    '''
     def is_tier_eligible(self, tier):
         """Check if a tier is eligible for trading in current mode"""
         if not self.recovery_mode_active:
@@ -906,3 +907,4 @@ class RecoveryModeManager:
             return tier in RecoveryModeConfig.RECOVERY_ELIGIBLE_TIERS
         else:
             return tier in RecoveryModeConfig.CAUTIOUS_ELIGIBLE_TIERS
+    '''
