@@ -728,13 +728,13 @@ class SwingTradeStrategy(Strategy):
                     summary.print_summary()
 
                     if not Config.BACKTESTING:
-                        account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
+                        # account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
+                        update_end_of_day_metrics(self, current_date, self._current_regime_result)
+                        save_state_safe(self)
 
                     # if Config.BACKTESTING:
                     #     stock_position_sizing.validate_end_of_day_cash(self)
 
-                    update_end_of_day_metrics(self, current_date, self._current_regime_result)
-                    save_state_safe(self)
                     return
 
             # =============================================================
@@ -802,10 +802,9 @@ class SwingTradeStrategy(Strategy):
                     execution_tracker.complete('SUCCESS')
                     summary.print_summary()
                     if not Config.BACKTESTING:
-                        account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
-
-                    update_end_of_day_metrics(self, current_date, self._current_regime_result)
-                    save_state_safe(self)
+                        # account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
+                        update_end_of_day_metrics(self, current_date, self._current_regime_result)
+                        save_state_safe(self)
                     return
 
             # =============================================================
@@ -843,7 +842,6 @@ class SwingTradeStrategy(Strategy):
                     vol_metrics = data.get('volatility_metrics', {})
                     if not vol_metrics.get('allow_trading', True):
                         continue
-
 
                     # 200 SMA trend filter - only buy stocks in uptrends with rising 200 SMA
                     sma200 = data.get('sma200', 0)
@@ -925,10 +923,9 @@ class SwingTradeStrategy(Strategy):
                 execution_tracker.complete('SUCCESS')
                 summary.print_summary()
                 if not Config.BACKTESTING:
-                    account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
-
-                update_end_of_day_metrics(self, current_date, self._current_regime_result)
-                save_state_safe(self)
+                    # account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
+                    update_end_of_day_metrics(self, current_date, self._current_regime_result)
+                    save_state_safe(self)
                 return
 
             try:
@@ -1065,7 +1062,7 @@ class SwingTradeStrategy(Strategy):
                     # Check against actual available cash
                     available_cash = self.get_cash()
                     min_reserve = self.portfolio_value * (
-                                stock_position_sizing.SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100)
+                            stock_position_sizing.SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100)
                     if (available_cash - actual_cost) < min_reserve:
                         summary.add_warning(
                             f"Skipped {ticker}: insufficient cash (${available_cash:,.0f} - ${actual_cost:,.0f} < ${min_reserve:,.0f} reserve)")
@@ -1162,8 +1159,7 @@ class SwingTradeStrategy(Strategy):
             summary.print_summary()
 
             if not Config.BACKTESTING:
-                account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
-
+                # account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
                 update_end_of_day_metrics(self, current_date, self._current_regime_result)
                 save_state_safe(self)
 

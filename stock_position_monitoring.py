@@ -111,7 +111,7 @@ class ExitConfig:
 
     # Kill Switch Strength Override - V5.1 (RESTRICTIVE)
     KILL_SWITCH_STRENGTH_OVERRIDE_ENABLED = False
-    KILL_SWITCH_STRENGTH_THRESHOLD = 3  # Minimum score to override kill switch (0-6)
+    KILL_SWITCH_STRENGTH_THRESHOLD = 6  # Minimum score to override kill switch (0-6)
 
     # Tightened criteria
     KILL_SWITCH_ADX_THRESHOLD = 30  # Was 25 - require stronger trend
