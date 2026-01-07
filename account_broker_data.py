@@ -1272,7 +1272,7 @@ def get_cash_balance(strategy):
 
         client = TradingClient(
             api_key=os.getenv('ALPACA_API_KEY'),
-            secret_key=os.getenv('ALPACA_SECRET_KEY'),
+            secret_key=os.getenv('ALPACA_API_SECRET'),
             paper=os.getenv('ALPACA_PAPER', 'true').lower() == 'true'
         )
 
@@ -1306,7 +1306,7 @@ def get_position_entry_date(ticker: str) -> Optional[datetime]:
 
         client = TradingClient(
             api_key=os.getenv('ALPACA_API_KEY'),
-            secret_key=os.getenv('ALPACA_SECRET_KEY'),
+            secret_key=os.getenv('ALPACA_API_SECRET'),
             paper=os.getenv('ALPACA_PAPER', 'true').lower() == 'true'
         )
 
