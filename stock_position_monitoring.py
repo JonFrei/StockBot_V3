@@ -110,7 +110,7 @@ class ExitConfig:
     KILL_SWITCH_MIN_HOLD_DAYS = 3  # V5: 3 days (was 5 in V4) - catch failures earlier
 
     # Kill Switch Strength Override - V5.1 (RESTRICTIVE)
-    KILL_SWITCH_STRENGTH_OVERRIDE_ENABLED = True
+    KILL_SWITCH_STRENGTH_OVERRIDE_ENABLED = False
     KILL_SWITCH_STRENGTH_THRESHOLD = 6  # Minimum score to override kill switch (0-6)
 
     # Tightened criteria
