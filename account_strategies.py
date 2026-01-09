@@ -32,6 +32,7 @@ from account_profit_tracking import get_summary, reset_summary, update_end_of_da
 from lumibot.brokers import Alpaca
 import time
 from datetime import datetime
+from datetime import time as dt_time
 
 broker = Alpaca(Config.get_alpaca_config())
 
@@ -407,9 +408,9 @@ class SwingTradeStrategy(Strategy):
         else:
             self.sleeptime = "30M"
 
-        self.minutes_before_closing = 60
         self.tickers = self.parameters.get("tickers", [])
         self.last_trade_date = None
+        self._daily_email_sent_date = None  # Track which date we sent the daily email
 
         # Daily traded stocks tracker (live trading only)
         # This is loaded from DB at start of each iteration
@@ -475,24 +476,28 @@ class SwingTradeStrategy(Strategy):
                 print(f"[FILL] SELL {order.symbol}: {quantity} @ ${price:.2f} = ${quantity * price:,.2f}")
             print(f"[FILL] Lumibot cash after fill: ${self.get_cash():,.2f}")
 
-    def before_market_closes(self):
-        """Called after market closes - send daily summary email"""
-        if Config.BACKTESTING:
-            return
-
-        import account_email_notifications
-        current_date = self.get_datetime()
-
-        execution_tracker = account_email_notifications.ExecutionTracker()
-        execution_tracker.complete('SUCCESS')
-
-        print("\n[EMAIL] Market closed - sending daily summary...")
-        account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
-
     def on_trading_iteration(self):
         import account_email_notifications
         execution_tracker = account_email_notifications.ExecutionTracker()
         summary = reset_summary()
+
+        # =================================================================
+        # END OF DAY EMAIL CHECK
+        # =================================================================
+        if not Config.BACKTESTING:
+            current_time = self.get_datetime()
+            current_date_only = current_time.date()
+
+            # Check if after 3:55 PM EST and haven't sent today's email
+            if current_time.time() >= dt_time(15, 55) and self._daily_email_sent_date != current_date_only:
+                print("\n[EMAIL] End of day detected - sending daily summary...")
+
+                eod_tracker = account_email_notifications.ExecutionTracker()
+                eod_tracker.complete('SUCCESS')
+
+                account_email_notifications.send_daily_summary_email(self, current_time, eod_tracker)
+                self._daily_email_sent_date = current_date_only
+                print(f"[EMAIL] Daily email sent for {current_date_only}")
 
         # Check if paused by circuit breaker (shouldn't happen but safety check)
         if not Config.BACKTESTING and self.failure_tracker.is_paused:
