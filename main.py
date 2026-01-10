@@ -122,7 +122,7 @@ def main():
                 benchmark_asset='SPY',
                 config=ALPACA_CONFIG,
                 budget=100000,
-                slippage=0.001  # 0.1% slippage on each trade
+                slippage=0.005  # 0.1% slippage on each trade
             )
 
         except Exception as backtest_error:

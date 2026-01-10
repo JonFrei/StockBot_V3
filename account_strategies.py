@@ -19,7 +19,8 @@ import stock_signals
 import stock_position_sizing
 import account_profit_tracking
 import stock_position_monitoring
-import stock_entries
+# import stock_entries
+import account_email_notifications
 
 from stock_rotation import StockRotator, should_rotate
 
@@ -27,6 +28,7 @@ from server_recovery import save_state_safe, load_state_safe, repair_incomplete_
 from account_drawdown_protection import MarketRegimeDetector
 from account_recovery_mode import RecoveryModeManager
 import account_broker_data
+from account_broker_data import sync_positions_with_broker
 from account_profit_tracking import get_summary, reset_summary, update_end_of_day_metrics
 
 from lumibot.brokers import Alpaca
@@ -87,257 +89,6 @@ class ConsecutiveFailureTracker:
         return self.failure_history[-self.threshold:]
 
 
-def sync_positions_with_broker(strategy, current_date, position_monitor, all_stock_data=None):
-    """
-    Daily position sync - Broker is source of truth.
-
-    Runs at start of each iteration to:
-    1. Adopt orphaned broker positions (positions we don't have metadata for)
-    2. Remove stale metadata (for positions no longer at broker)
-    3. Collect positions with missing entry prices for notification
-    """
-    result = {
-        'synced': False,
-        'orphaned_adopted': [],
-        'stale_removed': [],
-        'splits_adjusted': [],
-        'unverified_discrepancies': [],
-        'missing_entry_prices': []
-    }
-
-    try:
-        print(f"\n{'=' * 60}")
-        print(f"🔄 DAILY POSITION SYNC - {current_date.strftime('%Y-%m-%d %H:%M')}")
-        print(f"{'=' * 60}")
-
-        # Get broker positions
-        broker_positions = strategy.get_positions()
-        broker_tickers = set()
-
-        for position in broker_positions:
-            ticker = position.symbol
-            if ticker in account_broker_data.SKIP_SYMBOLS:
-                continue
-            broker_tickers.add(ticker)
-
-        # Get our tracked positions
-        tracked_tickers = set(position_monitor.positions_metadata.keys())
-
-        print(f"   Broker positions: {len(broker_tickers)}")
-        print(f"   Tracked positions: {len(tracked_tickers)}")
-
-        # === ADOPT ORPHANED POSITIONS ===
-        orphaned = broker_tickers - tracked_tickers
-        for ticker in orphaned:
-            print(f"   📥 Adopting orphaned position: {ticker}")
-
-            # Try to get entry price from broker
-            position = next((p for p in broker_positions if p.symbol == ticker), None)
-            entry_price = account_broker_data.get_broker_entry_price(position, strategy, ticker)
-
-            # Try to get actual entry date from Alpaca order history
-            actual_entry_date = account_broker_data.get_position_entry_date(ticker)
-            if actual_entry_date:
-                print(f"   📅 {ticker}: Found original entry date: {actual_entry_date.strftime('%Y-%m-%d')}")
-            else:
-                actual_entry_date = current_date
-                print(f"   ⚠️ {ticker}: Could not find entry date, using current date")
-
-            position_monitor.track_position(
-                ticker=ticker,
-                entry_date=current_date,
-                entry_signal='adopted_orphan',
-                entry_score=0,
-                is_addon=True,
-                entry_price=entry_price if entry_price > 0 else None,
-                raw_df=None,  # Will use fallback 5% stop
-                atr=None
-            )
-            result['orphaned_adopted'].append(ticker)
-
-        # === REMOVE STALE METADATA ===
-        stale = tracked_tickers - broker_tickers
-        for ticker in stale:
-            print(f"   🗑️ Removing stale metadata: {ticker}")
-            position_monitor.clean_position_metadata(ticker)
-            result['stale_removed'].append(ticker)
-
-        # =====================================================================
-        # === DETECT AND ADJUST FOR STOCK SPLITS (NEW SECTION) ===
-        # =====================================================================
-        for position in broker_positions:
-            ticker = position.symbol
-            if ticker in account_broker_data.SKIP_SYMBOLS:
-                continue
-
-            metadata = position_monitor.get_position_metadata(ticker)
-            if not metadata:
-                continue
-
-            stored_entry = metadata.get('entry_price', 0)
-            broker_entry = account_broker_data.get_broker_entry_price(position, strategy, ticker)
-
-            if stored_entry <= 0 or broker_entry <= 0:
-                continue
-
-            ratio = stored_entry / broker_entry
-
-            # Detect potential split:
-            # - Forward split: ratio > 1.5 (e.g., 2:1=2.0, 5:1=5.0)
-            # - Reverse split: ratio < 0.67 (e.g., 1:2=0.5, 1:10=0.1)
-            is_forward_split = ratio > 1.5
-            is_reverse_split = ratio < 0.67
-
-            if is_forward_split or is_reverse_split:
-                split_type = "forward" if is_forward_split else "reverse"
-                display_ratio = account_broker_data.format_split_ratio(ratio)
-
-                print(f"   🔍 {ticker}: Potential {split_type} split detected (ratio {display_ratio})")
-                print(f"      Stored: ${stored_entry:.2f}, Broker: ${broker_entry:.2f}")
-
-                # Get raw DataFrame for verification (if available)
-                raw_df = None
-                if all_stock_data and ticker in all_stock_data:
-                    raw_df = all_stock_data[ticker].get('raw')
-
-                # Verify the split
-                verification = account_broker_data.verify_split_ratio(
-                    ticker=ticker,
-                    detected_ratio=ratio,
-                    current_date=current_date,
-                    raw_df=raw_df,
-                    is_backtesting=Config.BACKTESTING
-                )
-
-                print(f"      Verification: {verification['reason']} (confidence: {verification['confidence']})")
-
-                if verification['should_adjust']:
-                    adjustment_ratio = verification['ratio_to_use']
-
-                    meta = position_monitor.positions_metadata[ticker]
-
-                    # Store old values for logging and tracking
-                    old_entry = meta.get('entry_price', 0)
-                    old_stop = meta.get('current_stop', 0)
-                    old_R = meta.get('R', 0)
-
-                    # Update entry price to broker's value
-                    meta['entry_price'] = broker_entry
-
-                    # Adjust all other price-based fields
-                    account_broker_data.adjust_position_metadata_for_split(meta, adjustment_ratio)
-
-                    # Record split for reporting
-                    account_broker_data.split_tracker.record_split(
-                        ticker=ticker,
-                        split_type=split_type,
-                        ratio=adjustment_ratio,
-                        old_entry=old_entry,
-                        new_entry=broker_entry,
-                        confidence=verification['confidence'],
-                        date=current_date,
-                        old_stop=old_stop,
-                        new_stop=meta.get('current_stop'),
-                        old_R=old_R,
-                        new_R=meta.get('R')
-                    )
-
-                    result['splits_adjusted'].append({
-                        'ticker': ticker,
-                        'split_type': split_type,
-                        'ratio': adjustment_ratio,
-                        'old_entry': old_entry,
-                        'new_entry': broker_entry,
-                        'confidence': verification['confidence']
-                    })
-
-                else:
-                    print(f"   ❓ {ticker}: Price discrepancy not confirmed as split")
-                    result['unverified_discrepancies'].append({
-                        'ticker': ticker,
-                        'stored_entry': stored_entry,
-                        'broker_entry': broker_entry,
-                        'ratio': ratio,
-                        'reason': verification['reason']
-                    })
-
-        # =======================================
-        # === CHECK FOR MISSING ENTRY PRICES ===
-        # =======================================
-        for position in broker_positions:
-            ticker = position.symbol
-            if ticker in account_broker_data.SKIP_SYMBOLS:
-                continue
-
-            metadata = position_monitor.get_position_metadata(ticker)
-            entry_price = metadata.get('entry_price') if metadata else None
-
-            if not entry_price or entry_price <= 0:
-                # Try to get from broker
-                broker_entry = account_broker_data.get_broker_entry_price(position, strategy, ticker)
-
-                if broker_entry > 0:
-                    # Update metadata with broker entry price
-                    if ticker in position_monitor.positions_metadata:
-                        position_monitor.positions_metadata[ticker]['entry_price'] = broker_entry
-                        print(f"   📝 {ticker}: Updated entry price from broker: ${broker_entry:.2f}")
-                else:
-                    # Still no entry price
-                    quantity = account_broker_data.get_position_quantity(position, ticker)
-                    try:
-                        current_price = strategy.get_last_price(ticker)
-                    except:
-                        current_price = 0
-
-                    result['missing_entry_prices'].append({
-                        'ticker': ticker,
-                        'quantity': quantity,
-                        'current_price': current_price,
-                        'market_value': quantity * current_price if current_price > 0 else 0,
-                        'issue': 'Missing entry price'
-                    })
-
-        # === SUMMARY ===
-        print(f"\n📋 SYNC SUMMARY:")
-        print(f"   Orphaned Adopted: {len(result['orphaned_adopted'])}")
-        print(f"   Stale Removed: {len(result['stale_removed'])}")
-        print(f"   Splits Adjusted: {len(result['splits_adjusted'])}")
-
-        if result['splits_adjusted']:
-            for split in result['splits_adjusted']:
-                conf_emoji = '✅' if split['confidence'] == 'high' else '⚠️'
-                print(f"      {conf_emoji} {split['ticker']}: {split['split_type']} "
-                      f"(${split['old_entry']:.2f} → ${split['new_entry']:.2f})")
-
-        if result.get('unverified_discrepancies'):
-            print(f"   ⚠️ Unverified Discrepancies: {len(result['unverified_discrepancies'])}")
-            for disc in result['unverified_discrepancies']:
-                print(f"      ❓ {disc['ticker']}: ratio={disc['ratio']:.2f} - {disc['reason']}")
-
-        print(f"   Missing Entry Prices: {len(result['missing_entry_prices'])}")
-
-        if (not result['orphaned_adopted'] and not result['stale_removed'] and
-                not result['splits_adjusted'] and not result.get('unverified_discrepancies') and
-                not result['missing_entry_prices']):
-            print(f"   ✅ All positions in sync!")
-
-        print(f"{'=' * 60}\n")
-
-        result['synced'] = True
-
-        # Save state if any changes were made
-        if result['orphaned_adopted'] or result['stale_removed'] or result['splits_adjusted']:
-            save_state_safe(strategy)
-
-    except Exception as e:
-        print(f"\n❌ POSITION SYNC ERROR: {e}")
-        import traceback
-        traceback.print_exc()
-        result['synced'] = False
-
-    return result
-
-
 def enter_paused_state(strategy, failure_tracker, execution_tracker=None):
     """
     Enter paused state after circuit breaker triggers.
@@ -383,21 +134,6 @@ def enter_paused_state(strategy, failure_tracker, execution_tracker=None):
             minutes, _ = divmod(remainder, 60)
             print(f"[PAUSED] Still paused. Elapsed: {hours}h {minutes}m. Waiting for manual restart...")
             last_log_time = time.time()
-
-
-class EntryFilterConfig:
-    """
-       Strength-Based Entry Filter Configuration (V5)
-
-       Philosophy: Don't block "risky" setups - require STRONG setups.
-       Strong momentum justifies wider stops and higher volatility.
-       """
-
-    # Minimum trend strength (ADX)
-    MIN_ADX = 20  # Must have a real trend
-
-    # Minimum volume confirmation
-    MIN_VOLUME_RATIO = 1.0  # At least average volume
 
 
 class SwingTradeStrategy(Strategy):
@@ -477,7 +213,6 @@ class SwingTradeStrategy(Strategy):
             print(f"[FILL] Lumibot cash after fill: ${self.get_cash():,.2f}")
 
     def on_trading_iteration(self):
-        import account_email_notifications
         execution_tracker = account_email_notifications.ExecutionTracker()
         summary = reset_summary()
 
@@ -485,24 +220,28 @@ class SwingTradeStrategy(Strategy):
         # END OF DAY EMAIL CHECK
         # =================================================================
         if not Config.BACKTESTING:
-            current_time = self.get_datetime()
-            current_date_only = current_time.date()
+            try:
+                from datetime import time as dt_time
+                current_time = self.get_datetime()
+                current_date_only = current_time.date()
 
-            # Check if after 3:55 PM EST and haven't sent today's email
-            if current_time.time() >= dt_time(15, 55) and self._daily_email_sent_date != current_date_only:
-                print("\n[EMAIL] End of day detected - sending daily summary...")
+                print(
+                    f"[EMAIL DEBUG] Time check: {current_time.time()}, sent date: {self._daily_email_sent_date}, today: {current_date_only}")
 
-                eod_tracker = account_email_notifications.ExecutionTracker()
-                eod_tracker.complete('SUCCESS')
+                # Send email if after 4:05 PM EST and haven't sent today
+                if current_time.time() >= dt_time(16, 5) and self._daily_email_sent_date != current_date_only:
+                    print("\n[EMAIL] End of day detected - sending daily summary...")
 
-                account_email_notifications.send_daily_summary_email(self, current_time, eod_tracker)
-                self._daily_email_sent_date = current_date_only
-                print(f"[EMAIL] Daily email sent for {current_date_only}")
+                    eod_tracker = account_email_notifications.ExecutionTracker()
+                    eod_tracker.complete('SUCCESS')
 
-        # Check if paused by circuit breaker (shouldn't happen but safety check)
-        if not Config.BACKTESTING and self.failure_tracker.is_paused:
-            print("[PAUSED] Bot is paused by circuit breaker. Skipping iteration.")
-            return
+                    account_email_notifications.send_daily_summary_email(self, current_time, eod_tracker)
+                    self._daily_email_sent_date = current_date_only
+                    print(f"[EMAIL] Daily email sent for {current_date_only}")
+            except Exception as e:
+                import traceback
+                print(f"[EMAIL ERROR] Failed during end-of-day email check: {e}")
+                print(f"[EMAIL ERROR] Traceback:\n{traceback.format_exc()}")
 
         # Check dashboard pause (user-controlled via dashboard)
         if not Config.BACKTESTING:

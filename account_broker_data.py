@@ -18,6 +18,7 @@ from typing import Any, Tuple, Dict, Optional
 import os
 import pytz
 from config import Config
+from server_recovery import save_state_safe
 
 # =============================================================================
 # TRADING WINDOW CONFIGURATION
@@ -1338,8 +1339,6 @@ def get_position_entry_date(ticker: str) -> Optional[datetime]:
         return None
 
 
-
-
 # =============================================================================
 # TRADING FREQUENCY CONTROL
 # =============================================================================
@@ -1357,3 +1356,258 @@ def has_traded_today(strategy, last_trade_date) -> bool:
     """
     current_date = strategy.get_datetime().date()
     return last_trade_date == current_date
+
+
+# =============================================================================
+# POSITION SYNC WITH BROKER
+# =============================================================================
+
+def sync_positions_with_broker(strategy, current_date, position_monitor, all_stock_data=None):
+    """
+    Daily position sync - Broker is source of truth.
+
+    Runs at start of each iteration to:
+    1. Adopt orphaned broker positions (positions we don't have metadata for)
+    2. Remove stale metadata (for positions no longer at broker)
+    3. Collect positions with missing entry prices for notification
+    """
+    result = {
+        'synced': False,
+        'orphaned_adopted': [],
+        'stale_removed': [],
+        'splits_adjusted': [],
+        'unverified_discrepancies': [],
+        'missing_entry_prices': []
+    }
+
+    try:
+        print(f"\n{'=' * 60}")
+        print(f"🔄 DAILY POSITION SYNC - {current_date.strftime('%Y-%m-%d %H:%M')}")
+        print(f"{'=' * 60}")
+
+        # Get broker positions
+        broker_positions = strategy.get_positions()
+        broker_tickers = set()
+
+        for position in broker_positions:
+            ticker = position.symbol
+            if ticker in SKIP_SYMBOLS:
+                continue
+            broker_tickers.add(ticker)
+
+        # Get our tracked positions
+        tracked_tickers = set(position_monitor.positions_metadata.keys())
+
+        print(f"   Broker positions: {len(broker_tickers)}")
+        print(f"   Tracked positions: {len(tracked_tickers)}")
+
+        # === ADOPT ORPHANED POSITIONS ===
+        orphaned = broker_tickers - tracked_tickers
+        for ticker in orphaned:
+            print(f"   📥 Adopting orphaned position: {ticker}")
+
+            # Try to get entry price from broker
+            position = next((p for p in broker_positions if p.symbol == ticker), None)
+            entry_price = get_broker_entry_price(position, strategy, ticker)
+
+            # Try to get actual entry date from Alpaca order history
+            actual_entry_date = get_position_entry_date(ticker)
+            if actual_entry_date:
+                print(f"   📅 {ticker}: Found original entry date: {actual_entry_date.strftime('%Y-%m-%d')}")
+            else:
+                actual_entry_date = current_date
+                print(f"   ⚠️ {ticker}: Could not find entry date, using current date")
+
+            position_monitor.track_position(
+                ticker=ticker,
+                entry_date=current_date,
+                entry_signal='adopted_orphan',
+                entry_score=0,
+                is_addon=True,
+                entry_price=entry_price if entry_price > 0 else None,
+                raw_df=None,  # Will use fallback 5% stop
+                atr=None
+            )
+            result['orphaned_adopted'].append(ticker)
+
+        # === REMOVE STALE METADATA ===
+        stale = tracked_tickers - broker_tickers
+        for ticker in stale:
+            print(f"   🗑️ Removing stale metadata: {ticker}")
+            position_monitor.clean_position_metadata(ticker)
+            result['stale_removed'].append(ticker)
+
+        # =====================================================================
+        # === DETECT AND ADJUST FOR STOCK SPLITS (NEW SECTION) ===
+        # =====================================================================
+        for position in broker_positions:
+            ticker = position.symbol
+            if ticker in SKIP_SYMBOLS:
+                continue
+
+            metadata = position_monitor.get_position_metadata(ticker)
+            if not metadata:
+                continue
+
+            stored_entry = metadata.get('entry_price', 0)
+            broker_entry = get_broker_entry_price(position, strategy, ticker)
+
+            if stored_entry <= 0 or broker_entry <= 0:
+                continue
+
+            ratio = stored_entry / broker_entry
+
+            # Detect potential split:
+            # - Forward split: ratio > 1.5 (e.g., 2:1=2.0, 5:1=5.0)
+            # - Reverse split: ratio < 0.67 (e.g., 1:2=0.5, 1:10=0.1)
+            is_forward_split = ratio > 1.5
+            is_reverse_split = ratio < 0.67
+
+            if is_forward_split or is_reverse_split:
+                split_type = "forward" if is_forward_split else "reverse"
+                display_ratio = format_split_ratio(ratio)
+
+                print(f"   🔍 {ticker}: Potential {split_type} split detected (ratio {display_ratio})")
+                print(f"      Stored: ${stored_entry:.2f}, Broker: ${broker_entry:.2f}")
+
+                # Get raw DataFrame for verification (if available)
+                raw_df = None
+                if all_stock_data and ticker in all_stock_data:
+                    raw_df = all_stock_data[ticker].get('raw')
+
+                # Verify the split
+                verification = verify_split_ratio(
+                    ticker=ticker,
+                    detected_ratio=ratio,
+                    current_date=current_date,
+                    raw_df=raw_df,
+                    is_backtesting=Config.BACKTESTING
+                )
+
+                print(f"      Verification: {verification['reason']} (confidence: {verification['confidence']})")
+
+                if verification['should_adjust']:
+                    adjustment_ratio = verification['ratio_to_use']
+
+                    meta = position_monitor.positions_metadata[ticker]
+
+                    # Store old values for logging and tracking
+                    old_entry = meta.get('entry_price', 0)
+                    old_stop = meta.get('current_stop', 0)
+                    old_R = meta.get('R', 0)
+
+                    # Update entry price to broker's value
+                    meta['entry_price'] = broker_entry
+
+                    # Adjust all other price-based fields
+                    adjust_position_metadata_for_split(meta, adjustment_ratio)
+
+                    # Record split for reporting
+                    split_tracker.record_split(
+                        ticker=ticker,
+                        split_type=split_type,
+                        ratio=adjustment_ratio,
+                        old_entry=old_entry,
+                        new_entry=broker_entry,
+                        confidence=verification['confidence'],
+                        date=current_date,
+                        old_stop=old_stop,
+                        new_stop=meta.get('current_stop'),
+                        old_R=old_R,
+                        new_R=meta.get('R')
+                    )
+
+                    result['splits_adjusted'].append({
+                        'ticker': ticker,
+                        'split_type': split_type,
+                        'ratio': adjustment_ratio,
+                        'old_entry': old_entry,
+                        'new_entry': broker_entry,
+                        'confidence': verification['confidence']
+                    })
+
+                else:
+                    print(f"   ❓ {ticker}: Price discrepancy not confirmed as split")
+                    result['unverified_discrepancies'].append({
+                        'ticker': ticker,
+                        'stored_entry': stored_entry,
+                        'broker_entry': broker_entry,
+                        'ratio': ratio,
+                        'reason': verification['reason']
+                    })
+
+        # =======================================
+        # === CHECK FOR MISSING ENTRY PRICES ===
+        # =======================================
+        for position in broker_positions:
+            ticker = position.symbol
+            if ticker in SKIP_SYMBOLS:
+                continue
+
+            metadata = position_monitor.get_position_metadata(ticker)
+            entry_price = metadata.get('entry_price') if metadata else None
+
+            if not entry_price or entry_price <= 0:
+                # Try to get from broker
+                broker_entry = get_broker_entry_price(position, strategy, ticker)
+
+                if broker_entry > 0:
+                    # Update metadata with broker entry price
+                    if ticker in position_monitor.positions_metadata:
+                        position_monitor.positions_metadata[ticker]['entry_price'] = broker_entry
+                        print(f"   📝 {ticker}: Updated entry price from broker: ${broker_entry:.2f}")
+                else:
+                    # Still no entry price
+                    quantity = get_position_quantity(position, ticker)
+                    try:
+                        current_price = strategy.get_last_price(ticker)
+                    except:
+                        current_price = 0
+
+                    result['missing_entry_prices'].append({
+                        'ticker': ticker,
+                        'quantity': quantity,
+                        'current_price': current_price,
+                        'market_value': quantity * current_price if current_price > 0 else 0,
+                        'issue': 'Missing entry price'
+                    })
+
+        # === SUMMARY ===
+        print(f"\n📋 SYNC SUMMARY:")
+        print(f"   Orphaned Adopted: {len(result['orphaned_adopted'])}")
+        print(f"   Stale Removed: {len(result['stale_removed'])}")
+        print(f"   Splits Adjusted: {len(result['splits_adjusted'])}")
+
+        if result['splits_adjusted']:
+            for split in result['splits_adjusted']:
+                conf_emoji = '✅' if split['confidence'] == 'high' else '⚠️'
+                print(f"      {conf_emoji} {split['ticker']}: {split['split_type']} "
+                      f"(${split['old_entry']:.2f} → ${split['new_entry']:.2f})")
+
+        if result.get('unverified_discrepancies'):
+            print(f"   ⚠️ Unverified Discrepancies: {len(result['unverified_discrepancies'])}")
+            for disc in result['unverified_discrepancies']:
+                print(f"      ❓ {disc['ticker']}: ratio={disc['ratio']:.2f} - {disc['reason']}")
+
+        print(f"   Missing Entry Prices: {len(result['missing_entry_prices'])}")
+
+        if (not result['orphaned_adopted'] and not result['stale_removed'] and
+                not result['splits_adjusted'] and not result.get('unverified_discrepancies') and
+                not result['missing_entry_prices']):
+            print(f"   ✅ All positions in sync!")
+
+        print(f"{'=' * 60}\n")
+
+        result['synced'] = True
+
+        # Save state if any changes were made
+        if result['orphaned_adopted'] or result['stale_removed'] or result['splits_adjusted']:
+            save_state_safe(strategy)
+
+    except Exception as e:
+        print(f"\n❌ POSITION SYNC ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        result['synced'] = False
+
+    return result

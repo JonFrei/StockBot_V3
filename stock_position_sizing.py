@@ -1,51 +1,40 @@
 """
-Position Sizing - WITH SCALE FACTOR FOR BUDGET CONSTRAINTS
+Position Sizing - Portfolio-Based with Pro-Rata Scaling
 
-Changes:
-- Added scale factor logic: if total cost exceeds budget, proportionally reduce all positions
-- Removed MIN_SHARES enforcement (handled by remnant cleanup)
-- Applies rotation multiplier from stock rotation system
-- MAX_SINGLE_POSITION_PCT prevents over-concentration
-- get_current_position_exposure() for add-on sizing
-- ALL SIZING NOW REFERENCES CASH, NOT PORTFOLIO VALUE
+Logic:
+- Size positions based on PORTFOLIO VALUE (risk control)
+- Cap deployment to AVAILABLE CASH (hard constraint)
+- Pro-rata scale all positions if total exceeds budget
+- Rotation multiplier adjusts position size per tier
 """
 import account_broker_data
 from config import Config
 
 
-# ===============================================================
+# =============================================================================
 # CONFIGURATION
 # =============================================================================
 class SimplifiedSizingConfig:
     """Position sizing configuration"""
-    BASE_POSITION_PCT = 18.0
-    MAX_POSITION_PCT = 20.0
-    MAX_TOTAL_POSITIONS = 30
-    MIN_CASH_RESERVE_PCT = 10.0
-
-    MAX_CASH_DEPLOYMENT_PCT = 85.0
-    MAX_DAILY_DEPLOYMENT_PCT = 80.0
-    MAX_SINGLE_POSITION_PCT = 20.0
+    BASE_POSITION_PCT = 15.0          # Target size as % of portfolio value
+    MAX_TOTAL_POSITIONS = 30          # Maximum concurrent positions
+    MIN_CASH_RESERVE_PCT = 5.0        # Minimum cash buffer (% of cash)
+    MAX_CASH_DEPLOYMENT_PCT = 95.0    # Max % of deployable cash per cycle
+    MAX_SINGLE_POSITION_PCT = 20.0    # Max concentration in single stock
 
 
 # =============================================================================
 # POSITION EXPOSURE
 # =============================================================================
-
 def get_current_position_exposure(strategy, ticker, portfolio_context):
     """
-    Get current exposure to a ticker as percentage of total cash.
-
-    Args:
-        strategy: Trading strategy instance
-        ticker: Stock symbol
-        portfolio_context: Dict containing 'total_cash' and other context
+    Get current exposure to a ticker as percentage of portfolio value.
 
     Returns:
         dict with has_position, quantity, market_value, exposure_pct
     """
     positions = strategy.get_positions()
-    cash_basis = portfolio_context['portfolio_value']
+    portfolio_value = portfolio_context['portfolio_value']
 
     for position in positions:
         if position.symbol == ticker:
@@ -53,7 +42,7 @@ def get_current_position_exposure(strategy, ticker, portfolio_context):
                 quantity = int(position.quantity)
                 current_price = strategy.get_last_price(ticker)
                 market_value = quantity * current_price
-                exposure_pct = (market_value / cash_basis * 100) if cash_basis > 0 else 0
+                exposure_pct = (market_value / portfolio_value * 100) if portfolio_value > 0 else 0
 
                 return {
                     'has_position': True,
@@ -82,65 +71,44 @@ def get_current_position_exposure(strategy, ticker, portfolio_context):
 # =============================================================================
 def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier=1.0, verbose=True, strategy=None):
     """
-    Position sizing based on available cash with scale factor for budget constraints.
+    Portfolio-based position sizing with pro-rata scaling.
 
     Logic:
-    1. Apply rotation tier multiplier FIRST (premium=1.5x, probation=0.5x, etc.)
-    2. Size each position based on adjusted dollars
-    3. Handle fractional shares: round to 1 for reduced tiers (0.01-0.99 shares)
-    4. If over budget, scale down - but protect minimum (1 share) positions
-    5. Return sorted by score (highest first) for execution priority
+    1. Calculate ideal position size from portfolio value
+    2. Apply rotation multiplier per stock
+    3. Check concentration limits for add-ons
+    4. Pro-rata scale ALL positions if total exceeds cash budget
+    5. Return sorted by score (highest first)
     """
-    if not opportunities:
-        return []
-
-    if regime_multiplier == 0:
+    if not opportunities or regime_multiplier == 0:
         return []
 
     portfolio_value = portfolio_context['portfolio_value']
     deployable_cash = portfolio_context['deployable_cash']
-    total_cash = portfolio_context['total_cash']
 
-    # Safety cap
-    actual_cash = portfolio_context['total_cash']
-    if deployable_cash > actual_cash:
-        deployable_cash = max(0, actual_cash - total_cash * (SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100))
-
-    # Calculate limits
-    cash_limit = deployable_cash * (SimplifiedSizingConfig.MAX_CASH_DEPLOYMENT_PCT / 100)
-    daily_limit = deployable_cash * (SimplifiedSizingConfig.MAX_DAILY_DEPLOYMENT_PCT / 100)
-    max_deployment = min(cash_limit, daily_limit)
+    # Calculate max deployment budget
+    max_deployment = deployable_cash * (SimplifiedSizingConfig.MAX_CASH_DEPLOYMENT_PCT / 100)
 
     if max_deployment <= 0:
         return []
 
-    # === STEP 1: Calculate base position size (before rotation multiplier) ===
-    # Max per position based on cash
-    base_position_from_cash = total_cash * (SimplifiedSizingConfig.BASE_POSITION_PCT / 100) * regime_multiplier
+    # === STEP 1: Calculate ideal position size (portfolio-based) ===
+    ideal_position_dollars = portfolio_value * (SimplifiedSizingConfig.BASE_POSITION_PCT / 100) * regime_multiplier
 
-    # Max per position based on dividing available deployment evenly
-    base_position_from_deployment = max_deployment / len(opportunities)
-
-    # Use the SMALLER of the two as base
-    base_position_dollars = min(base_position_from_cash, base_position_from_deployment)
-
-    # === STEP 2: Size each position with rotation multiplier applied FIRST ===
+    # === STEP 2: Size each position ===
     allocations = []
 
     for opp in opportunities:
         try:
             ticker = opp['ticker']
-            data = opp['data']
-            # current_price = data['close']
             current_price = strategy.get_last_price(ticker)
             rotation_mult = opp.get('rotation_mult', 1.0)
 
-            # Apply rotation multiplier FIRST to get tier-adjusted position size
-            tier_adjusted_dollars = base_position_dollars * rotation_mult
-
-            # Adjust for existing positions (add-ons)
+            # Apply rotation multiplier
+            tier_adjusted_dollars = ideal_position_dollars * rotation_mult
             this_position_dollars = tier_adjusted_dollars
 
+            # Check concentration for add-ons
             if strategy is not None:
                 current_exposure = get_current_position_exposure(strategy, ticker, portfolio_context)
 
@@ -150,36 +118,22 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
                             print(f"   ⚠️ {ticker}: At max concentration ({current_exposure['exposure_pct']:.1f}%)")
                         continue
 
-                    # For add-ons, limit to remaining room (based on portfolio)
-                    remaining_room_pct = SimplifiedSizingConfig.MAX_SINGLE_POSITION_PCT - current_exposure[
-                        'exposure_pct']
+                    # Limit add-on to remaining room
+                    remaining_room_pct = SimplifiedSizingConfig.MAX_SINGLE_POSITION_PCT - current_exposure['exposure_pct']
                     remaining_room_dollars = portfolio_value * (remaining_room_pct / 100)
-                    # Also apply rotation multiplier to add-on room
                     this_position_dollars = min(tier_adjusted_dollars, remaining_room_dollars)
 
-            # Calculate raw quantity (as float)
+            # Calculate quantity
             raw_quantity = this_position_dollars / current_price
 
-            # Determine if this is a reduced-size tier (probation, rehabilitation, frozen)
-            is_reduced_tier = rotation_mult < 1.0
-            is_minimum_position = False
-
-            # Handle quantity calculation with fractional share logic
-            if raw_quantity >= 1.0:
-                # Normal case: use integer portion
-                quantity = int(raw_quantity)
-            elif is_reduced_tier and raw_quantity >= 0.01:
-                # Reduced tiers (probation/rehab/frozen): round up to minimum 1 share
-                quantity = 1
-                is_minimum_position = True
+            if raw_quantity < 1.0:
+                # For reduced tiers, allow minimum 1 share
+                if rotation_mult < 1.0 and raw_quantity >= 0.01:
+                    quantity = 1
+                else:
+                    continue
             else:
-                # Position too small - skip
-                if verbose and is_reduced_tier:
-                    tier_name = 'frozen' if rotation_mult <= 0.1 else (
-                        'rehab' if rotation_mult <= 0.25 else 'probation')
-                    print(
-                        f"   ⚠️ {ticker}: Position too small for {tier_name} tier ({rotation_mult}x → ${this_position_dollars:.2f})")
-                continue
+                quantity = int(raw_quantity)
 
             allocations.append({
                 'ticker': ticker,
@@ -188,8 +142,7 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
                 'cost': quantity * current_price,
                 'signal_score': opp['score'],
                 'signal_type': opp['signal_type'],
-                'rotation_mult': rotation_mult,
-                'is_minimum_position': is_minimum_position  # Track if this is a protected 1-share position
+                'rotation_mult': rotation_mult
             })
 
         except Exception as e:
@@ -201,69 +154,34 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
     if not allocations:
         return []
 
-    # === STEP 3: Check budget and apply scale factor if needed ===
+    # === STEP 3: Pro-rata scale if over budget ===
     total_cost = sum(a['cost'] for a in allocations)
 
     if total_cost > max_deployment:
-        # Separate minimum positions (protected) from scalable positions
-        minimum_positions = [a for a in allocations if a.get('is_minimum_position', False)]
-        scalable_positions = [a for a in allocations if not a.get('is_minimum_position', False)]
+        scale_factor = max_deployment / total_cost
 
-        # Calculate how much budget is consumed by minimum positions
-        minimum_cost = sum(a['cost'] for a in minimum_positions)
-        scalable_cost = sum(a['cost'] for a in scalable_positions)
+        scaled_allocations = []
+        for alloc in allocations:
+            scaled_quantity = int(alloc['quantity'] * scale_factor)
 
-        # Remaining budget for scalable positions
-        remaining_budget = max_deployment - minimum_cost
+            # Keep at least 1 share if scaling results in fractional
+            if scaled_quantity < 1 and alloc['quantity'] >= 1:
+                scaled_quantity = 1
 
-        if remaining_budget <= 0:
-            # Not enough budget even for minimum positions - prioritize by score
-            # Sort by score and take what fits
-            minimum_positions.sort(key=lambda x: x['signal_score'], reverse=True)
-            final_allocations = []
-            running_cost = 0
-            for alloc in minimum_positions:
-                if running_cost + alloc['cost'] <= max_deployment:
-                    final_allocations.append(alloc)
-                    running_cost += alloc['cost']
-            allocations = final_allocations
-        elif scalable_cost > 0 and scalable_cost > remaining_budget:
-            # Need to scale down scalable positions
-            scale_factor = remaining_budget / scalable_cost
+            if scaled_quantity < 1:
+                continue
 
-            scaled_allocations = []
-            for alloc in scalable_positions:
-                raw_scaled = alloc['quantity'] * scale_factor
-                rotation_mult = alloc.get('rotation_mult', 1.0)
-                is_reduced_tier = rotation_mult < 1.0
+            scaled_allocations.append({
+                'ticker': alloc['ticker'],
+                'quantity': scaled_quantity,
+                'price': alloc['price'],
+                'cost': scaled_quantity * alloc['price'],
+                'signal_score': alloc['signal_score'],
+                'signal_type': alloc['signal_type'],
+                'rotation_mult': alloc['rotation_mult']
+            })
 
-                # Handle fractional shares after scaling
-                if raw_scaled >= 1.0:
-                    scaled_quantity = int(raw_scaled)
-                elif is_reduced_tier and raw_scaled >= 0.01:
-                    # Reduced tier scaled below 1 - becomes minimum position
-                    scaled_quantity = 1
-                else:
-                    # Too small after scaling - skip
-                    continue
-
-                scaled_cost = scaled_quantity * alloc['price']
-                scaled_allocations.append({
-                    'ticker': alloc['ticker'],
-                    'quantity': scaled_quantity,
-                    'price': alloc['price'],
-                    'cost': scaled_cost,
-                    'signal_score': alloc['signal_score'],
-                    'signal_type': alloc['signal_type'],
-                    'rotation_mult': alloc['rotation_mult'],
-                    'is_minimum_position': alloc.get('is_minimum_position', False) or scaled_quantity == 1
-                })
-
-            # Combine minimum + scaled positions
-            allocations = minimum_positions + scaled_allocations
-        else:
-            # Scalable positions fit within remaining budget - no scaling needed
-            allocations = minimum_positions + scalable_positions
+        allocations = scaled_allocations
 
     if not allocations:
         return []
@@ -277,52 +195,23 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
 # =============================================================================
 # PORTFOLIO CONTEXT
 # =============================================================================
-
 def create_portfolio_context(strategy):
     """Create portfolio context dict with accurate cash tracking"""
-    import account_broker_data
 
     portfolio_value = strategy.portfolio_value
     existing_positions = len(strategy.get_positions())
 
-    # DEBUG: Log state before getting cash
+    # Get cash balance
     if Config.BACKTESTING:
-        '''
-        debug_cash_state("create_portfolio_context - START")
-        '''
-        lumibot_cash = strategy.get_cash()
-        '''
-        print(f"[CASH DEBUG] Lumibot get_cash(): ${lumibot_cash:,.2f}")
-        '''
-
-    # Use tracked cash for backtesting, Alpaca for live
-    if Config.BACKTESTING:
-        # cash_balance = get_tracked_cash()
         cash_balance = strategy.get_cash()
-        '''
-        print(f"[CASH DEBUG] Using tracked cash: ${cash_balance:,.2f}")
-        '''
-
     else:
         cash_balance = account_broker_data.get_cash_balance(strategy)
-        if Config.BACKTESTING:
-            '''
-            print(f"[CASH DEBUG] Using broker cash (tracker not init): ${cash_balance:,.2f}")
-            '''
+
     deployed_capital = portfolio_value - cash_balance
-    # MIN_CASH_RESERVE now based on cash_balance, not portfolio_value
+
+    # Calculate reserve and deployable cash
     min_reserve = cash_balance * (SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100)
     deployable_cash = max(0, cash_balance - min_reserve)
-
-    # DEBUG: Log all calculated values
-    '''
-    if Config.BACKTESTING:
-        print(f"[CASH DEBUG] portfolio_value: ${portfolio_value:,.2f}")
-        print(f"[CASH DEBUG] cash_balance: ${cash_balance:,.2f}")
-        print(f"[CASH DEBUG] deployed_capital: ${deployed_capital:,.2f}")
-        print(f"[CASH DEBUG] min_reserve ({SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT}% of cash): ${min_reserve:,.2f}")
-        print(f"[CASH DEBUG] deployable_cash: ${deployable_cash:,.2f}")
-    '''
 
     return {
         'total_cash': cash_balance,
