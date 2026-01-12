@@ -4,7 +4,7 @@ Market Safeguard System - WITH PORTFOLIO DRAWDOWN PROTECTION
 Three-Layer Protection:
 
 Layer 0: Portfolio Drawdown (Highest Priority)
-- Portfolio drops 15% from 30-day rolling peak → Exit ALL positions
+- Portfolio drops 10% from 30-day rolling peak → Exit ALL positions
 - 5-day cooldown lockout
 - Cannot be overridden by Recovery Mode
 
@@ -190,10 +190,47 @@ class MarketRegimeDetector:
         if not self.portfolio_drawdown_active:
             return False
 
+        # Condition 1: Must be past minimum lockout period
         if self.portfolio_drawdown_lockout_end and current_date >= self.portfolio_drawdown_lockout_end:
             return True
 
+        # Condition 2: Market stability check - don't re-enter into active crash
+        # If SPY is below 20 EMA AND making new 5-day lows, stay locked
+        if self.spy_close < self.spy_20_ema:
+            five_day_low = self._get_n_day_low(5)
+            if five_day_low and self.spy_close <= five_day_low * 1.002:  # Within 0.2% of 5-day low
+                return False  # Market still falling, stay locked
+
         return False
+
+    def _add_trading_days(self, start_date, trading_days):
+        """
+        Add N trading days to a date, skipping weekends.
+
+        Args:
+            start_date: Starting datetime
+            trading_days: Number of trading days to add
+
+        Returns:
+            datetime after N trading days
+        """
+        current = start_date
+        days_added = 0
+
+        while days_added < trading_days:
+            current += timedelta(days=1)
+            # Skip weekends (Saturday=5, Sunday=6)
+            if current.weekday() < 5:
+                days_added += 1
+
+        return current
+
+    def _get_n_day_low(self, days):
+        """Get N-day low from price history"""
+        if len(self.spy_price_history) < days:
+            return None
+        closes = [p['close'] for p in self.spy_price_history[-days:]]
+        return min(closes)
 
     # =========================================================================
     # MAIN REGIME DETECTION
@@ -253,7 +290,9 @@ class MarketRegimeDetector:
         if drawdown_check and drawdown_check['triggered']:
             self.portfolio_drawdown_active = True
             self.portfolio_drawdown_trigger_date = current_date
-            self.portfolio_drawdown_lockout_end = current_date + timedelta(days=SafeguardConfig.PORTFOLIO_DRAWDOWN_COOLDOWN_DAYS + 2)
+            # self.portfolio_drawdown_lockout_end = current_date + timedelta(days=SafeguardConfig.PORTFOLIO_DRAWDOWN_COOLDOWN_DAYS + 2)
+            self.portfolio_drawdown_lockout_end = self._add_trading_days(current_date,
+                                                                         SafeguardConfig.PORTFOLIO_DRAWDOWN_COOLDOWN_DAYS)
 
             print(f"\n{'=' * 60}")
             print(f"🚨 PORTFOLIO DRAWDOWN TRIGGERED")
@@ -325,7 +364,8 @@ class MarketRegimeDetector:
             self.crisis_active = True
             self.crisis_trigger_date = current_date
             self.crisis_trigger_reason = crisis_check['reason']
-            self.lockout_end_date = current_date + timedelta(days=SafeguardConfig.CRISIS_LOCKOUT_DAYS + 2)
+            # self.lockout_end_date = current_date + timedelta(days=SafeguardConfig.CRISIS_LOCKOUT_DAYS + 2)
+            self.lockout_end_date = self._add_trading_days(current_date, SafeguardConfig.CRISIS_LOCKOUT_DAYS)
 
             print(f"\n{'=' * 60}")
             print(f"🚨 SENTIMENT CRISIS TRIGGERED")
@@ -394,9 +434,9 @@ class MarketRegimeDetector:
             return False
         return self.spy_close < self.spy_200_sma
 
-    def record_stop_loss(self, date, ticker, loss_pct):
-        """No-op for compatibility"""
-        pass
+    # def record_stop_loss(self, date, ticker, loss_pct):
+    #     """No-op for compatibility"""
+    #     pass
 
     # =========================================================================
     # STATISTICS / COMPATIBILITY

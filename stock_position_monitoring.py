@@ -1033,8 +1033,8 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
             is_stop_loss = any(kw in reason for kw in
                                ['stop', 'hard_stop', 'chandelier', 'structure', 'breakeven', 'dead_money',
                                 'kill_switch'])
-            if is_stop_loss and hasattr(strategy, 'regime_detector'):
-                strategy.regime_detector.record_stop_loss(current_date, ticker, pnl_pct)
+            # if is_stop_loss and hasattr(strategy, 'regime_detector'):
+            #     strategy.regime_detector.record_stop_loss(current_date, ticker, pnl_pct)
 
             # Trigger recovery mode re-lock on stop loss
             if is_stop_loss and recovery_manager is not None:

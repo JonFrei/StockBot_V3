@@ -181,6 +181,22 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
                 'rotation_mult': alloc['rotation_mult']
             })
 
+        # === FIX: Reduce lowest-scored positions until within budget ===
+        while scaled_allocations and sum(a['cost'] for a in scaled_allocations) > max_deployment:
+            # Sort by score ascending (lowest first)
+            scaled_allocations.sort(key=lambda x: x['signal_score'])
+
+            # Reduce quantity of lowest-scored position by 1
+            if scaled_allocations[0]['quantity'] > 1:
+                scaled_allocations[0]['quantity'] -= 1
+                scaled_allocations[0]['cost'] = scaled_allocations[0]['quantity'] * scaled_allocations[0]['price']
+            else:
+                # Already at 1 share, must remove entirely
+                removed = scaled_allocations.pop(0)
+                if verbose:
+                    print(
+                        f"   ⚠️ {removed['ticker']}: Removed to stay within budget (score: {removed['signal_score']})")
+
         allocations = scaled_allocations
 
     if not allocations:

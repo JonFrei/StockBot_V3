@@ -43,8 +43,6 @@ class RecoveryModeConfig:
     RECOVERY_POSITION_MULTIPLIER = 1.0
     RECOVERY_MAX_POSITIONS = 8
     RECOVERY_MAX_POSITIONS_HIGHER_LOW = 10  # More positions if higher low confirmed
-    # RECOVERY_PROFIT_TARGET = 5.0
-    # RECOVERY_ELIGIBLE_TIERS = ['premium', 'active']  # All active tier and above
 
     # =========================================================================
     # TRACK 2: TIME-BASED FALLBACK (Lower Conviction)
@@ -60,9 +58,6 @@ class RecoveryModeConfig:
     # === TRACK 2 CAUTIOUS SETTINGS ===
     CAUTIOUS_POSITION_MULTIPLIER = 0.5  # Half position size
     CAUTIOUS_MAX_POSITIONS = 6  # Fewer positions
-    # CAUTIOUS_PROFIT_TARGET = 4.0  # Tighter profit target
-    # CAUTIOUS_STOP_MULTIPLIER = 0.8  # Tighter stops (0.8x normal ATR)
-    # CAUTIOUS_ELIGIBLE_TIERS = ['premium']  # Premium tier only
 
     # =========================================================================
     # SHARED EXIT CONDITIONS
@@ -73,11 +68,6 @@ class RecoveryModeConfig:
     BREADTH_LOCK_THRESHOLD = 15.0  # Exit if breadth collapses below 15%
     RELOCK_ON_NEW_LOW_DAYS = 10  # Exit if SPY makes new 10-day low
     RELOCK_ON_PORTFOLIO_DROP_PCT = 3.0  # Exit if portfolio drops 3% from recovery entry
-
-    # =========================================================================
-    # GRADUATION CONDITIONS (Recovery → Normal)
-    # =========================================================================
-    # GRADUATE_SPY_ABOVE_200_DAYS = 3  # SPY > 200 SMA for N consecutive days
 
 
 class RecoveryModeManager:
@@ -775,7 +765,7 @@ class RecoveryModeManager:
                     'recovery_entry_method': 'time_based',
                     'position_multiplier': RecoveryModeConfig.CAUTIOUS_POSITION_MULTIPLIER,
                     'max_positions': RecoveryModeConfig.CAUTIOUS_MAX_POSITIONS,
-                     #'allow_entries': True,
+                    #'allow_entries': True,
                     # 'profit_target': RecoveryModeConfig.CAUTIOUS_PROFIT_TARGET,
                     # 'stop_multiplier': RecoveryModeConfig.CAUTIOUS_STOP_MULTIPLIER,
                     # 'eligible_tiers': RecoveryModeConfig.CAUTIOUS_ELIGIBLE_TIERS,
@@ -897,6 +887,7 @@ class RecoveryModeManager:
     def trigger_relock(self, current_date, reason):
         """Compatibility method"""
         return self.exit_recovery_mode(reason)
+
     '''
     def is_tier_eligible(self, tier):
         """Check if a tier is eligible for trading in current mode"""
