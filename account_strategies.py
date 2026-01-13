@@ -212,6 +212,25 @@ class SwingTradeStrategy(Strategy):
                 print(f"[FILL] SELL {order.symbol}: {quantity} @ ${price:.2f} = ${quantity * price:,.2f}")
             print(f"[FILL] Lumibot cash after fill: ${self.get_cash():,.2f}")
 
+    def after_market_closes(self):
+        """Called by Lumibot after market closes - perfect for daily email"""
+        if Config.BACKTESTING:
+            return
+
+        print("\n[EMAIL] after_market_closes triggered - sending daily summary...")
+
+        try:
+            eod_tracker = account_email_notifications.ExecutionTracker()
+            eod_tracker.complete('SUCCESS')
+
+            current_time = self.get_datetime()
+            account_email_notifications.send_daily_summary_email(self, current_time, eod_tracker)
+            print(f"[EMAIL] Daily email sent for {current_time.date()}")
+        except Exception as e:
+            import traceback
+            print(f"[EMAIL ERROR] Failed: {e}")
+            print(traceback.format_exc())
+
     def on_trading_iteration(self):
         execution_tracker = account_email_notifications.ExecutionTracker()
         summary = reset_summary()
@@ -219,6 +238,7 @@ class SwingTradeStrategy(Strategy):
         # =================================================================
         # END OF DAY EMAIL CHECK
         # =================================================================
+
         if not Config.BACKTESTING:
             try:
                 from datetime import time as dt_time
@@ -228,9 +248,9 @@ class SwingTradeStrategy(Strategy):
                 print(
                     f"[EMAIL DEBUG] Time check: {current_time.time()}, sent date: {self._daily_email_sent_date}, today: {current_date_only}")
 
-                # Send email if after 4:05 PM EST and haven't sent today
-                if current_time.time() >= dt_time(16, 5) and self._daily_email_sent_date != current_date_only:
-                    print("\n[EMAIL] End of day detected - sending daily summary...")
+                # Send email if after 3:00 PM EST and haven't sent today
+                if current_time.time() >= dt_time(15, 0) and self._daily_email_sent_date != current_date_only:
+                    print("\n[EMAIL] on_trading_iteration End of Day Triggered - sending daily summary...")
 
                     eod_tracker = account_email_notifications.ExecutionTracker()
                     eod_tracker.complete('SUCCESS')
