@@ -102,6 +102,7 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
         try:
             ticker = opp['ticker']
             current_price = strategy.get_last_price(ticker)
+            # current_price = opp['data']['close']
             rotation_mult = opp.get('rotation_mult', 1.0)
 
             # Apply rotation multiplier

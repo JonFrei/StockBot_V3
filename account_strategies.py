@@ -9,6 +9,8 @@ Changes:
 - UPDATED: Removed time-based trading window for live trading
 - UPDATED: Per-stock daily tracking (no stock traded more than once per day)
 - UPDATED: Daily traded stocks persisted to database for crash recovery
+- UPDATED: Daily signal scan time-gate (once per day after 10 AM ET)
+- UPDATED: Uses previous day's completed bar data for signal generation
 """
 
 from lumibot.strategies import Strategy
@@ -19,7 +21,6 @@ import stock_signals
 import stock_position_sizing
 import account_profit_tracking
 import stock_position_monitoring
-# import stock_entries
 import account_email_notifications
 
 from stock_rotation import StockRotator, should_rotate
@@ -182,7 +183,8 @@ class SwingTradeStrategy(Strategy):
         print(f"   Safeguards: Portfolio DD (15%) + Market Crisis + SPY<200")
         if not Config.BACKTESTING:
             print(f"   Circuit Breaker: {CONSECUTIVE_FAILURE_THRESHOLD} consecutive failures → pause")
-            print(f"   Trading: Continuous throughout market hours (per-stock daily limit)")
+            print(f"   Signal Scan: Once daily after 10:00 AM ET (previous day's data)")
+            print(f"   Position Monitoring: Every 30 minutes")
         print(f"{'=' * 60}\n")
 
     def before_starting_trading(self):
@@ -237,7 +239,6 @@ class SwingTradeStrategy(Strategy):
         # =================================================================
         # END OF DAY EMAIL CHECK
         # =================================================================
-
         if not Config.BACKTESTING:
             try:
                 from datetime import time as dt_time
@@ -298,6 +299,36 @@ class SwingTradeStrategy(Strategy):
             if Config.BACKTESTING:
                 self.last_trade_date = current_date.date()
 
+            # =================================================================
+            # DAILY SIGNAL SCAN TIME-GATE (Live Trading Only)
+            # Signal scanning runs ONCE per day after 10:00 AM ET
+            # Position monitoring (exits) runs every 30 minutes
+            # =================================================================
+            signal_scan_allowed = True  # Default True for backtesting
+
+            if not Config.BACKTESTING:
+                current_time = self.get_datetime()
+                current_date_only = current_time.date()
+
+                # Check if we've already completed signal scan today
+                last_scan_date = db.get_daily_signal_scan_date()
+
+                if last_scan_date == current_date_only:
+                    # Already scanned today - only run position monitoring
+                    signal_scan_allowed = False
+                    print(f"[SCAN] Daily signal scan already completed for {current_date_only}. Position monitoring only.")
+                elif current_time.time() < dt_time(10, 0):
+                    # Before 10 AM - only run position monitoring
+                    signal_scan_allowed = False
+                    print(f"[SCAN] Before 10:00 AM ET ({current_time.time()}). Position monitoring only.")
+                else:
+                    # After 10 AM and haven't scanned - will run full scan
+                    print(f"\n{'=' * 70}")
+                    print(f"🔍 DAILY SIGNAL SCAN - {current_date_only}")
+                    print(f"   Time: {current_time.time()} ET (after 10 AM gate)")
+                    print(f"   Using: Previous day's completed daily bars")
+                    print(f"{'=' * 70}\n")
+
             # Use tracked cash for backtesting display
             if Config.BACKTESTING:
                 display_cash = self.get_cash()
@@ -313,6 +344,8 @@ class SwingTradeStrategy(Strategy):
 
             # =============================================================
             # FETCH MARKET DATA
+            # Note: stock_data.process_data() now excludes today's incomplete
+            # bar for live trading, using only completed daily bars
             # =============================================================
             try:
                 # Get tickers from positions we hold (for exit monitoring)
@@ -450,6 +483,7 @@ class SwingTradeStrategy(Strategy):
                             try:
                                 entry_price = account_broker_data.get_broker_entry_price(position, self, ticker)
                                 current_price = self.get_last_price(ticker)
+
                                 pnl_dollars = (current_price - entry_price) * qty if entry_price > 0 else 0
                                 pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
 
@@ -492,12 +526,8 @@ class SwingTradeStrategy(Strategy):
                     summary.print_summary()
 
                     if not Config.BACKTESTING:
-                        # account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
                         update_end_of_day_metrics(self, current_date, self._current_regime_result)
                         save_state_safe(self)
-
-                    # if Config.BACKTESTING:
-                    #     stock_position_sizing.validate_end_of_day_cash(self)
 
                     return
 
@@ -516,9 +546,9 @@ class SwingTradeStrategy(Strategy):
                 return
 
             # =============================================================
-            # PROCESS EXISTING POSITIONS (Exits)
+            # PROCESS EXISTING POSITIONS (Exits) - ALWAYS RUNS
+            # This section runs every 30 minutes for position monitoring
             # =============================================================
-
             try:
                 exit_orders = stock_position_monitoring.check_positions_for_exits(
                     strategy=self,
@@ -552,9 +582,30 @@ class SwingTradeStrategy(Strategy):
                         return
 
             # =============================================================
+            # EARLY RETURN IF SIGNAL SCAN NOT ALLOWED (Live Trading Only)
+            # Position monitoring is complete - skip new entry logic
+            # =============================================================
+            if not signal_scan_allowed:
+                if not Config.BACKTESTING:
+                    self.failure_tracker.record_success()
+
+                execution_tracker.complete('SUCCESS')
+                summary.print_summary()
+
+                if not Config.BACKTESTING:
+                    update_end_of_day_metrics(self, current_date, self._current_regime_result)
+                    save_state_safe(self)
+                return
+
+            # =============================================================
+            # === EVERYTHING BELOW RUNS ONCE PER DAY (Signal Scan) ===
+            # =============================================================
+
+            # =============================================================
             # RECOVERY POSITION LIMIT CHECK
             # =============================================================
             num_positions = len(self.get_positions())
+
             if regime_result['action'] == 'recovery_override':
                 max_positions = regime_result.get('max_positions', 5)
                 if num_positions >= max_positions:
@@ -562,11 +613,12 @@ class SwingTradeStrategy(Strategy):
 
                     if not Config.BACKTESTING:
                         self.failure_tracker.record_success()
+                        # Record that we completed the daily scan (even if no trades)
+                        db.set_daily_signal_scan_date(current_date_only)
 
                     execution_tracker.complete('SUCCESS')
                     summary.print_summary()
                     if not Config.BACKTESTING:
-                        # account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
                         update_end_of_day_metrics(self, current_date, self._current_regime_result)
                         save_state_safe(self)
                     return
@@ -605,6 +657,11 @@ class SwingTradeStrategy(Strategy):
 
                     vol_metrics = data.get('volatility_metrics', {})
                     if not vol_metrics.get('allow_trading', True):
+                        summary.add_skip(ticker, f"Volatility blocked: {vol_metrics.get('risk_class', 'unknown')}")
+                        continue
+
+                    # Skip if already holding
+                    if ticker in current_holdings:
                         continue
 
                     # 200 SMA trend filter - only buy stocks in uptrends with rising 200 SMA
@@ -659,7 +716,6 @@ class SwingTradeStrategy(Strategy):
             # FILTER OUT STOCKS ALREADY TRADED TODAY (Live Trading Only)
             # =============================================================
             if not Config.BACKTESTING and hasattr(self, 'daily_traded_stocks') and self.daily_traded_stocks:
-                # pre_filter_count = len(all_opportunities)
                 filtered_tickers = [opp['ticker'] for opp in all_opportunities if
                                     opp['ticker'] in self.daily_traded_stocks]
 
@@ -667,11 +723,7 @@ class SwingTradeStrategy(Strategy):
                     opp for opp in all_opportunities
                     if opp['ticker'] not in self.daily_traded_stocks
                 ]
-                #filtered_count = pre_filter_count - len(all_opportunities)
-                # if filtered_count > 0:
-                #     print(f"[INFO] Filtered {filtered_count} stock(s) already traded today")
-                #     for opp_ticker in [o['ticker'] for o in all_opportunities[:filtered_count]]:
-                #         summary.add_warning(f"{opp_ticker} already traded today - skipped")
+
                 if filtered_tickers:
                     print(f"[INFO] Filtered {len(filtered_tickers)} stock(s) already traded today")
                     for ticker in filtered_tickers:
@@ -683,11 +735,13 @@ class SwingTradeStrategy(Strategy):
             if not all_opportunities:
                 if not Config.BACKTESTING:
                     self.failure_tracker.record_success()
+                    # Record that we completed the daily scan (even if no opportunities)
+                    db.set_daily_signal_scan_date(current_date_only)
+                    print(f"[SCAN] ✅ Daily signal scan completed for {current_date_only} (no opportunities)")
 
                 execution_tracker.complete('SUCCESS')
                 summary.print_summary()
                 if not Config.BACKTESTING:
-                    # account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
                     update_end_of_day_metrics(self, current_date, self._current_regime_result)
                     save_state_safe(self)
                 return
@@ -695,64 +749,18 @@ class SwingTradeStrategy(Strategy):
             try:
                 portfolio_context = stock_position_sizing.create_portfolio_context(self)
 
-                if portfolio_context['deployable_cash'] <= 0:
-                    summary.add_warning("No deployable cash")
-
-                    if not Config.BACKTESTING:
-                        self.failure_tracker.record_success()
-
-                    execution_tracker.complete('SUCCESS')
-                    summary.print_summary()
-
-                    update_end_of_day_metrics(self, current_date, self._current_regime_result)
-                    save_state_safe(self)
-                    return
-
-                if portfolio_context['available_slots'] <= 0:
-                    summary.add_warning("No available slots")
-
-                    if not Config.BACKTESTING:
-                        self.failure_tracker.record_success()
-
-                    execution_tracker.complete('SUCCESS')
-                    summary.print_summary()
-
-                    update_end_of_day_metrics(self, current_date, self._current_regime_result)
-                    save_state_safe(self)
-                    return
-
-                seen_tickers = {}
+                sizing_opportunities = []
                 for opp in all_opportunities:
-                    if opp['score'] >= 60:
-                        ticker = opp['ticker']
-                        if ticker not in seen_tickers or opp['score'] > seen_tickers[ticker]['score']:
-                            seen_tickers[ticker] = opp
-
-                sizing_opportunities = [
-                    {
+                    sizing_opportunities.append({
                         'ticker': opp['ticker'],
-                        'data': opp['data'],
-                        'score': opp['score'],
                         'signal_type': opp['signal_type'],
-                        'vol_metrics': opp['vol_metrics'],
-                        'rotation_mult': opp['rotation_mult']
-                    }
-                    for opp in seen_tickers.values()
-                ]
+                        'signal_score': opp['score'],
+                        'rotation_mult': opp.get('rotation_mult', 1.0),
+                        'vol_metrics': opp.get('vol_metrics', {}),
+                        'data': opp.get('data', {})
+                    })
 
                 regime_multiplier = regime_result['position_size_multiplier']
-                # Skip position sizing entirely during crisis (regime_multiplier = 0)
-                if regime_multiplier == 0:
-                    summary.add_warning(f"Crisis mode active - no new positions")
-
-                    if not Config.BACKTESTING:
-                        self.failure_tracker.record_success()
-
-                    execution_tracker.complete('SUCCESS')
-                    summary.print_summary()
-                    update_end_of_day_metrics(self, current_date, self._current_regime_result)
-                    save_state_safe(self)
-                    return
 
                 allocations = stock_position_sizing.calculate_position_sizes(
                     sizing_opportunities,
@@ -767,6 +775,9 @@ class SwingTradeStrategy(Strategy):
 
                     if not Config.BACKTESTING:
                         self.failure_tracker.record_success()
+                        # Record that we completed the daily scan
+                        db.set_daily_signal_scan_date(current_date_only)
+                        print(f"[SCAN] ✅ Daily signal scan completed for {current_date_only} (no allocations)")
 
                     execution_tracker.complete('SUCCESS')
                     summary.print_summary()
@@ -794,13 +805,7 @@ class SwingTradeStrategy(Strategy):
             # =============================================================
             buy_failures = 0
             daily_spent = 0.0
-            '''
-            max_deployment = portfolio_context['deployable_cash'] * (
-                        stock_position_sizing.SimplifiedSizingConfig.MAX_CASH_DEPLOYMENT_PCT / 100)
-            daily_limit = self.portfolio_value * (
-                        stock_position_sizing.SimplifiedSizingConfig.MAX_DAILY_DEPLOYMENT_PCT / 100)
-            max_deployment = min(max_deployment, daily_limit)
-            '''
+
             for alloc in allocations:
                 try:
                     ticker = alloc['ticker']
@@ -813,32 +818,7 @@ class SwingTradeStrategy(Strategy):
                     rotation_mult = alloc.get('rotation_mult', 1.0)
 
                     # Check 1: Would this buy exceed daily deployment limit?
-                    # Get actual current price and validate against sizing price
-                    actual_price = self.get_last_price(ticker)
-                    actual_cost = quantity * actual_price
-
-                    # Check for price discrepancy (>10% difference suggests bad data)
-                    if abs(actual_price - sizing_price) / sizing_price > 0.10:
-                        summary.add_warning(
-                            f"Skipped {ticker}: price mismatch (sized @ ${sizing_price:.2f}, actual ${actual_price:.2f})")
-                        continue
-
-                    # Check against actual available cash
-                    available_cash = self.get_cash()
-                    min_reserve = self.portfolio_value * (
-                            stock_position_sizing.SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100)
-                    if (available_cash - actual_cost) < min_reserve:
-                        summary.add_warning(
-                            f"Skipped {ticker}: insufficient cash (${available_cash:,.0f} - ${actual_cost:,.0f} < ${min_reserve:,.0f} reserve)")
-                        continue
-
-                    # Use actual price/cost for logging
-                    price = actual_price
-                    cost = actual_cost
-
-                    # Check 2: Do we have enough actual cash?
                     if Config.BACKTESTING:
-                        # available_cash = stock_position_sizing.get_tracked_cash()
                         available_cash = self.get_cash()
                         min_reserve = self.portfolio_value * (
                                 stock_position_sizing.SimplifiedSizingConfig.MIN_CASH_RESERVE_PCT / 100)
@@ -888,17 +868,7 @@ class SwingTradeStrategy(Strategy):
                     if not Config.BACKTESTING:
                         db.add_daily_traded_stock(ticker, current_date.date())
                         self.daily_traded_stocks.add(ticker)
-                    '''
-                    if hasattr(self, 'order_logger'):
-                        self.order_logger.log_order(
-                            ticker=ticker,
-                            side='buy',
-                            quantity=quantity,
-                            signal_type=signal_type,
-                            award=tier,
-                            quality_score=signal_score
-                        )
-                    '''
+
                     execution_tracker.record_action('entries', count=1)
 
                 except Exception as e:
@@ -915,6 +885,13 @@ class SwingTradeStrategy(Strategy):
                     enter_paused_state(self, self.failure_tracker, execution_tracker)
                     return
 
+            # =============================================================
+            # RECORD DAILY SIGNAL SCAN COMPLETION (Live Trading Only)
+            # =============================================================
+            if not Config.BACKTESTING:
+                db.set_daily_signal_scan_date(current_date_only)
+                print(f"[SCAN] ✅ Daily signal scan completed and recorded for {current_date_only}")
+
             # Success - reset failure counter
             if not Config.BACKTESTING:
                 self.failure_tracker.record_success()
@@ -923,7 +900,6 @@ class SwingTradeStrategy(Strategy):
             summary.print_summary()
 
             if not Config.BACKTESTING:
-                # account_email_notifications.send_daily_summary_email(self, current_date, execution_tracker)
                 update_end_of_day_metrics(self, current_date, self._current_regime_result)
                 save_state_safe(self)
 

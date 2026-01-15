@@ -960,6 +960,53 @@ class Database:
             self.connection_pool.closeall()
             print("[DATABASE] Connection pool closed")
 
+    # In PostgresDatabase class:
+
+    def get_daily_signal_scan_date(self):
+        """Get the date when daily signal scan was last completed"""
+
+        def _get():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT value FROM dashboard_settings WHERE key = 'last_signal_scan_date'")
+                row = cursor.fetchone()
+                cursor.close()
+                if row and row[0]:
+                    return datetime.strptime(row[0], '%Y-%m-%d').date()
+                return None
+            finally:
+                self.return_connection(conn)
+
+        try:
+            return self._retry_operation(_get)
+        except Exception as e:
+            print(f"[DATABASE] Error getting signal scan date: {e}")
+            return None
+
+    def set_daily_signal_scan_date(self, scan_date):
+        """Record that daily signal scan completed for this date"""
+
+        def _set():
+            conn = self.get_connection()
+            try:
+                cursor = conn.cursor()
+                value = scan_date.strftime('%Y-%m-%d')
+                cursor.execute("""
+                    INSERT INTO dashboard_settings (key, value, updated_at)
+                    VALUES ('last_signal_scan_date', %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (key) DO UPDATE SET value = %s, updated_at = CURRENT_TIMESTAMP
+                """, (value, value))
+                conn.commit()
+                cursor.close()
+                print(f"[DATABASE] Signal scan date set to: {value}")
+            finally:
+                self.return_connection(conn)
+
+        try:
+            self._retry_operation(_set)
+        except Exception as e:
+            print(f"[DATABASE] Error setting signal scan date: {e}")
 
 # =============================================================================
 # IN-MEMORY DATABASE FOR BACKTESTING
@@ -1233,6 +1280,15 @@ class InMemoryDatabase:
         else:
             self.signal_performance_df = pd.concat([self.signal_performance_df, new_row], ignore_index=True)
 
+    # In InMemoryDatabase class (no-ops for backtesting):
+
+    def get_daily_signal_scan_date(self):
+        """Backtesting uses last_trade_date instead"""
+        return None
+
+    def set_daily_signal_scan_date(self, scan_date):
+        """No-op for backtesting"""
+        pass
 
 # =============================================================================
 # GLOBAL DATABASE INSTANCE

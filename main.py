@@ -110,7 +110,7 @@ def main():
             from lumibot.backtesting import AlpacaBacktesting
 
             start = datetime(2025, 10, 13)
-            end = datetime(2026, 1, 14)
+            end = datetime(2026, 1, 13)
 
             SwingTradeStrategy.backtest(
                 datasource_class=AlpacaBacktesting,

@@ -35,16 +35,6 @@ KILL SWITCH (Momentum Fade Detection):
   * Score >= 3/6 on strength signals
 - EXIT = Momentum Fade + Price Confirmation - Strength Override
 
-V5 CHANGES (from V4):
-- Hard stop: 8% → 6% (cap catastrophic losses)
-- Kill switch activation: 5 days → 3 days (catch failures earlier)
-- Max initial stop: 7% → 5% (must be inside hard stop)
-
-V5.1 CHANGES:
-- Added kill switch strength override with RESTRICTIVE requirements:
-  * Profit requirement: +1R minimum (positions below this always trigger kill switch)
-  * Mandatory signals: above EMA50 + (bullish stack OR RS > 2%)
-  * Tightened criteria: ADX > 30, RS lookback 20 bars, RS outperformance 2%+
 """
 
 import stock_indicators
@@ -783,7 +773,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         raw_df = all_stock_data[ticker].get('raw')
 
         # Yesterday's close - used for signal-based exits
-        signal_price = data.get('close', 0)
+        # signal_price = data.get('close', 0)
 
         # Real-time price - used for hard stop and execution
         try:
@@ -843,10 +833,6 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         pnl_dollars = (current_price - entry_price) * broker_quantity
         pnl_pct = ((current_price - entry_price) / entry_price * 100)
 
-        # Use realtime price for actual P&L (what we'll get when we sell)
-        # pnl_dollars = (realtime_price - entry_price) * broker_quantity
-        # pnl_pct = ((realtime_price - entry_price) / entry_price * 100)
-
         # Get position state
         R = metadata.get('R', entry_price * 0.05)
         current_stop = metadata.get('current_stop', 0)
@@ -861,14 +847,12 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         # PRIORITY 1: HARD STOP (6% max loss)
         # =====================================================================
         exit_signal = check_hard_stop(entry_price, current_price)
-        # exit_signal = check_hard_stop(entry_price, realtime_price)
 
         # =====================================================================
         # PRIORITY 2: TRAILING/STRUCTURE STOP
         # =====================================================================
         if not exit_signal:
             exit_signal = check_trailing_stop(current_stop, current_price, phase)
-            # exit_signal = check_trailing_stop(current_stop, signal_price, phase)
 
         # =====================================================================
         # PRIORITY 3: KILL SWITCH (momentum fade after 3 days)
@@ -888,15 +872,12 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         # =====================================================================
         if not exit_signal:
             exit_signal = check_dead_money(bars_below_ema50, pnl_pct, R, entry_price, current_price)
-            # signal_pnl_pct = ((signal_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
-            # exit_signal = check_dead_money(bars_below_ema50, signal_pnl_pct, R, entry_price, signal_price)
 
         # =====================================================================
         # PRIORITY 5: PROFIT TAKE (2R)
         # =====================================================================
         if not exit_signal:
             exit_signal = check_profit_take(entry_price, current_price, R, partial_taken)
-            # exit_signal = check_profit_take(entry_price, signal_price, R, partial_taken)
 
         # =====================================================================
         # PACKAGE EXIT ORDER
@@ -995,8 +976,6 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
 
                 sell_order = strategy.create_order(ticker, sell_quantity, 'sell')
                 strategy.submit_order(sell_order)
-                # if Config.BACKTESTING:
-                #     stock_position_sizing.update_backtest_cash_for_sell(sell_quantity * current_price)
                 continue
 
             # Normal profit take
@@ -1019,8 +998,6 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
 
             sell_order = strategy.create_order(ticker, sell_quantity, 'sell')
             strategy.submit_order(sell_order)
-            # if Config.BACKTESTING:
-            #     stock_position_sizing.update_backtest_cash_for_sell(sell_quantity * current_price)
 
         # =====================================================================
         # FULL EXIT: Close entire position
@@ -1046,8 +1023,6 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
             is_stop_loss = any(kw in reason for kw in
                                ['stop', 'hard_stop', 'chandelier', 'structure', 'breakeven', 'dead_money',
                                 'kill_switch'])
-            # if is_stop_loss and hasattr(strategy, 'regime_detector'):
-            #     strategy.regime_detector.record_stop_loss(current_date, ticker, pnl_pct)
 
             # Trigger recovery mode re-lock on stop loss
             if is_stop_loss and recovery_manager is not None:
@@ -1055,5 +1030,3 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
 
             sell_order = strategy.create_order(ticker, sell_quantity, 'sell')
             strategy.submit_order(sell_order)
-            # if Config.BACKTESTING:
-            #     stock_position_sizing.update_backtest_cash_for_sell(sell_quantity * current_price)

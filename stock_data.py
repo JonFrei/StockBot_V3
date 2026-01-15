@@ -21,6 +21,21 @@ def process_data(symbols, current_date):
     processed_data = {}
 
     for ticker, df in historical_data.items():
+        # === LIVE TRADING: Exclude today's incomplete bar ===
+        if not Config.BACKTESTING and len(df) > 1:
+            # Get today's date (normalize timezone)
+            today = current_date.date() if hasattr(current_date, 'date') else current_date
+
+            # Check if last bar is from today (incomplete)
+            last_bar_date = df.index[-1].date() if hasattr(df.index[-1], 'date') else df.index[-1]
+
+            if last_bar_date == today:
+                df = df.iloc[:-1]  # Remove today's incomplete bar
+                print(f"[DATA] {ticker}: Using previous day's completed bar (excluded today's partial data)")
+
+        # Minimum data requirement (after potentially removing today's bar)
+        if len(df) < 200:
+            continue
         temp_data = {
             'indicators': {},
             'raw': df
