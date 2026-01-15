@@ -6,7 +6,7 @@
   <component name="ChangeListManager">
     <list default="true" id="d6df019d-759f-4aef-8455-f63cac562958" name="Changes" comment="com">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/account_strategies.py" beforeDir="false" afterPath="$PROJECT_DIR$/account_strategies.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_position_monitoring.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_position_monitoring.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -231,14 +231,6 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1762775089088</updated>
-    </task>
-    <task id="LOCAL-00203" summary="com">
-      <option name="closed" value="true" />
-      <created>1766846839773</created>
-      <option name="number" value="00203" />
-      <option name="presentableId" value="LOCAL-00203" />
-      <option name="project" value="LOCAL" />
-      <updated>1766846839773</updated>
     </task>
     <task id="LOCAL-00204" summary="com">
       <option name="closed" value="true" />
@@ -624,7 +616,15 @@
       <option name="project" value="LOCAL" />
       <updated>1768226170488</updated>
     </task>
-    <option name="localTasksCounter" value="252" />
+    <task id="LOCAL-00252" summary="com">
+      <option name="closed" value="true" />
+      <created>1768305391654</created>
+      <option name="number" value="00252" />
+      <option name="presentableId" value="LOCAL-00252" />
+      <option name="project" value="LOCAL" />
+      <updated>1768305391654</updated>
+    </task>
+    <option name="localTasksCounter" value="253" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
