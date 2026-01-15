@@ -236,29 +236,6 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_rotation_state_updated ON rotation_state(updated_at);
             """)
 
-            # Order log table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS order_log (
-                    id SERIAL PRIMARY KEY,
-                    ticker VARCHAR(10) NOT NULL,
-                    side VARCHAR(10) NOT NULL,
-                    quantity INTEGER NOT NULL,
-                    order_type VARCHAR(20) NOT NULL,
-                    limit_price DECIMAL(10, 2),
-                    filled_price DECIMAL(10, 2),
-                    submitted_at TIMESTAMP NOT NULL,
-                    signal_type VARCHAR(50),
-                    portfolio_value DECIMAL(12, 2),
-                    cash_before DECIMAL(12, 2),
-                    award VARCHAR(20),
-                    quality_score INTEGER,
-                    broker_order_id VARCHAR(100),
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-                CREATE INDEX IF NOT EXISTS idx_order_log_ticker ON order_log(ticker);
-                CREATE INDEX IF NOT EXISTS idx_order_log_submitted ON order_log(submitted_at);
-            """)
-
             # Daily metrics table
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS daily_metrics (
@@ -275,19 +252,6 @@ class Database:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE INDEX IF NOT EXISTS idx_daily_metrics_date ON daily_metrics(date);
-            """)
-
-            # Signal performance table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS signal_performance (
-                    signal_name VARCHAR(50) PRIMARY KEY,
-                    total_trades INTEGER DEFAULT 0,
-                    wins INTEGER DEFAULT 0,
-                    win_rate DECIMAL(5, 2) DEFAULT 0,
-                    total_pnl DECIMAL(12, 2) DEFAULT 0,
-                    avg_pnl DECIMAL(10, 2) DEFAULT 0,
-                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
             """)
 
             # Dashboard settings table (for bot pause control)
@@ -857,58 +821,6 @@ class Database:
             print(f"[DATABASE] Error saving daily metrics: {e}")
 
     # =========================================================================
-    # SIGNAL PERFORMANCE METHODS
-    # =========================================================================
-
-    def update_signal_performance(self, signal_name, total_trades, wins, total_pnl):
-        """Update signal performance metrics"""
-
-        def _update():
-            conn = self.get_connection()
-            try:
-                cursor = conn.cursor()
-                win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
-                avg_pnl = total_pnl / total_trades if total_trades > 0 else 0
-
-                cursor.execute("""
-                    INSERT INTO signal_performance 
-                    (signal_name, total_trades, wins, win_rate, total_pnl, avg_pnl, last_updated)
-                    VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-                    ON CONFLICT (signal_name) DO UPDATE SET
-                        total_trades = signal_performance.total_trades + EXCLUDED.total_trades,
-                        wins = signal_performance.wins + EXCLUDED.wins,
-                        total_pnl = signal_performance.total_pnl + EXCLUDED.total_pnl,
-                        win_rate = CASE 
-                            WHEN (signal_performance.total_trades + EXCLUDED.total_trades) > 0 
-                            THEN ((signal_performance.wins + EXCLUDED.wins)::DECIMAL / 
-                                  (signal_performance.total_trades + EXCLUDED.total_trades) * 100)
-                            ELSE 0 
-                        END,
-                        avg_pnl = CASE 
-                            WHEN (signal_performance.total_trades + EXCLUDED.total_trades) > 0 
-                            THEN ((signal_performance.total_pnl + EXCLUDED.total_pnl) / 
-                                  (signal_performance.total_trades + EXCLUDED.total_trades))
-                            ELSE 0 
-                        END,
-                        last_updated = CURRENT_TIMESTAMP
-                """, (signal_name, total_trades, wins, win_rate, total_pnl, avg_pnl))
-                conn.commit()
-            finally:
-                cursor.close()
-                self.return_connection(conn)
-
-        try:
-            self._retry_operation(_update)
-        except Exception as e:
-            print(f"[DATABASE] Error updating signal performance: {e}")
-
-    def close_pool(self):
-        """Close all connections in pool"""
-        if self.connection_pool:
-            self.connection_pool.closeall()
-            print("[DATABASE] Connection pool closed")
-
-    # =========================================================================
     # BOT STATE METHODS
     # =========================================================================
 
@@ -1063,11 +975,6 @@ class InMemoryDatabase:
             'ticker', 'quantity', 'entry_price', 'exit_price', 'pnl_dollars', 'pnl_pct',
             'entry_signal', 'entry_score', 'exit_signal', 'exit_date'
         ])
-        self.order_log_df = pd.DataFrame(columns=[
-            'ticker', 'side', 'quantity', 'order_type', 'limit_price', 'filled_price',
-            'submitted_at', 'signal_type', 'portfolio_value', 'cash_before', 'award',
-            'quality_score', 'broker_order_id'
-        ])
         self.daily_metrics_df = pd.DataFrame(columns=[
             'date', 'portfolio_value', 'cash_balance', 'num_positions', 'num_trades',
             'realized_pnl', 'unrealized_pnl', 'win_rate', 'spy_close', 'market_regime'
@@ -1216,34 +1123,6 @@ class InMemoryDatabase:
         if lookback:
             df = df.tail(lookback)
         return df.to_dict('records')
-
-    # =========================================================================
-    # ORDER LOG OPERATIONS
-    # =========================================================================
-
-    def insert_order_log(self, ticker, side, quantity, order_type, limit_price, filled_price,
-                         submitted_at, signal_type, portfolio_value, cash_before, award,
-                         quality_score, broker_order_id):
-
-        new_row = pd.DataFrame([{
-            'ticker': ticker,
-            'side': side,
-            'quantity': quantity,
-            'order_type': order_type,
-            'limit_price': limit_price,
-            'filled_price': filled_price,
-            'submitted_at': submitted_at,
-            'signal_type': signal_type,
-            'portfolio_value': portfolio_value,
-            'cash_before': cash_before,
-            'award': award,
-            'quality_score': quality_score,
-            'broker_order_id': broker_order_id
-        }])
-        if self.order_log_df.empty:
-            self.order_log_df = new_row
-        else:
-            self.order_log_df = pd.concat([self.order_log_df, new_row], ignore_index=True)
 
     # =========================================================================
     # POSITION METADATA OPERATIONS

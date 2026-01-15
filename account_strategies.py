@@ -173,7 +173,6 @@ class SwingTradeStrategy(Strategy):
         # Clear split tracker at start of new session
         account_broker_data.split_tracker.clear()
 
-        self.order_logger = account_profit_tracking.OrderLogger(self)
         self._current_regime_result = None  # Store for metrics tracking
 
         print(f"\n{'=' * 60}")

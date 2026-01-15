@@ -5,7 +5,6 @@ MODIFICATIONS:
 - record_trade() now notifies stock_rotator of trade results
 - This enables real-time tier updates based on actual performance
 - DailySummary tracks add-ons separately from new entries
-- OrderLogger supports is_addon flag
 - NEW: update_end_of_day_metrics() updates daily_metrics and signal_performance tables
 """
 
@@ -295,39 +294,6 @@ def _update_metrics_internal(strategy, current_date, regime_result):
         )
     except Exception as e:
         print(f"[METRICS] Failed to save daily metrics: {e}")
-
-    # =================================================================
-    # UPDATE SIGNAL PERFORMANCE
-    # =================================================================
-
-    if closed_trades:
-        try:
-            # Aggregate stats by signal
-            signal_stats = defaultdict(lambda: {'trades': 0, 'wins': 0, 'pnl': 0.0})
-
-            for trade in closed_trades:
-                signal = trade.get('entry_signal', 'unknown')
-                if signal:
-                    signal_stats[signal]['trades'] += 1
-                    signal_stats[signal]['pnl'] += float(trade.get('pnl_dollars', 0))
-                    if trade.get('pnl_dollars', 0) > 0:
-                        signal_stats[signal]['wins'] += 1
-
-            # Update each signal's performance
-            for signal_name, stats in signal_stats.items():
-                try:
-                    db.update_signal_performance(
-                        signal_name=signal_name,
-                        total_trades=stats['trades'],
-                        wins=stats['wins'],
-                        total_pnl=stats['pnl']
-                    )
-                except Exception as e:
-                    print(f"[METRICS] Failed to update signal {signal_name}: {e}")
-
-        except Exception as e:
-            print(f"[METRICS] Failed to update signal performance: {e}")
-
 
 # =============================================================================
 # PROFIT TRACKER CLASS
@@ -694,62 +660,3 @@ class ProfitTracker:
         </table>
         """
 
-
-# =============================================================================
-# ORDER LOGGER CLASS
-# =============================================================================
-
-class OrderLogger:
-    def __init__(self, strategy):
-        self.strategy = strategy
-        self.db = get_database()
-
-    def log_order(self, ticker, side, quantity, signal_type='unknown', award='none',
-                  quality_score=0, limit_price=None, is_addon=False):
-        """
-        Log an order with add-on tracking
-
-        Args:
-            ticker: Stock symbol
-            side: 'buy' or 'sell'
-            quantity: Number of shares
-            signal_type: Entry signal name
-            award: Tier level
-            quality_score: Signal score
-            limit_price: Limit price if applicable
-            was_watchlisted: Whether came from watchlist
-            days_on_watchlist: Days on watchlist before entry
-            is_addon: True if this is an add to existing position
-        """
-        try:
-            filled_price = self.strategy.get_last_price(ticker) if limit_price is None else limit_price
-            portfolio_value = self.strategy.portfolio_value
-            cash_before = self.strategy.get_cash()
-            submitted_at = self.strategy.get_datetime()
-
-            # Modify signal_type to indicate add-on
-            if is_addon:
-                signal_type = f"addon_{signal_type}"
-
-            if Config.BACKTESTING:
-                self.db.insert_order_log(ticker=ticker, side=side, quantity=quantity, order_type='market',
-                                         limit_price=limit_price, filled_price=filled_price, submitted_at=submitted_at,
-                                         signal_type=signal_type, portfolio_value=portfolio_value,
-                                         cash_before=cash_before,
-                                         award=award, quality_score=quality_score, broker_order_id=None)
-            else:
-                conn = self.db.get_connection()
-                try:
-                    cursor = conn.cursor()
-                    cursor.execute("""INSERT INTO order_log (ticker, side, quantity, order_type, limit_price, filled_price,
-                         submitted_at, signal_type, portfolio_value, cash_before, award, quality_score, was_watchlisted, days_on_watchlist)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                                   (ticker, side, quantity, 'market', limit_price, filled_price, submitted_at,
-                                    signal_type,
-                                    portfolio_value, cash_before, award, quality_score))
-                    conn.commit()
-                finally:
-                    cursor.close()
-                    self.db.return_connection(conn)
-        except:
-            pass
