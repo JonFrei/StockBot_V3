@@ -5,6 +5,7 @@ MODIFICATIONS:
 - record_trade() now notifies stock_rotator of trade results
 - This enables real-time tier updates based on actual performance
 - DailySummary tracks add-ons separately from new entries
+- OrderLogger supports is_addon flag
 - NEW: update_end_of_day_metrics() updates daily_metrics and signal_performance tables
 """
 
@@ -210,90 +211,87 @@ def update_end_of_day_metrics(strategy, current_date, regime_result=None):
         regime_result: Result from regime detector (optional, for SPY/regime data)
     """
     try:
-        _update_metrics_internal(strategy, current_date, regime_result)
+        """Internal implementation of metrics update"""
+
+        db = get_database()
+
+        # =================================================================
+        # GATHER DAILY METRICS DATA
+        # =================================================================
+
+        # Portfolio basics
+        portfolio_value = strategy.portfolio_value
+        cash_balance = strategy.get_cash()
+        positions = strategy.get_positions()
+        num_positions = len(positions)
+
+        # Calculate unrealized P&L from positions
+        unrealized_pnl = 0
+        for pos in positions:
+            try:
+                if hasattr(pos, 'unrealized_pl') and pos.unrealized_pl is not None:
+                    unrealized_pnl += float(pos.unrealized_pl)
+            except:
+                pass
+
+        # Get closed trades for today and calculate realized P&L
+        closed_trades = []
+        if hasattr(strategy, 'profit_tracker'):
+            closed_trades = strategy.profit_tracker.get_closed_trades() or []
+
+        # Filter to today's trades
+        today_date = current_date.date() if hasattr(current_date, 'date') else current_date
+        today_trades = []
+        for t in closed_trades:
+            try:
+                exit_date = t.get('exit_date')
+                if exit_date:
+                    trade_date = exit_date.date() if hasattr(exit_date, 'date') else exit_date
+                    if trade_date == today_date:
+                        today_trades.append(t)
+            except:
+                pass
+
+        num_trades = len(today_trades)
+        realized_pnl = sum(t.get('pnl_dollars', 0) for t in today_trades)
+
+        # Calculate overall win rate from all closed trades
+        win_rate = 0
+        if closed_trades:
+            winners = [t for t in closed_trades if t.get('pnl_dollars', 0) > 0]
+            win_rate = (len(winners) / len(closed_trades)) * 100
+
+        # Get SPY close and regime from regime_result
+        spy_close = 0
+        market_regime = 'unknown'
+        if regime_result:
+            # Try to get SPY close from details
+            details = regime_result.get('details', {})
+            spy_close = details.get('spy_close', 0) or regime_result.get('spy_close', 0)
+            market_regime = regime_result.get('action', 'unknown')
+
+        # =================================================================
+        # SAVE DAILY METRICS
+        # =================================================================
+
+        try:
+            db.save_daily_metrics(
+                date=today_date,
+                portfolio_value=portfolio_value,
+                cash_balance=cash_balance,
+                num_positions=num_positions,
+                num_trades=num_trades,
+                realized_pnl=realized_pnl,
+                unrealized_pnl=unrealized_pnl,
+                win_rate=win_rate,
+                spy_close=spy_close,
+                market_regime=market_regime
+            )
+        except Exception as e:
+            print(f"[METRICS] Failed to save daily metrics: {e}")
     except Exception as e:
         print(f"[METRICS] Error updating end-of-day metrics: {e}")
 
-
-def _update_metrics_internal(strategy, current_date, regime_result):
-    """Internal implementation of metrics update"""
-
-    db = get_database()
-
-    # =================================================================
-    # GATHER DAILY METRICS DATA
-    # =================================================================
-
-    # Portfolio basics
-    portfolio_value = strategy.portfolio_value
-    cash_balance = strategy.get_cash()
-    positions = strategy.get_positions()
-    num_positions = len(positions)
-
-    # Calculate unrealized P&L from positions
-    unrealized_pnl = 0
-    for pos in positions:
-        try:
-            if hasattr(pos, 'unrealized_pl') and pos.unrealized_pl is not None:
-                unrealized_pnl += float(pos.unrealized_pl)
-        except:
-            pass
-
-    # Get closed trades for today and calculate realized P&L
-    closed_trades = []
-    if hasattr(strategy, 'profit_tracker'):
-        closed_trades = strategy.profit_tracker.get_closed_trades() or []
-
-    # Filter to today's trades
-    today_date = current_date.date() if hasattr(current_date, 'date') else current_date
-    today_trades = []
-    for t in closed_trades:
-        try:
-            exit_date = t.get('exit_date')
-            if exit_date:
-                trade_date = exit_date.date() if hasattr(exit_date, 'date') else exit_date
-                if trade_date == today_date:
-                    today_trades.append(t)
-        except:
-            pass
-
-    num_trades = len(today_trades)
-    realized_pnl = sum(t.get('pnl_dollars', 0) for t in today_trades)
-
-    # Calculate overall win rate from all closed trades
-    win_rate = 0
-    if closed_trades:
-        winners = [t for t in closed_trades if t.get('pnl_dollars', 0) > 0]
-        win_rate = (len(winners) / len(closed_trades)) * 100
-
-    # Get SPY close and regime from regime_result
-    spy_close = 0
-    market_regime = 'unknown'
-    if regime_result:
-        # Try to get SPY close from details
-        details = regime_result.get('details', {})
-        spy_close = details.get('spy_close', 0) or regime_result.get('spy_close', 0)
-        market_regime = regime_result.get('action', 'unknown')
-
-    # =================================================================
-    # SAVE DAILY METRICS
-    # =================================================================
-
-    try:
-        db.save_daily_metrics(
-            date=today_date,
-            portfolio_value=portfolio_value,
-            cash_balance=cash_balance,
-            num_positions=num_positions,
-            num_trades=num_trades,
-            realized_pnl=realized_pnl,
-            unrealized_pnl=unrealized_pnl,
-            win_rate=win_rate,
-            spy_close=spy_close,
-            market_regime=market_regime
-        )
-    except Exception as e:
-        print(f"[METRICS] Failed to save daily metrics: {e}")
 
 # =============================================================================
 # PROFIT TRACKER CLASS
@@ -540,7 +538,8 @@ class ProfitTracker:
         print(
             f"{'Trades':<20} {len(last_40):>10} | {'Win Rate':<15} {win_rate:>6.1f}% | {'Total P&L':<15} ${total_pnl:>12,.2f}")
         print(f"{'-' * 100}")
-        print(f"{'Ticker':<10} {' | Entry Signal':<20} {'Entry':>12} {' | Exit Signal':<20} {'Exit':>12} {' | P&L %':>12}")
+        print(
+            f"{'Ticker':<10} {' | Entry Signal':<20} {'Entry':>12} {' | Exit Signal':<20} {'Exit':>12} {' | P&L %':>12}")
         print(f"{'-' * 100}")
 
         for trade in reversed(last_40):
@@ -659,4 +658,3 @@ class ProfitTracker:
             {tier_html}
         </table>
         """
-

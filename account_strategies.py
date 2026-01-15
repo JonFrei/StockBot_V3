@@ -888,7 +888,7 @@ class SwingTradeStrategy(Strategy):
                     if not Config.BACKTESTING:
                         db.add_daily_traded_stock(ticker, current_date.date())
                         self.daily_traded_stocks.add(ticker)
-
+                    '''
                     if hasattr(self, 'order_logger'):
                         self.order_logger.log_order(
                             ticker=ticker,
@@ -898,7 +898,7 @@ class SwingTradeStrategy(Strategy):
                             award=tier,
                             quality_score=signal_score
                         )
-
+                    '''
                     execution_tracker.record_action('entries', count=1)
 
                 except Exception as e:
