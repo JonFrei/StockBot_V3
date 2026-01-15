@@ -787,29 +787,16 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
 
         # Real-time price - used for hard stop and execution
         try:
-            realtime_price = strategy.get_last_price(ticker)
-        except:
-            realtime_price = 0
-
-        if realtime_price <= 0:
-            realtime_price = signal_price
-
-        if signal_price <= 0:
-            continue
-
-        '''
-        try:
             current_price = strategy.get_last_price(ticker)
         except:
             current_price = 0
 
-            # Fallback to indicator data if get_last_price fails
+        # Fallback to indicator data if get_last_price fails
         if current_price <= 0:
             current_price = data.get('close', 0)
 
         if current_price <= 0:
             continue
-        '''
 
         # Get ATR (use ATR10 if available, else ATR14)
         current_atr = stock_indicators.get_atr(raw_df, period=ExitConfig.ATR_PERIOD) if raw_df is not None else 0
@@ -843,7 +830,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         # Update position state
         position_monitor.update_position_state(
             ticker=ticker,
-            current_close=signal_price,
+            current_close=current_price,
             current_atr=current_atr,
             ema50=ema50,
             regime_bearish=regime_bearish
@@ -853,12 +840,12 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         metadata = position_monitor.get_position_metadata(ticker)
 
         # Calculate P&L
-        # pnl_dollars = (current_price - entry_price) * broker_quantity
-        # pnl_pct = ((current_price - entry_price) / entry_price * 100)
+        pnl_dollars = (current_price - entry_price) * broker_quantity
+        pnl_pct = ((current_price - entry_price) / entry_price * 100)
 
         # Use realtime price for actual P&L (what we'll get when we sell)
-        pnl_dollars = (realtime_price - entry_price) * broker_quantity
-        pnl_pct = ((realtime_price - entry_price) / entry_price * 100)
+        # pnl_dollars = (realtime_price - entry_price) * broker_quantity
+        # pnl_pct = ((realtime_price - entry_price) / entry_price * 100)
 
         # Get position state
         R = metadata.get('R', entry_price * 0.05)
@@ -873,15 +860,15 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         # =====================================================================
         # PRIORITY 1: HARD STOP (6% max loss)
         # =====================================================================
-        # exit_signal = check_hard_stop(entry_price, current_price)
-        exit_signal = check_hard_stop(entry_price, realtime_price)
+        exit_signal = check_hard_stop(entry_price, current_price)
+        # exit_signal = check_hard_stop(entry_price, realtime_price)
 
         # =====================================================================
         # PRIORITY 2: TRAILING/STRUCTURE STOP
         # =====================================================================
         if not exit_signal:
-            # exit_signal = check_trailing_stop(current_stop, current_price, phase)
-            exit_signal = check_trailing_stop(current_stop, signal_price, phase)
+            exit_signal = check_trailing_stop(current_stop, current_price, phase)
+            # exit_signal = check_trailing_stop(current_stop, signal_price, phase)
 
         # =====================================================================
         # PRIORITY 3: KILL SWITCH (momentum fade after 3 days)
@@ -892,8 +879,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
                 raw_df, data, entry_date, current_date,
                 spy_df=spy_df,
                 entry_price=entry_price,
-                # current_price=current_price,
-                current_price=signal_price,
+                current_price=current_price,
                 R=R
             )
 
@@ -901,16 +887,16 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         # PRIORITY 4: DEAD MONEY FILTER
         # =====================================================================
         if not exit_signal:
-            # exit_signal = check_dead_money(bars_below_ema50, pnl_pct, R, entry_price, current_price)
-            signal_pnl_pct = ((signal_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
-            exit_signal = check_dead_money(bars_below_ema50, signal_pnl_pct, R, entry_price, signal_price)
+            exit_signal = check_dead_money(bars_below_ema50, pnl_pct, R, entry_price, current_price)
+            # signal_pnl_pct = ((signal_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+            # exit_signal = check_dead_money(bars_below_ema50, signal_pnl_pct, R, entry_price, signal_price)
 
         # =====================================================================
         # PRIORITY 5: PROFIT TAKE (2R)
         # =====================================================================
         if not exit_signal:
-            # exit_signal = check_profit_take(entry_price, current_price, R, partial_taken)
-            exit_signal = check_profit_take(entry_price, signal_price, R, partial_taken)
+            exit_signal = check_profit_take(entry_price, current_price, R, partial_taken)
+            # exit_signal = check_profit_take(entry_price, signal_price, R, partial_taken)
 
         # =====================================================================
         # PACKAGE EXIT ORDER
@@ -920,9 +906,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
             exit_signal['broker_quantity'] = broker_quantity
             exit_signal['broker_entry_price'] = broker_entry_price
             exit_signal['entry_price'] = entry_price
-            # exit_signal['current_price'] = current_price
-            exit_signal['current_price'] = realtime_price  # Execution price
-            exit_signal['signal_price'] = signal_price  # Price that triggered the exit
+            exit_signal['current_price'] = current_price
             exit_signal['pnl_dollars'] = pnl_dollars
             exit_signal['pnl_pct'] = pnl_pct
             exit_signal['entry_signal'] = metadata.get('entry_signal', 'pre_existing')

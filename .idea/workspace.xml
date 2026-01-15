@@ -72,21 +72,21 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;Python tests.Python tests in test_email.py.executor&quot;: &quot;Run&quot;,
-    &quot;Python.diagnose_entry_price.executor&quot;: &quot;Run&quot;,
-    &quot;Python.diagnose_positions.executor&quot;: &quot;Run&quot;,
-    &quot;Python.main.executor&quot;: &quot;Run&quot;,
-    &quot;Python.signals.executor&quot;: &quot;Debug&quot;,
-    &quot;Python.sync_tickers.executor&quot;: &quot;Run&quot;,
-    &quot;Python.text_vix.executor&quot;: &quot;Run&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
-    &quot;last_opened_file_path&quot;: &quot;C:/Users/freie/PycharmProjects/StockBot_V3&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;preferences.general&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "Python tests.Python tests in test_email.py.executor": "Run",
+    "Python.diagnose_entry_price.executor": "Run",
+    "Python.diagnose_positions.executor": "Run",
+    "Python.main.executor": "Run",
+    "Python.signals.executor": "Debug",
+    "Python.sync_tickers.executor": "Run",
+    "Python.text_vix.executor": "Run",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "git-widget-placeholder": "master",
+    "last_opened_file_path": "C:/Users/freie/PycharmProjects/trading-dashboard",
+    "settings.editor.selected.configurable": "preferences.general"
   }
-}</component>
+}]]></component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="C:\Users\freie\PycharmProjects\StockBot_V3" />
@@ -231,14 +231,6 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1762775089088</updated>
-    </task>
-    <task id="LOCAL-00204" summary="com">
-      <option name="closed" value="true" />
-      <created>1766848070917</created>
-      <option name="number" value="00204" />
-      <option name="presentableId" value="LOCAL-00204" />
-      <option name="project" value="LOCAL" />
-      <updated>1766848070917</updated>
     </task>
     <task id="LOCAL-00205" summary="com">
       <option name="closed" value="true" />
@@ -624,7 +616,15 @@
       <option name="project" value="LOCAL" />
       <updated>1768305391654</updated>
     </task>
-    <option name="localTasksCounter" value="253" />
+    <task id="LOCAL-00253" summary="com">
+      <option name="closed" value="true" />
+      <created>1768481909582</created>
+      <option name="number" value="00253" />
+      <option name="presentableId" value="LOCAL-00253" />
+      <option name="project" value="LOCAL" />
+      <updated>1768481909583</updated>
+    </task>
+    <option name="localTasksCounter" value="254" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
