@@ -709,7 +709,11 @@ class SwingTradeStrategy(Strategy):
                             'rotation_tier': tier,
                             'source': 'scored'
                         })
-                except:
+                except Exception as e:
+                    if Config.BACKTESTING:
+                        import traceback
+                        print(f"[BACKTEST ERROR] {ticker}: {e}")
+                        traceback.print_exc()
                     continue
 
             # =============================================================

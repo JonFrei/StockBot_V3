@@ -141,7 +141,7 @@ def calculate_position_sizes(opportunities, portfolio_context, regime_multiplier
                 'quantity': quantity,
                 'price': current_price,
                 'cost': quantity * current_price,
-                'signal_score': opp['score'],
+                'signal_score': opp['signal_score'],
                 'signal_type': opp['signal_type'],
                 'rotation_mult': rotation_mult
             })
