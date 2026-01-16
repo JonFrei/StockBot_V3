@@ -22,7 +22,7 @@ def process_data(symbols, current_date):
 
     for ticker, df in historical_data.items():
         # === LIVE TRADING: Exclude today's incomplete bar ===
-        if len(df) > 1:
+        if not Config.BACKTESTING and len(df) > 1:
             # Get today's date (normalize timezone)
             today = current_date.date() if hasattr(current_date, 'date') else current_date
 
