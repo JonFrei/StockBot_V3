@@ -316,7 +316,8 @@ class SwingTradeStrategy(Strategy):
                 if last_scan_date == current_date_only:
                     # Already scanned today - only run position monitoring
                     signal_scan_allowed = False
-                    print(f"[SCAN] Daily signal scan already completed for {current_date_only}. Position monitoring only.")
+                    print(
+                        f"[SCAN] Daily signal scan already completed for {current_date_only}. Position monitoring only.")
                 elif current_time.time() < dt_time(10, 0):
                     # Before 10 AM - only run position monitoring
                     signal_scan_allowed = False
@@ -487,7 +488,9 @@ class SwingTradeStrategy(Strategy):
                                 pnl_dollars = (current_price - entry_price) * qty if entry_price > 0 else 0
                                 pnl_pct = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
 
-                                summary.add_exit(ticker, qty, pnl_dollars, pnl_pct, exit_signal)
+                                ticker_data = all_stock_data.get(ticker, {})
+                                exit_indicators = ticker_data.get('indicators', {}) if ticker_data else {}
+                                summary.add_exit(ticker, qty, pnl_dollars, pnl_pct, exit_signal, exit_indicators)
 
                                 # Record trade
                                 metadata = self.position_monitor.get_position_metadata(ticker)
@@ -652,8 +655,13 @@ class SwingTradeStrategy(Strategy):
                     if not Config.BACKTESTING:
                         price = data.get('close', 0)
                         rsi = data.get('rsi', 0)
+                        adx = data.get('adx', 0)
+                        volume_ratio = data.get('volume_ratio', 0)
+                        ema20 = data.get('ema20', 0)
+                        ema50 = data.get('ema50', 0)
                         sma200 = data.get('sma200', 0)
-                        print(f"[SCAN] {ticker:<6} | ${price:>8.2f} | RSI: {rsi:>5.1f} | SMA200: ${sma200:>8.2f}")
+                        print(
+                            f"[SCAN] {ticker:<6} | ${price:>8.2f} | RSI:{rsi:>5.1f} | ADX:{adx:>5.1f} | Vol:{volume_ratio:>4.1f}x | EMA20:${ema20:>7.2f} | EMA50:${ema50:>7.2f} | SMA200:${sma200:>8.2f}")
 
                     vol_metrics = data.get('volatility_metrics', {})
                     if not vol_metrics.get('allow_trading', True):
@@ -849,7 +857,15 @@ class SwingTradeStrategy(Strategy):
                     tier_emoji = {'premium': '🥇', 'active': '🥈', 'probation': '⚠️',
                                   'rehabilitation': '🔄', 'frozen': '❄️'}.get(tier, '❓')
 
-                    summary.add_entry(ticker, quantity, price, cost, f"{signal_type} {tier_emoji}", signal_score)
+                    # Get entry indicators from signal data
+                    entry_indicators = {}
+                    for opp in all_opportunities:
+                        if opp['ticker'] == ticker:
+                            entry_indicators = opp.get('signal_data', {}).get('indicators', {})
+                            break
+
+                    summary.add_entry(ticker, quantity, price, cost, f"{signal_type} {tier_emoji}", signal_score,
+                                      entry_indicators)
 
                     ticker_data = all_stock_data.get(ticker, {})
                     self.position_monitor.track_position(

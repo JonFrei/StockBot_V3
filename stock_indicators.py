@@ -12,6 +12,7 @@ def get_sma(df, period):
     return {'sma': MA, 'sd': SD}
 
 
+'''
 def get_rsi(over: pd.Series, fn_roll: callable) -> pd.Series:
     # Source: stackoverflow.com/questions/20526414/relative-strength-index-in-python-pandas
     delta = over.diff()
@@ -29,6 +30,42 @@ def get_rsi(over: pd.Series, fn_roll: callable) -> pd.Series:
     rsi.name = 'rsi'
 
     return rsi.iloc[-1]
+'''
+
+
+def get_rsi(df_or_series, period=14):
+    """
+    Calculate RSI using Wilder's smoothing method (industry standard)
+
+    Args:
+        df_or_series: DataFrame with 'close' column or Series of close prices
+        period: RSI period (default 14)
+
+    Returns:
+        float: Current RSI value
+    """
+    if isinstance(df_or_series, pd.DataFrame):
+        close = df_or_series['close']
+    else:
+        close = df_or_series
+
+    delta = close.diff()
+
+    up = delta.clip(lower=0)
+    down = delta.clip(upper=0).abs()
+
+    # Wilder's smoothing: EMA with alpha = 1/period
+    roll_up = up.ewm(alpha=1 / period, adjust=False).mean()
+    roll_down = down.ewm(alpha=1 / period, adjust=False).mean()
+
+    rs = roll_up / roll_down
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+
+    # Handle edge cases - keep as Series
+    rsi = rsi.where(roll_down != 0, 100)
+    rsi = rsi.where(roll_up != 0, 0)
+
+    return float(rsi.iloc[-1])
 
 
 def get_bollinger(df, stdev, period):
@@ -68,7 +105,7 @@ def get_avg_volume(df, period=20):
     return avg_vol
 
 
-def get_atr(df, period=14):
+def get_atr_DELETE(df, period=14):
     """
     Calculate Average True Range (ATR)
 
@@ -108,6 +145,37 @@ def get_atr(df, period=14):
     atr = true_range.ewm(span=period, adjust=False).mean()
 
     # Return the most recent ATR value
+    return atr.iloc[-1] if len(atr) > 0 else 0
+
+
+def get_atr(df, period=14):
+    """
+    Calculate Average True Range (ATR) using Wilder's smoothing
+
+    Args:
+        df: DataFrame with 'high', 'low', 'close' columns
+        period: Number of periods for ATR calculation (default 14)
+
+    Returns:
+        float: ATR value for the most recent period
+    """
+    if len(df) < period + 1:
+        return 0
+
+    high = df['high']
+    low = df['low']
+    close = df['close']
+    prev_close = close.shift(1)
+
+    tr1 = high - low
+    tr2 = (high - prev_close).abs()
+    tr3 = (low - prev_close).abs()
+
+    true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+
+    # Wilder's smoothing: alpha = 1/period (not 2/(period+1))
+    atr = true_range.ewm(alpha=1 / period, adjust=False).mean()
+
     return atr.iloc[-1] if len(atr) > 0 else 0
 
 
@@ -289,7 +357,7 @@ def get_obv_trend(df, period=20):
     }
 
 
-def get_stochastic(df, k_period=14, d_period=3):
+def get_stochastic_DELETE(df, k_period=14, d_period=3):  # Keeping for backup
     """
     Calculate Stochastic Oscillator (%K and %D)
 
@@ -328,6 +396,47 @@ def get_stochastic(df, k_period=14, d_period=3):
     stoch_d = stoch_k.rolling(window=d_period).mean()
 
     # Get current values
+    current_k = stoch_k.iloc[-1] if not pd.isna(stoch_k.iloc[-1]) else 50
+    current_d = stoch_d.iloc[-1] if not pd.isna(stoch_d.iloc[-1]) else 50
+
+    return {
+        'stoch_k': round(float(current_k), 2),
+        'stoch_d': round(float(current_d), 2),
+        'stoch_bullish': current_k > current_d
+    }
+
+
+def get_stochastic(df, k_period=14, d_period=3, smooth_k=3):
+    """
+    Calculate Stochastic Oscillator (%K and %D) - Slow Stochastic
+
+    Args:
+        df: DataFrame with 'high', 'low', 'close' columns
+        k_period: Lookback period for raw stochastic (default 14)
+        d_period: Period for %D smoothing (default 3)
+        smooth_k: Period for %K smoothing (default 3)
+
+    Returns:
+        dict: {'stoch_k': float, 'stoch_d': float, 'stoch_bullish': bool}
+    """
+    if len(df) < k_period + d_period + smooth_k:
+        return {'stoch_k': 50, 'stoch_d': 50, 'stoch_bullish': False}
+
+    high = df['high']
+    low = df['low']
+    close = df['close']
+
+    # Raw stochastic
+    lowest_low = low.rolling(window=k_period).min()
+    highest_high = high.rolling(window=k_period).max()
+    raw_stoch = 100 * (close - lowest_low) / (highest_high - lowest_low)
+
+    # %K = SMA of raw stochastic (this is what makes it "slow")
+    stoch_k = raw_stoch.rolling(window=smooth_k).mean()
+
+    # %D = SMA of %K
+    stoch_d = stoch_k.rolling(window=d_period).mean()
+
     current_k = stoch_k.iloc[-1] if not pd.isna(stoch_k.iloc[-1]) else 50
     current_d = stoch_d.iloc[-1] if not pd.isna(stoch_d.iloc[-1]) else 50
 
@@ -678,10 +787,11 @@ def detect_momentum_fade(df, indicators):
 
             if price_high_curr > price_high_prev and hist_curr < hist_prev:
                 signals.append('macd_divergence')
-    except:
-        pass
-
+    except Exception as e:
+        print(f"[INDICATOR WARNING] Signal calculation failed: {e}")
+    '''
     # Signal 2: RSI(5) higher high then breaks swing low
+
     try:
         rsi5 = get_rsi_fast(df, period=5)
 
@@ -693,10 +803,27 @@ def detect_momentum_fade(df, indicators):
             # Check if RSI made higher high then broke below prior swing
             if rsi_high_curr > rsi_high_prev and rsi5.iloc[-1] < rsi_swing_low:
                 signals.append('rsi5_break')
-    except:
-        pass
+    except Exception as e:
+        print(f"[INDICATOR WARNING] Signal calculation failed: {e}")
 
-    # Signal 3: EMA(5) and EMA(8) slope flattens/turns down
+    
+    try:
+        rsi5 = get_rsi_fast(df, period=5)
+
+        if len(rsi5) >= 7:
+            # Find RSI high in lookback window (bars -5 to -2)
+            rsi_recent_high = rsi5.iloc[-5:-1].max()
+            rsi_prior_high = rsi5.iloc[-7:-4].max()
+            rsi_swing_low = rsi5.iloc[-5:-1].min()
+            rsi_current = rsi5.iloc[-1]
+
+            # RSI made higher high in recent window, now breaking below swing low
+            if rsi_recent_high > rsi_prior_high and rsi_current < rsi_swing_low:
+                signals.append('rsi5_break')
+    except Exception as e:
+        print(f"[INDICATOR WARNING] Signal calculation failed: {e}")
+    '''
+    # Signal 2: EMA(5) and EMA(8) slope flattens/turns down
     try:
         ema5 = get_ema_fast(df, period=5)
         ema8_series = df['close'].ewm(span=8, adjust=False).mean()
@@ -712,10 +839,10 @@ def detect_momentum_fade(df, indicators):
             if (ema5_slope_curr < ema5_slope_prev * 0.5 and
                     ema8_slope_curr < ema8_slope_prev * 0.5):
                 signals.append('ema_flatten')
-    except:
-        pass
+    except Exception as e:
+        print(f"[INDICATOR WARNING] Signal calculation failed: {e}")
 
-    # Signal 4: ATR contracts 3+ bars AND volume drops 3+ bars
+    # Signal 3: ATR contracts 3+ bars AND volume drops 3+ bars
     try:
         if len(df) >= 4:
             # ATR contraction check
@@ -743,8 +870,8 @@ def detect_momentum_fade(df, indicators):
 
             if atr_contracting and volume_dropping:
                 signals.append('atr_volume_contraction')
-    except:
-        pass
+    except Exception as e:
+        print(f"[INDICATOR WARNING] Signal calculation failed: {e}")
 
     return {
         'fade_detected': len(signals) > 0,
@@ -787,8 +914,8 @@ def detect_price_confirmation(df, indicators):
                 'confirmed': True,
                 'reason': f'close_below_ema (EMA8: ${ema8:.2f}, EMA10: ${ema10:.2f})'
             }
-    except:
-        pass
+    except Exception as e:
+        print(f"[INDICATOR WARNING] Signal calculation failed: {e}")
 
     # Check 2: Breaks previous 2-bar swing low
     try:
@@ -801,8 +928,8 @@ def detect_price_confirmation(df, indicators):
                     'confirmed': True,
                     'reason': f'break_swing_low (low ${current_low:.2f} < swing ${swing_low:.2f})'
                 }
-    except:
-        pass
+    except Exception as e:
+        print(f"[INDICATOR WARNING] Signal calculation failed: {e}")
 
     return {'confirmed': False, 'reason': None}
 

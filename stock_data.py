@@ -60,10 +60,14 @@ def process_data(symbols, current_date):
         temp_data['indicators']['ema50'] = round(float(indicators.get_ema(df, period=50)), 2)
 
         # Calculate RSI (14 period)
+        '''
         def rolling_fn(series):
             return series.rolling(window=14).mean()
 
         temp_data['indicators']['rsi'] = round(float(indicators.get_rsi(df['close'], rolling_fn)), 2)
+        '''
+
+        temp_data['indicators']['rsi'] = round(indicators.get_rsi(df, period=14), 2)
 
         # Calculate Bollinger Bands (20 period, 2 stdev)
         bollinger = indicators.get_bollinger(df, stdev=2, period=20)

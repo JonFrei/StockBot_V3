@@ -773,12 +773,15 @@ def safe_generate_positions_section(strategy):
             <table>
                 <tr>
                     <th>Ticker</th>
-                    <th>Quantity</th>
+                    <th>Qty</th>
                     <th>Entry</th>
-                    <th>Current</th>
+                    <th>Exit</th>
                     <th>P&L</th>
                     <th>%</th>
-                    <th>Tier</th>
+                    <th>Score</th>
+                    <th>Signal</th>
+                    <th>Entry Indicators</th>
+                    <th>Exit Indicators</th>
                 </tr>
             """
 
@@ -922,6 +925,9 @@ def safe_generate_trades_section(strategy, current_date):
                 emoji = "✅" if pnl > 0 else "❌"
                 score_display = f"{entry_score:.0f}" if entry_score > 0 else "--"
 
+                entry_ind = trade.get('entry_indicators', '') or ''
+                exit_ind = trade.get('exit_indicators', '') or ''
+
                 html += f"""
                 <tr>
                     <td>{emoji} <strong>{ticker}</strong></td>
@@ -932,6 +938,8 @@ def safe_generate_trades_section(strategy, current_date):
                     <td style="color: {'#27ae60' if pnl_pct > 0 else '#e74c3c'}; font-weight: bold;">{pnl_pct:+.1f}%</td>
                     <td>{score_display}</td>
                     <td>{signal}</td>
+                    <td style="font-size: 0.85em; color: #555;">{entry_ind}</td>
+                    <td style="font-size: 0.85em; color: #555;">{exit_ind}</td>
                 </tr>
                 """
 
@@ -940,7 +948,7 @@ def safe_generate_trades_section(strategy, current_date):
             html += f"""
                 <tr style="background-color: #f8f9fa; font-weight: bold;">
                     <td colspan="4">TODAY'S REALIZED P&L</td>
-                    <td style="color: {'#27ae60' if total_realized_today > 0 else '#e74c3c'};" colspan="4">${total_realized_today:+,.2f} ({winners_today}/{len(today_trades)} wins, {today_wr:.1f}%)</td>
+                    <td style="color: {'#27ae60' if total_realized_today > 0 else '#e74c3c'};" colspan="6">${total_realized_today:+,.2f} ({winners_today}/{len(today_trades)} wins, {today_wr:.1f}%)</td>
                 </tr>
             </table>
             """

@@ -6,7 +6,15 @@
   <component name="ChangeListManager">
     <list default="true" id="d6df019d-759f-4aef-8455-f63cac562958" name="Changes" comment="com">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/account_email_notifications.py" beforeDir="false" afterPath="$PROJECT_DIR$/account_email_notifications.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/account_profit_tracking.py" beforeDir="false" afterPath="$PROJECT_DIR$/account_profit_tracking.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/account_strategies.py" beforeDir="false" afterPath="$PROJECT_DIR$/account_strategies.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/database.py" beforeDir="false" afterPath="$PROJECT_DIR$/database.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/stock_data.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_data.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_indicators.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_indicators.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_position_monitoring.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_position_monitoring.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_signals.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_signals.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -77,12 +85,14 @@
     "Python tests.Python tests in test_email.py.executor": "Run",
     "Python.diagnose_entry_price.executor": "Run",
     "Python.diagnose_positions.executor": "Run",
+    "Python.diagnose_validate_indicators (1).executor": "Run",
     "Python.fetch_order_history.executor": "Run",
     "Python.main.executor": "Run",
     "Python.signals.executor": "Debug",
     "Python.stock_position_sizing.executor": "Debug",
     "Python.sync_tickers.executor": "Run",
     "Python.text_vix.executor": "Run",
+    "Python.validate_indicators.executor": "Run",
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "git-widget-placeholder": "master",
     "last_opened_file_path": "C:/Users/freie/PycharmProjects/trading-dashboard",
@@ -98,7 +108,7 @@
     </key>
   </component>
   <component name="RunManager" selected="Python.main">
-    <configuration name="diagnose_entry_price" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+    <configuration name="diagnose_fetch_order_history" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
       <module name="StockBot_V3" />
       <option name="ENV_FILES" value="" />
       <option name="INTERPRETER_OPTIONS" value="" />
@@ -111,7 +121,7 @@
       <option name="IS_MODULE_SDK" value="true" />
       <option name="ADD_CONTENT_ROOTS" value="true" />
       <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/diagnose_entry_price.py" />
+      <option name="SCRIPT_NAME" value="C:\Users\freie\PycharmProjects\StockBot_V3\diagnose_fetch_order_history.py" />
       <option name="PARAMETERS" value="" />
       <option name="SHOW_COMMAND_LINE" value="false" />
       <option name="EMULATE_TERMINAL" value="false" />
@@ -120,7 +130,7 @@
       <option name="INPUT_FILE" value="" />
       <method v="2" />
     </configuration>
-    <configuration name="diagnose_positions" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+    <configuration name="diagnose_validate_indicators (1)" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
       <module name="StockBot_V3" />
       <option name="ENV_FILES" value="" />
       <option name="INTERPRETER_OPTIONS" value="" />
@@ -133,7 +143,7 @@
       <option name="IS_MODULE_SDK" value="true" />
       <option name="ADD_CONTENT_ROOTS" value="true" />
       <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/diagnose_positions.py" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/diagnose_validate_indicators.py" />
       <option name="PARAMETERS" value="" />
       <option name="SHOW_COMMAND_LINE" value="false" />
       <option name="EMULATE_TERMINAL" value="false" />
@@ -142,7 +152,7 @@
       <option name="INPUT_FILE" value="" />
       <method v="2" />
     </configuration>
-    <configuration name="fetch_order_history" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+    <configuration name="diagnose_validate_indicators" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
       <module name="StockBot_V3" />
       <option name="ENV_FILES" value="" />
       <option name="INTERPRETER_OPTIONS" value="" />
@@ -155,7 +165,7 @@
       <option name="IS_MODULE_SDK" value="true" />
       <option name="ADD_CONTENT_ROOTS" value="true" />
       <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/fetch_order_history.py" />
+      <option name="SCRIPT_NAME" value="C:\Users\freie\PycharmProjects\StockBot_V3\diagnose_validate_indicators.py" />
       <option name="PARAMETERS" value="" />
       <option name="SHOW_COMMAND_LINE" value="false" />
       <option name="EMULATE_TERMINAL" value="false" />
@@ -211,10 +221,10 @@
     <recent_temporary>
       <list>
         <item itemvalue="Python.main" />
-        <item itemvalue="Python.fetch_order_history" />
+        <item itemvalue="Python.diagnose_validate_indicators (1)" />
+        <item itemvalue="Python.diagnose_validate_indicators" />
+        <item itemvalue="Python.diagnose_fetch_order_history" />
         <item itemvalue="Python.stock_position_sizing" />
-        <item itemvalue="Python.diagnose_positions" />
-        <item itemvalue="Python.diagnose_entry_price" />
       </list>
     </recent_temporary>
   </component>
@@ -233,14 +243,6 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1762775089088</updated>
-    </task>
-    <task id="LOCAL-00211" summary="com">
-      <option name="closed" value="true" />
-      <created>1766927249871</created>
-      <option name="number" value="00211" />
-      <option name="presentableId" value="LOCAL-00211" />
-      <option name="project" value="LOCAL" />
-      <updated>1766927249871</updated>
     </task>
     <task id="LOCAL-00212" summary="com">
       <option name="closed" value="true" />
@@ -626,7 +628,15 @@
       <option name="project" value="LOCAL" />
       <updated>1768529649094</updated>
     </task>
-    <option name="localTasksCounter" value="260" />
+    <task id="LOCAL-00260" summary="com">
+      <option name="closed" value="true" />
+      <created>1768530234367</created>
+      <option name="number" value="00260" />
+      <option name="presentableId" value="LOCAL-00260" />
+      <option name="project" value="LOCAL" />
+      <updated>1768530234367</updated>
+    </task>
+    <option name="localTasksCounter" value="261" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">

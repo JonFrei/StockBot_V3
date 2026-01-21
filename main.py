@@ -109,7 +109,7 @@ def main():
             from lumibot.backtesting import YahooDataBacktesting
             from lumibot.backtesting import AlpacaBacktesting
 
-            start = datetime(2025, 1, 13)
+            start = datetime(2021, 1, 13)
             end = datetime(2026, 1, 13)
 
             SwingTradeStrategy.backtest(

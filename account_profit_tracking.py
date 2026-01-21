@@ -17,6 +17,51 @@ from psycopg2.extras import RealDictCursor
 import account_broker_data
 
 
+def _format_indicators(indicators: dict, max_items: int = 6) -> str:
+    """
+    Format indicators dict into compact string for logging.
+
+    Example output: "RSI:55.2 ADX:28.4 Vol:1.8x MACD:0.42"
+    """
+    if not indicators:
+        return ''
+
+    parts = []
+
+    # Priority order for display
+    if 'rsi' in indicators:
+        parts.append(f"RSI:{indicators['rsi']:.1f}")
+    if 'adx' in indicators:
+        parts.append(f"ADX:{indicators['adx']:.1f}")
+    if 'volume_ratio' in indicators:
+        parts.append(f"Vol:{indicators['volume_ratio']:.1f}x")
+    if 'macd_hist' in indicators:
+        parts.append(f"MACD:{indicators['macd_hist']:.2f}")
+    if 'ema50' in indicators:
+        parts.append(f"EMA50:{indicators['ema50']:.2f}")
+    if 'roc_12' in indicators:
+        parts.append(f"ROC:{indicators['roc_12']:.1f}")
+    if 'close_position' in indicators:
+        parts.append(f"ClsPos:{indicators['close_position']:.2f}")
+    if 'range_pct' in indicators:
+        parts.append(f"Rng:{indicators['range_pct']:.1f}%")
+    if 'breakout_pct' in indicators:
+        parts.append(f"Brk:{indicators['breakout_pct']:.1f}%")
+    if 'distance_pct' in indicators:
+        parts.append(f"Dist:{indicators['distance_pct']:.1f}%")
+    if 'atr' in indicators:
+        parts.append(f"ATR:{indicators['atr']:.2f}")
+    if 'current_stop' in indicators:
+        parts.append(f"Stop:{indicators['current_stop']:.2f}")
+    if 'ema8' in indicators:
+        parts.append(f"EMA8:{indicators['ema8']:.2f}")
+    if 'close' in indicators and 'close' not in [p.split(':')[0] for p in parts]:
+        parts.append(f"Close:{indicators['close']:.2f}")
+
+    # Limit to max_items
+    return ' '.join(parts[:max_items]) if parts else ''
+
+
 class DailySummary:
     def __init__(self):
         self.reset()
@@ -62,14 +107,28 @@ class DailySummary:
             # self.recovery_eligible_tiers = recovery_details.get('eligible_tiers')
             # self.recovery_stop_multiplier = recovery_details.get('stop_multiplier')
 
-    def add_exit(self, ticker, qty, pnl, pnl_pct, reason):
-        self.exits.append({'ticker': ticker, 'qty': qty, 'pnl': pnl, 'pnl_pct': pnl_pct, 'reason': reason})
+    def add_exit(self, ticker, qty, pnl, pnl_pct, reason, indicators=None):
+        self.exits.append({
+            'ticker': ticker,
+            'qty': qty,
+            'pnl': pnl,
+            'pnl_pct': pnl_pct,
+            'reason': reason,
+            'indicators': indicators or {}
+        })
 
-    def add_entry(self, ticker, qty, price, cost, signal, score):
-        self.entries.append(
-            {'ticker': ticker, 'qty': qty, 'price': price, 'cost': cost, 'signal': signal, 'score': score})
+    def add_entry(self, ticker, qty, price, cost, signal, score, indicators=None):
+        self.entries.append({
+            'ticker': ticker,
+            'qty': qty,
+            'price': price,
+            'cost': cost,
+            'signal': signal,
+            'score': score,
+            'indicators': indicators or {}
+        })
 
-    def add_addon(self, ticker, qty, price, cost, signal, score, existing_qty, new_total_exposure_pct):
+    def add_addon(self, ticker, qty, price, cost, signal, score, existing_qty, new_total_exposure_pct, indicators=None):
         """Track add-on to existing position"""
         self.addons.append({
             'ticker': ticker,
@@ -79,11 +138,19 @@ class DailySummary:
             'signal': signal,
             'score': score,
             'existing_qty': existing_qty,
-            'new_total_exposure_pct': new_total_exposure_pct
+            'new_total_exposure_pct': new_total_exposure_pct,
+            'indicators': indicators or {}
         })
 
-    def add_profit_take(self, ticker, level, qty, pnl, pnl_pct):
-        self.profit_takes.append({'ticker': ticker, 'level': level, 'qty': qty, 'pnl': pnl, 'pnl_pct': pnl_pct})
+    def add_profit_take(self, ticker, level, qty, pnl, pnl_pct, indicators=None):
+        self.profit_takes.append({
+            'ticker': ticker,
+            'level': level,
+            'qty': qty,
+            'pnl': pnl,
+            'pnl_pct': pnl_pct,
+            'indicators': indicators or {}
+        })
 
     def add_signal(self, ticker, signal, score):
         self.signals_found.append({'ticker': ticker, 'signal': signal, 'score': score})
@@ -123,12 +190,6 @@ class DailySummary:
                 print(f"   🔓 RECOVERY MODE ACTIVE ({mode_type})")
                 if self.recovery_max_positions:
                     print(f"      • Position Limit: {self.recovery_max_positions} positions")
-                # if self.recovery_profit_target:
-                #     print(f"      • Profit Target: {self.recovery_profit_target:.1f}%")
-                # if self.recovery_eligible_tiers:
-                #     print(f"      • Eligible Tiers: {', '.join(self.recovery_eligible_tiers)}")
-                # if self.recovery_stop_multiplier and self.recovery_stop_multiplier != 1.0:
-                #     print(f"      • Stop Multiplier: {self.recovery_stop_multiplier}x")
                 print(f"   {'─' * 76}")
 
         # Show tier changes
@@ -139,23 +200,28 @@ class DailySummary:
             print(f"   {old_emoji}→{new_emoji} TIER: {tc['ticker']} {tc['old_tier']} → {tc['new_tier']}")
 
         for pt in self.profit_takes:
-            print(
-                f"   💰 PROFIT L{pt['level']}: {pt['ticker']} x{pt['qty']} | ${pt['pnl']:+,.2f} ({pt['pnl_pct']:+.1f}%)")
+            ind_str = _format_indicators(pt.get('indicators', {}))
+            ind_display = f" | {ind_str}" if ind_str else ""
+            print(f"   💰 PROFIT #{pt['level']}: {pt['ticker']} x{pt['qty']} | ${pt['pnl']:+,.2f} ({pt['pnl_pct']:+.1f}%){ind_display}")
 
         for ex in self.exits:
-            emoji = '✅' if ex['pnl'] > 0 else '❌'
-            print(
-                f"   {emoji} EXIT: {ex['ticker']} x{ex['qty']} | ${ex['pnl']:+,.2f} ({ex['pnl_pct']:+.1f}%) - {ex['reason']}")
+            ind_str = _format_indicators(ex.get('indicators', {}))
+            ind_display = f" | {ind_str}" if ind_str else ""
+            print(f"   🔴 SELL: {ex['ticker']} x{ex['qty']} | ${ex['pnl']:+,.2f} ({ex['pnl_pct']:+.1f}%) - {ex['reason']}{ind_display}")
 
         # Show new entries
         for en in self.entries:
+            ind_str = _format_indicators(en.get('indicators', {}))
+            ind_display = f" | {ind_str}" if ind_str else ""
             print(
-                f"   🟢 BUY: {en['ticker']} x{en['qty']} @ ${en['price']:.2f} (${en['cost']:,.0f}) | {en['signal']} [{en['score']}]")
+                f"   🟢 BUY: {en['ticker']} x{en['qty']} @ ${en['price']:.2f} (${en['cost']:,.0f}) | {en['signal']} [{en['score']}]{ind_display}")
 
         # Show add-ons
         for ad in self.addons:
+            ind_str = _format_indicators(ad.get('indicators', {}))
+            ind_display = f" | {ind_str}" if ind_str else ""
             print(
-                f"   🔵 ADD: {ad['ticker']} +{ad['qty']} @ ${ad['price']:.2f} (${ad['cost']:,.0f}) | {ad['signal']} [{ad['score']}] | Now {ad['existing_qty'] + ad['qty']} shares ({ad['new_total_exposure_pct']:.1f}%)")
+                f"   🔵 ADD: {ad['ticker']} +{ad['qty']} @ ${ad['price']:.2f} (${ad['cost']:,.0f}) | {ad['signal']} [{ad['score']}] | Now {ad['existing_qty'] + ad['qty']} shares ({ad['new_total_exposure_pct']:.1f}%){ind_display}")
 
         if self.signals_found and not self.entries and not self.addons:
             tickers = [f"{s['ticker']}[{s['score']}]" for s in self.signals_found[:5]]
@@ -344,17 +410,25 @@ class ProfitTracker:
                     exit_date=exit_date
                 )
             else:
+                # Format indicators for storage
+                entry_ind_str = ''
+                exit_ind_str = ''
+                if isinstance(exit_signal, dict):
+                    exit_ind_str = _format_indicators(exit_signal.get('indicators', {}))
+
                 cursor = conn.cursor()
                 cursor.execute("""
-                    INSERT INTO closed_trades 
-                    (ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct, 
-                     entry_signal, entry_score, exit_signal, exit_date)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, (
+                        INSERT INTO closed_trades 
+                        (ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct, 
+                         entry_signal, entry_score, exit_signal, exit_date, entry_indicators, exit_indicators)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (
                     ticker, quantity_sold, entry_price, exit_price, total_pnl, pnl_pct,
                     entry_signal, entry_score,
                     exit_signal.get('reason', 'unknown') if isinstance(exit_signal, dict) else str(exit_signal),
-                    exit_date
+                    exit_date,
+                    entry_ind_str,
+                    exit_ind_str
                 ))
                 conn.commit()
                 cursor.close()

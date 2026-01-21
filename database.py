@@ -171,6 +171,8 @@ class Database:
                     entry_score INTEGER DEFAULT 0,
                     exit_signal VARCHAR(50),
                     exit_date TIMESTAMP,
+                    entry_indicators TEXT,
+                    exit_indicators TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE INDEX IF NOT EXISTS idx_closed_trades_ticker ON closed_trades(ticker);
@@ -711,7 +713,8 @@ class Database:
 
     def insert_trade(self, ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct,
                      entry_signal, entry_score, exit_signal, exit_date,
-                     confirmation_date=None, days_to_confirmation=0):
+                     confirmation_date=None, days_to_confirmation=0,
+                     entry_indicators='', exit_indicators=''):
         """Insert a closed trade record"""
 
         def _insert():
@@ -722,12 +725,12 @@ class Database:
                     INSERT INTO closed_trades 
                     (ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct,
                      entry_signal, entry_score, exit_signal, exit_date,
-                     confirmation_date, days_to_confirmation)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     confirmation_date, days_to_confirmation, entry_indicators, exit_indicators)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct,
                     entry_signal, entry_score, exit_signal, exit_date,
-                    confirmation_date, days_to_confirmation
+                    confirmation_date, days_to_confirmation, entry_indicators, exit_indicators
                 ))
                 conn.commit()
             finally:
@@ -748,7 +751,8 @@ class Database:
                 cursor = conn.cursor()
                 query = """
                     SELECT ticker, quantity, entry_price, exit_price, pnl_dollars, pnl_pct,
-                           entry_signal, entry_score, exit_signal, exit_date
+                           entry_signal, entry_score, exit_signal, exit_date,
+                           entry_indicators, exit_indicators
                     FROM closed_trades ORDER BY exit_date DESC
                 """
                 df = self.closed_trades_df.sort_values('exit_date', ascending=False)
@@ -1020,7 +1024,8 @@ class InMemoryDatabase:
         self.tickers_df = pd.DataFrame(columns=['ticker', 'name', 'strategies', 'is_blacklisted'])
         self.closed_trades_df = pd.DataFrame(columns=[
             'ticker', 'quantity', 'entry_price', 'exit_price', 'pnl_dollars', 'pnl_pct',
-            'entry_signal', 'entry_score', 'exit_signal', 'exit_date'
+            'entry_signal', 'entry_score', 'exit_signal', 'exit_date',
+            'entry_indicators', 'exit_indicators'
         ])
         self.daily_metrics_df = pd.DataFrame(columns=[
             'date', 'portfolio_value', 'cash_balance', 'num_positions', 'num_trades',
@@ -1144,7 +1149,7 @@ class InMemoryDatabase:
 
     def record_closed_trade(self, ticker, quantity, entry_price, exit_price,
                             pnl_dollars, pnl_pct, entry_signal, entry_score,
-                            exit_signal, exit_date):
+                            exit_signal, exit_date, entry_indicators='', exit_indicators=''):
         new_row = pd.DataFrame([{
             'ticker': ticker,
             'quantity': quantity,
@@ -1155,7 +1160,9 @@ class InMemoryDatabase:
             'entry_signal': entry_signal,
             'entry_score': entry_score,
             'exit_signal': exit_signal,
-            'exit_date': exit_date
+            'exit_date': exit_date,
+            'entry_indicators': entry_indicators,
+            'exit_indicators': exit_indicators
         }])
         if self.closed_trades_df.empty:
             self.closed_trades_df = new_row

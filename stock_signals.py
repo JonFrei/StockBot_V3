@@ -8,7 +8,7 @@ from typing import Dict, Any
 
 class SignalConfig:
     """Signal configuration"""
-    MIN_SCORE_THRESHOLD = 55 # was 55 on 1/5/26
+    MIN_SCORE_THRESHOLD = 55  # was 55 on 1/5/26
 
     # SWING_TRADE_1
     ST1_EMA20_DISTANCE_MAX = 8.0
@@ -31,17 +31,17 @@ class SignalConfig:
     CB_MACD_REQUIRED = True
     '''
     # CONSOLIDATION_BREAKOUT (tightened)
-    CB_RANGE_MAX = 12.0              # Was 18.0 - tighter consolidation required
-    CB_VOLUME_RATIO_MIN = 1.5        # Was 1.10 - require real volume surge
-    CB_RSI_MIN = 50                  # Was 48 - ensure momentum
-    CB_RSI_MAX = 70                  # Was 72 - avoid overextended
-    CB_EMA20_DISTANCE_MAX = 8.0      # Was 12.0 - stay closer to mean
-    CB_LOOKBACK_PERIODS = 15         # Was 10 - longer base formation
-    CB_BREAKOUT_THRESHOLD = 1.005    # Was 0.97 - must break HIGH by 0.5%
-    CB_ADX_MIN = 20                  # Was 18 - stronger trend required
+    CB_RANGE_MAX = 12.0  # Was 18.0 - tighter consolidation required
+    CB_VOLUME_RATIO_MIN = 1.5  # Was 1.10 - require real volume surge
+    CB_RSI_MIN = 50  # Was 48 - ensure momentum
+    CB_RSI_MAX = 70  # Was 72 - avoid overextended
+    CB_EMA20_DISTANCE_MAX = 8.0  # Was 12.0 - stay closer to mean
+    CB_LOOKBACK_PERIODS = 15  # Was 10 - longer base formation
+    CB_BREAKOUT_THRESHOLD = 1.005  # Was 0.97 - must break HIGH by 0.5%
+    CB_ADX_MIN = 20  # Was 18 - stronger trend required
     CB_MACD_REQUIRED = True
-    CB_MIN_BASE_DAYS = 5             # NEW - minimum consolidation days
-    CB_PRIOR_UPTREND_PCT = 5.0       # NEW - must have gained before consolidating
+    CB_MIN_BASE_DAYS = 5  # NEW - minimum consolidation days
+    CB_PRIOR_UPTREND_PCT = 5.0  # NEW - must have gained before consolidating
 
     # GOLDEN_CROSS (loosened for more signals)
     GC_DISTANCE_MIN = 0.0
@@ -112,7 +112,7 @@ class SignalProcessor:
         }
 
 
-def _create_signal_result(score, side, msg, signal_type, limit_price, breakdown=None):
+def _create_signal_result(score, side, msg, signal_type, limit_price, breakdown=None, indicators=None):
     return {
         'score': round(score, 1),
         'side': side,
@@ -120,7 +120,8 @@ def _create_signal_result(score, side, msg, signal_type, limit_price, breakdown=
         'signal_type': signal_type,
         'limit_price': limit_price,
         'stop_loss': None,
-        'breakdown': breakdown or {}
+        'breakdown': breakdown or {},
+        'indicators': indicators or {}
     }
 
 
@@ -204,9 +205,24 @@ def swing_trade_1(data: IndicatorData) -> SignalResult:
     else:
         return _no_signal()
 
-    if obv_trending_up: score += 5
+    if obv_trending_up:
+        score += 5
 
-    return _create_signal_result(score, 'buy', f'swing_trade_1 [{score:.0f}]', 'swing_trade_1', close, breakdown)
+    # Build indicators dict for logging
+    indicators = {
+        'close': round(close, 2),
+        'rsi': round(rsi, 1),
+        'adx': round(adx, 1),
+        'volume_ratio': round(volume_ratio, 2),
+        'macd_hist': round(macd_hist, 4),
+        'ema20': round(ema20, 2),
+        'ema50': round(ema50, 2),
+        'sma200': round(sma200, 2)
+    }
+
+    return _create_signal_result(score, 'buy', f'swing_trade_1 [{score:.0f}]', 'swing_trade_1', close, breakdown,
+                                 indicators)
+
 
 '''
 def consolidation_breakout(data: IndicatorData) -> SignalResult:
@@ -455,12 +471,28 @@ def consolidation_breakout(data: IndicatorData) -> SignalResult:
     else:
         score += 1
 
+    # Build indicators dict for logging
+    indicators = {
+        'close': round(close, 2),
+        'rsi': round(rsi, 1),
+        'adx': round(adx, 1),
+        'volume_ratio': round(volume_ratio, 2),
+        'range_pct': round(consolidation_range, 1),
+        'breakout_pct': round(breakout_pct, 1),
+        'ema20': round(ema20, 2),
+        'ema50': round(ema50, 2),
+        'sma200': round(sma200, 2)
+    }
+
     return _create_signal_result(
         score, 'buy',
         f'consolidation_breakout [{score:.0f}] rng:{consolidation_range:.1f}% vol:{volume_ratio:.1f}x brk:{breakout_pct:.1f}%',
         'consolidation_breakout',
-        close
+        close,
+        None,
+        indicators
     )
+
 
 def golden_cross(data: IndicatorData) -> SignalResult:
     """Golden Cross - Loosened for more signals"""
@@ -486,8 +518,8 @@ def golden_cross(data: IndicatorData) -> SignalResult:
             if len(ema50_series) >= 11:
                 ema50_slope = ((ema50_series.iloc[-1] - ema50_series.iloc[-11]) / ema50_series.iloc[-11] * 100) / 10
                 if ema50_slope < SignalConfig.GC_MIN_EMA50_SLOPE: return _no_signal()
-        except:
-            pass
+        except Exception as e:
+            print(f"[SIGNAL WARNING] Signal calculation failed: {e}")
 
     if macd_hist <= SignalConfig.GC_MIN_MACD_HISTOGRAM: return _no_signal()
 
@@ -546,10 +578,23 @@ def golden_cross(data: IndicatorData) -> SignalResult:
             recent_lows = raw_data['low'].iloc[-20:].values
             consolidation_range = (max(recent_highs) - min(recent_lows)) / min(recent_lows) * 100
             if consolidation_range > SignalConfig.GC_MAX_SQUEEZE_RANGE: return _no_signal()
-        except:
-            pass
+        except Exception as e:
+            print(f"[SIGNAL WARNING] Signal calculation failed: {e}")
 
-    return _create_signal_result(score, 'buy', f'golden_cross [{score:.0f}]', 'golden_cross', close)
+    # Build indicators dict for logging
+    indicators = {
+        'close': round(close, 2),
+        'rsi': round(rsi, 1),
+        'adx': round(adx, 1),
+        'volume_ratio': round(volume_ratio, 2),
+        'ema20': round(ema20, 2),
+        'ema50': round(ema50, 2),
+        'sma200': round(sma200, 2),
+        'distance_pct': round(distance_pct, 2)
+    }
+
+    return _create_signal_result(score, 'buy', f'golden_cross [{score:.0f}]', 'golden_cross', close, None,
+                                 indicators)
 
 
 def momentum_thrust(data: IndicatorData) -> SignalResult:
@@ -655,10 +700,24 @@ def momentum_thrust(data: IndicatorData) -> SignalResult:
         score += 4
 
     # Bonus: Above 200 SMA (long-term trend)
-    if sma200 > 0 and close > sma200:
+    if 0 < sma200 < close:
         score += 5
 
-    return _create_signal_result(score, 'buy', f'momentum_thrust [{score:.0f}]', 'momentum_thrust', close)
+    # Build indicators dict for logging
+    indicators = {
+        'close': round(close, 2),
+        'rsi': round(rsi, 1),
+        'adx': round(adx, 1),
+        'volume_ratio': round(volume_ratio, 2),
+        'roc_12': round(roc_12, 2),
+        'close_position': round(close_position, 2),
+        'ema20': round(ema20, 2),
+        'ema50': round(ema50, 2),
+        'sma200': round(sma200, 2) if sma200 > 0 else 0
+    }
+
+    return _create_signal_result(score, 'buy', f'momentum_thrust [{score:.0f}]', 'momentum_thrust', close, None,
+                                 indicators)
 
 
 BUY_STRATEGIES: Dict[str, Any] = {

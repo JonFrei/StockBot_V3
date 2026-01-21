@@ -883,6 +883,16 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
         # PACKAGE EXIT ORDER
         # =====================================================================
         if exit_signal:
+            exit_signal['indicators'] = {
+                'rsi': data.get('rsi', 0) if data else 0,
+                'adx': data.get('adx', 0) if data else 0,
+                'volume_ratio': data.get('volume_ratio', 0) if data else 0,
+                'ema8': data.get('ema8', 0) if data else 0,
+                'ema50': ema50 if ema50 else 0,
+                'atr': current_atr if current_atr else 0,
+                'close': current_price if current_price else 0,
+                'current_stop': current_stop if current_stop else 0
+            }
             exit_signal['ticker'] = ticker
             exit_signal['broker_quantity'] = broker_quantity
             exit_signal['broker_entry_price'] = broker_entry_price
@@ -894,6 +904,7 @@ def check_positions_for_exits(strategy, current_date, all_stock_data, position_m
             exit_signal['entry_score'] = metadata.get('entry_score', 0)
             exit_signal['phase'] = phase
             exit_signal['R'] = R
+
             exit_orders.append(exit_signal)
 
     return exit_orders
@@ -959,7 +970,7 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
                 reason = f"{reason}+remnant"
 
                 if summary:
-                    summary.add_exit(ticker, sell_quantity, total_pnl, pnl_pct, reason)
+                    summary.add_exit(ticker, sell_quantity, total_pnl, pnl_pct, reason, order.get('indicators'))
 
                 profit_tracker.record_trade(
                     ticker=ticker,
@@ -980,7 +991,7 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
 
             # Normal profit take
             if summary:
-                summary.add_profit_take(ticker, 1, sell_quantity, total_pnl, pnl_pct)
+                summary.add_profit_take(ticker, 1, sell_quantity, total_pnl, pnl_pct, order.get('indicators'))
 
             # Record partial taken
             position_monitor.record_partial_taken(ticker)
@@ -1004,7 +1015,7 @@ def execute_exit_orders(strategy, exit_orders, current_date, position_monitor, p
         # =====================================================================
         else:
             if summary:
-                summary.add_exit(ticker, sell_quantity, total_pnl, pnl_pct, reason)
+                summary.add_exit(ticker, sell_quantity, total_pnl, pnl_pct, reason, order.get('indicators'))
 
             profit_tracker.record_trade(
                 ticker=ticker,
