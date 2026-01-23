@@ -197,6 +197,7 @@ class Database:
                     bars_below_ema50 INTEGER DEFAULT 0,
                     partial_taken BOOLEAN DEFAULT FALSE,
                     add_count INTEGER DEFAULT 0,
+                    entry_indicators TEXT DEFAULT '',
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE INDEX IF NOT EXISTS idx_position_metadata_entry_date ON position_metadata(entry_date);
@@ -432,7 +433,7 @@ class Database:
                                  entry_price=None, initial_stop=None, current_stop=None,
                                  R=None, entry_atr=None, highest_close=None,
                                  phase='entry', bars_below_ema50=0, partial_taken=False,
-                                 add_count=0):
+                                 add_count=0, entry_indicators=''):
         """Insert or update position metadata"""
 
         def _upsert():
@@ -443,8 +444,8 @@ class Database:
                     INSERT INTO position_metadata 
                     (ticker, entry_date, entry_signal, entry_score, entry_price,
                      initial_stop, current_stop, R, entry_atr, highest_close,
-                     phase, bars_below_ema50, partial_taken, add_count, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                     phase, bars_below_ema50, partial_taken, add_count, entry_indicators, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
                     ON CONFLICT (ticker) DO UPDATE SET
                         entry_date = EXCLUDED.entry_date,
                         entry_signal = EXCLUDED.entry_signal,
@@ -459,6 +460,7 @@ class Database:
                         bars_below_ema50 = EXCLUDED.bars_below_ema50,
                         partial_taken = EXCLUDED.partial_taken,
                         add_count = EXCLUDED.add_count,
+                        entry_indicators = EXCLUDED.entry_indicators,
                         updated_at = CURRENT_TIMESTAMP
                 """, (
                     ticker, entry_date, entry_signal, entry_score,
@@ -468,7 +470,7 @@ class Database:
                     float(R) if R is not None else None,
                     float(entry_atr) if entry_atr is not None else None,
                     float(highest_close) if highest_close is not None else None,
-                    phase, bars_below_ema50, partial_taken, add_count
+                    phase, bars_below_ema50, partial_taken, add_count, entry_indicators
                 ))
                 conn.commit()
             finally:
@@ -490,7 +492,7 @@ class Database:
                 cursor.execute("""
                     SELECT entry_date, entry_signal, entry_score, entry_price,
                            initial_stop, current_stop, R, entry_atr, highest_close,
-                           phase, bars_below_ema50, partial_taken, add_count
+                           phase, bars_below_ema50, partial_taken, add_count, entry_indicators
                     FROM position_metadata WHERE ticker = %s
                 """, (ticker,))
                 row = cursor.fetchone()
@@ -510,7 +512,8 @@ class Database:
                         'phase': row[9] or 'entry',
                         'bars_below_ema50': row[10] or 0,
                         'partial_taken': row[11] or False,
-                        'add_count': row[12] or 0
+                        'add_count': row[12] or 0,
+                        'entry_indicators': row[13] or ''
                     }
                 return None
             finally:
@@ -532,7 +535,7 @@ class Database:
                 cursor.execute("""
                     SELECT ticker, entry_date, entry_signal, entry_score, entry_price,
                            initial_stop, current_stop, R, entry_atr, highest_close,
-                           phase, bars_below_ema50, partial_taken, add_count
+                           phase, bars_below_ema50, partial_taken, add_count, entry_indicators
                     FROM position_metadata
                 """)
 
@@ -551,7 +554,8 @@ class Database:
                         'phase': row[10] or 'entry',
                         'bars_below_ema50': row[11] or 0,
                         'partial_taken': row[12] or False,
-                        'add_count': row[13] or 0
+                        'add_count': row[13] or 0,
+                        'entry_indicators': row[14] or ''
                     }
                 cursor.close()
                 return positions
@@ -1186,7 +1190,7 @@ class InMemoryDatabase:
                                  entry_price=None, initial_stop=None, current_stop=None,
                                  R=None, entry_atr=None, highest_close=None,
                                  phase='entry', bars_below_ema50=0, partial_taken=False,
-                                 add_count=0):
+                                 add_count=0, entry_indicators=''):
 
         self.position_metadata[ticker] = {
             'entry_date': entry_date,
@@ -1201,7 +1205,8 @@ class InMemoryDatabase:
             'phase': phase or 'entry',
             'bars_below_ema50': bars_below_ema50 or 0,
             'partial_taken': partial_taken or False,
-            'add_count': add_count or 0
+            'add_count': add_count or 0,
+            'entry_indicators': entry_indicators or ''
         }
 
     def clear_all_position_metadata(self):

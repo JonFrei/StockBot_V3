@@ -41,6 +41,7 @@ import stock_indicators
 from config import Config
 import stock_position_sizing
 import account_broker_data
+from account_profit_tracking import _format_indicators
 
 
 class ExitConfig:
@@ -120,7 +121,7 @@ class PositionMonitor:
         self.positions_metadata = {}
 
     def track_position(self, ticker, entry_date, entry_signal='unknown', entry_score=0,
-                       is_addon=False, entry_price=None, raw_df=None, atr=None):
+                       is_addon=False, entry_price=None, raw_df=None, atr=None, entry_indicators=None):
         """
         Initialize or update position tracking with structure-based stop
 
@@ -159,7 +160,8 @@ class PositionMonitor:
                 'phase': 'entry',  # entry, breakeven, profit_lock, trailing
                 'partial_taken': False,
                 'bars_below_ema50': 0,
-                'add_count': 0
+                'add_count': 0,
+                'entry_indicators': _format_indicators(entry_indicators) if entry_indicators else ''
             }
         elif is_addon:
             # Add-on: preserve phase state, increment add count

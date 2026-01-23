@@ -875,7 +875,8 @@ class SwingTradeStrategy(Strategy):
                         entry_score=signal_score,
                         entry_price=price,
                         raw_df=ticker_data.get('raw'),
-                        atr=ticker_data.get('indicators', {}).get('atr_14', 0)
+                        atr=ticker_data.get('indicators', {}).get('atr_14', 0),
+                        entry_indicators=entry_indicators
                     )
 
                     order = self.create_order(ticker, quantity, 'buy')

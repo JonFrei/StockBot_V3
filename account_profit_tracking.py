@@ -410,8 +410,10 @@ class ProfitTracker:
                     exit_date=exit_date
                 )
             else:
-                # Format indicators for storage
-                entry_ind_str = ''
+                # Format indicators for storage - get from position metadata
+                pos_metadata = self.position_monitor.get_position_metadata(ticker) if hasattr(self,
+                                                                                              'position_monitor') else None
+                entry_ind_str = pos_metadata.get('entry_indicators', '') if pos_metadata else ''
                 exit_ind_str = ''
                 if isinstance(exit_signal, dict):
                     exit_ind_str = _format_indicators(exit_signal.get('indicators', {}))
