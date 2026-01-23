@@ -12,27 +12,6 @@ def get_sma(df, period):
     return {'sma': MA, 'sd': SD}
 
 
-'''
-def get_rsi(over: pd.Series, fn_roll: callable) -> pd.Series:
-    # Source: stackoverflow.com/questions/20526414/relative-strength-index-in-python-pandas
-    delta = over.diff()
-    delta = delta[1:]
-
-    up = delta.clip(lower=0)
-    down = delta.clip(upper=0).abs()
-
-    roll_up = fn_roll(up)
-    roll_down = fn_roll(down)
-    rs = roll_up / roll_down
-    rsi = 100.0 - (100.0 / (1.0 + rs))
-
-    rsi[:] = numpy.select([roll_down == 0, roll_up == 0, True], [100, 0, rsi])
-    rsi.name = 'rsi'
-
-    return rsi.iloc[-1]
-'''
-
-
 def get_rsi(df_or_series, period=14):
     """
     Calculate RSI using Wilder's smoothing method (industry standard)
@@ -103,49 +82,6 @@ def get_avg_volume(df, period=20):
     volume_data = df['volume'].tail(period)
     avg_vol = volume_data.mean()
     return avg_vol
-
-
-def get_atr_DELETE(df, period=14):
-    """
-    Calculate Average True Range (ATR)
-
-    ATR measures volatility by decomposing the entire range of an asset price
-    for that period. Higher ATR = more volatile stock.
-
-    Args:
-        df: DataFrame with 'high', 'low', 'close' columns
-        period: Number of periods for ATR calculation (default 14)
-
-    Returns:
-        float: ATR value for the most recent period
-    """
-    if len(df) < period + 1:
-        return 0
-
-    # Calculate True Range for each period
-    # TR = max(high - low, abs(high - prev_close), abs(low - prev_close))
-
-    high = df['high']
-    low = df['low']
-    close = df['close']
-
-    # Previous close (shifted by 1)
-    prev_close = close.shift(1)
-
-    # Three components of True Range
-    tr1 = high - low  # High - Low
-    tr2 = (high - prev_close).abs()  # High - Previous Close
-    tr3 = (low - prev_close).abs()  # Low - Previous Close
-
-    # True Range is the maximum of the three
-    true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-
-    # Calculate ATR as exponential moving average of True Range
-    # Using pandas ewm (exponentially weighted moving average)
-    atr = true_range.ewm(span=period, adjust=False).mean()
-
-    # Return the most recent ATR value
-    return atr.iloc[-1] if len(atr) > 0 else 0
 
 
 def get_atr(df, period=14):
@@ -354,55 +290,6 @@ def get_obv_trend(df, period=20):
         'obv': obv.iloc[-1],
         'obv_ema': obv_ema.iloc[-1],
         'obv_trending_up': obv_trending_up
-    }
-
-
-def get_stochastic_DELETE(df, k_period=14, d_period=3):  # Keeping for backup
-    """
-    Calculate Stochastic Oscillator (%K and %D)
-
-    Measures momentum by comparing close to recent high/low range.
-    - %K > 80: Overbought
-    - %K < 20: Oversold
-    - %K crossing above %D: Bullish signal
-    - %K crossing below %D: Bearish signal
-
-    Args:
-        df: DataFrame with 'high', 'low', 'close' columns
-        k_period: Period for %K (default 14)
-        d_period: Period for %D smoothing (default 3)
-
-    Returns:
-        dict: {
-            'stoch_k': float (0-100),
-            'stoch_d': float (0-100),
-            'stoch_bullish': bool (K > D)
-        }
-    """
-    if len(df) < k_period + d_period:
-        return {'stoch_k': 50, 'stoch_d': 50, 'stoch_bullish': False}
-
-    high = df['high']
-    low = df['low']
-    close = df['close']
-
-    # Calculate %K
-    lowest_low = low.rolling(window=k_period).min()
-    highest_high = high.rolling(window=k_period).max()
-
-    stoch_k = 100 * (close - lowest_low) / (highest_high - lowest_low)
-
-    # Calculate %D (SMA of %K)
-    stoch_d = stoch_k.rolling(window=d_period).mean()
-
-    # Get current values
-    current_k = stoch_k.iloc[-1] if not pd.isna(stoch_k.iloc[-1]) else 50
-    current_d = stoch_d.iloc[-1] if not pd.isna(stoch_d.iloc[-1]) else 50
-
-    return {
-        'stoch_k': round(float(current_k), 2),
-        'stoch_d': round(float(current_d), 2),
-        'stoch_bullish': current_k > current_d
     }
 
 
@@ -789,40 +676,7 @@ def detect_momentum_fade(df, indicators):
                 signals.append('macd_divergence')
     except Exception as e:
         print(f"[INDICATOR WARNING] Signal calculation failed: {e}")
-    '''
-    # Signal 2: RSI(5) higher high then breaks swing low
 
-    try:
-        rsi5 = get_rsi_fast(df, period=5)
-
-        if len(rsi5) >= 5:
-            rsi_high_prev = rsi5.iloc[-3]
-            rsi_high_curr = rsi5.iloc[-1]
-            rsi_swing_low = rsi5.iloc[-5:-1].min()
-
-            # Check if RSI made higher high then broke below prior swing
-            if rsi_high_curr > rsi_high_prev and rsi5.iloc[-1] < rsi_swing_low:
-                signals.append('rsi5_break')
-    except Exception as e:
-        print(f"[INDICATOR WARNING] Signal calculation failed: {e}")
-
-    
-    try:
-        rsi5 = get_rsi_fast(df, period=5)
-
-        if len(rsi5) >= 7:
-            # Find RSI high in lookback window (bars -5 to -2)
-            rsi_recent_high = rsi5.iloc[-5:-1].max()
-            rsi_prior_high = rsi5.iloc[-7:-4].max()
-            rsi_swing_low = rsi5.iloc[-5:-1].min()
-            rsi_current = rsi5.iloc[-1]
-
-            # RSI made higher high in recent window, now breaking below swing low
-            if rsi_recent_high > rsi_prior_high and rsi_current < rsi_swing_low:
-                signals.append('rsi5_break')
-    except Exception as e:
-        print(f"[INDICATOR WARNING] Signal calculation failed: {e}")
-    '''
     # Signal 2: EMA(5) and EMA(8) slope flattens/turns down
     try:
         ema5 = get_ema_fast(df, period=5)

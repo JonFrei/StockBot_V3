@@ -1215,38 +1215,3 @@ def generate_crash_notification_html(error_message, error_traceback=None):
 
     return html
 
-
-'''
-def is_after_market_close(current_time=None) -> bool:
-
-    from datetime import datetime, time
-
-    if current_time is None:
-        eastern = pytz.timezone('US/Eastern')
-        current_time = datetime.now(eastern)
-    elif current_time.tzinfo is None:
-        eastern = pytz.timezone('US/Eastern')
-        current_time = eastern.localize(current_time)
-
-    market_close = time(16, 0)
-    return current_time.time() >= market_close
-'''
-
-
-# =============================================================================
-# POSITION ALERT EMAIL (Legacy - kept for compatibility)
-# =============================================================================
-
-def send_position_alert_email(positions_needing_review, current_date):
-    """
-    Send email alert for positions requiring manual review
-
-    Note: This is the legacy function. For missing entry prices,
-    use send_missing_entry_prices_email() instead.
-
-    Args:
-        positions_needing_review: List of dicts with position details
-        current_date: Current datetime
-    """
-    # Redirect to new function
-    send_missing_entry_prices_email(positions_needing_review, current_date)
