@@ -5,6 +5,7 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="d6df019d-759f-4aef-8455-f63cac562958" name="Changes" comment="com">
+      <change afterPath="$PROJECT_DIR$/stock_watch/quarterly_ticker_review.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
     </list>
@@ -72,25 +73,26 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;Python tests.Python tests in test_email.py.executor&quot;: &quot;Run&quot;,
-    &quot;Python.diagnose_entry_price.executor&quot;: &quot;Run&quot;,
-    &quot;Python.diagnose_positions.executor&quot;: &quot;Run&quot;,
-    &quot;Python.diagnose_validate_indicators (1).executor&quot;: &quot;Run&quot;,
-    &quot;Python.fetch_order_history.executor&quot;: &quot;Run&quot;,
-    &quot;Python.main.executor&quot;: &quot;Run&quot;,
-    &quot;Python.signals.executor&quot;: &quot;Debug&quot;,
-    &quot;Python.stock_position_sizing.executor&quot;: &quot;Debug&quot;,
-    &quot;Python.sync_tickers.executor&quot;: &quot;Run&quot;,
-    &quot;Python.text_vix.executor&quot;: &quot;Run&quot;,
-    &quot;Python.validate_indicators.executor&quot;: &quot;Run&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
-    &quot;last_opened_file_path&quot;: &quot;C:/Users/freie/PycharmProjects/trading-dashboard&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;preferences.general&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "Python tests.Python tests in test_email.py.executor": "Run",
+    "Python.diagnose_entry_price.executor": "Run",
+    "Python.diagnose_positions.executor": "Run",
+    "Python.diagnose_validate_indicators (1).executor": "Run",
+    "Python.fetch_order_history.executor": "Run",
+    "Python.main.executor": "Run",
+    "Python.quarterly_ticker_review.executor": "Run",
+    "Python.signals.executor": "Debug",
+    "Python.stock_position_sizing.executor": "Debug",
+    "Python.sync_tickers.executor": "Run",
+    "Python.text_vix.executor": "Run",
+    "Python.validate_indicators.executor": "Run",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "git-widget-placeholder": "master",
+    "last_opened_file_path": "C:/Users/freie/PycharmProjects/trading-dashboard",
+    "settings.editor.selected.configurable": "preferences.general"
   }
-}</component>
+}]]></component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="C:\Users\freie\PycharmProjects\StockBot_V3" />
@@ -99,7 +101,7 @@
       <recent name="C:\Users\freie\PycharmProjects\StockBot_V3" />
     </key>
   </component>
-  <component name="RunManager" selected="Python.main">
+  <component name="RunManager" selected="Python.quarterly_ticker_review">
     <configuration name="diagnose_fetch_order_history" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
       <module name="StockBot_V3" />
       <option name="ENV_FILES" value="" />
@@ -188,7 +190,7 @@
       <option name="INPUT_FILE" value="" />
       <method v="2" />
     </configuration>
-    <configuration name="stock_position_sizing" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+    <configuration name="quarterly_ticker_review" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
       <module name="StockBot_V3" />
       <option name="ENV_FILES" value="" />
       <option name="INTERPRETER_OPTIONS" value="" />
@@ -197,11 +199,11 @@
         <env name="PYTHONUNBUFFERED" value="1" />
       </envs>
       <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/stock_watch" />
       <option name="IS_MODULE_SDK" value="true" />
       <option name="ADD_CONTENT_ROOTS" value="true" />
       <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/stock_position_sizing.py" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/stock_watch/quarterly_ticker_review.py" />
       <option name="PARAMETERS" value="" />
       <option name="SHOW_COMMAND_LINE" value="false" />
       <option name="EMULATE_TERMINAL" value="false" />
@@ -212,11 +214,11 @@
     </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="Python.quarterly_ticker_review" />
         <item itemvalue="Python.main" />
         <item itemvalue="Python.diagnose_validate_indicators (1)" />
         <item itemvalue="Python.diagnose_validate_indicators" />
         <item itemvalue="Python.diagnose_fetch_order_history" />
-        <item itemvalue="Python.stock_position_sizing" />
       </list>
     </recent_temporary>
   </component>
@@ -235,14 +237,6 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1762775089088</updated>
-    </task>
-    <task id="LOCAL-00215" summary="com">
-      <option name="closed" value="true" />
-      <created>1766939247055</created>
-      <option name="number" value="00215" />
-      <option name="presentableId" value="LOCAL-00215" />
-      <option name="project" value="LOCAL" />
-      <updated>1766939247055</updated>
     </task>
     <task id="LOCAL-00216" summary="com">
       <option name="closed" value="true" />
@@ -628,7 +622,15 @@
       <option name="project" value="LOCAL" />
       <updated>1769188945542</updated>
     </task>
-    <option name="localTasksCounter" value="264" />
+    <task id="LOCAL-00264" summary="com">
+      <option name="closed" value="true" />
+      <created>1769207072409</created>
+      <option name="number" value="00264" />
+      <option name="presentableId" value="LOCAL-00264" />
+      <option name="project" value="LOCAL" />
+      <updated>1769207072410</updated>
+    </task>
+    <option name="localTasksCounter" value="265" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">

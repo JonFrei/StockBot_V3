@@ -21,7 +21,9 @@ import warnings
 import pandas as pd
 
 # warnings.filterwarnings('ignore', category=pd.errors.SettingWithCopyWarning)
-warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
+if Config.BACKTESTING:
+    warnings.filterwarnings("ignore", category=pd.errors.SettingWithCopyWarning)
+
 
 # Set the logging level for the root logger to WARNING or ERROR
 # Alternatively, set the level for specific loggers if known (e.g., 'lumibot.brokers.alpaca')
